@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}AI analysis · JobSquire{% endblock %}
+{% set analyze_prompt = "Using my \"" ~ (cfg.connector_name or "job-squire") ~ "\" connector: read my full job-search pipeline and all interview debriefs, analyze where I am stalling in the funnel and what to improve, then save your findings back with the save_analysis tool. Provide a short overall summary, a list of concrete recommendations, and a per-job note keyed by job id." %}
+{% block content %}
+<div class="card-head">
+  <h1>AI analysis</h1>
+  {% if cfg.api_enabled %}<span class="chip">auto features on</span>{% endif %}
+  {% if cfg.mcp_enabled %}<span class="chip">MCP on</span>{% endif %}
+  {% if claude_buttons_enabled %}<span class="chip">Claude.ai buttons on</span>{% endif %}
+  {% if not cfg.api_enabled and not cfg.mcp_enabled %}<span class="chip">manual mode</span>{% endif %}
+</div>
+<p class="muted">Analyze the whole pipeline for patterns and per-job advice. Change the mode on the
+  <a href="{{ url_for('main.settings') }}">Connections</a> page.</p>
+
+{% if cfg.api_enabled %}
+<section class="card">
+  <h2>One-click analysis</h2>
+  {% if has_ranked_providers or api_key_set %}
+    <p>The app reads your pipeline and writes the analysis straight back using your configured AI provider(s).</p>
+    {% if ai_providers %}
+    <p class="muted small">
+      Provider chain:
+      {% for p in ai_providers %}
+        <strong>{{ p.display_name }}</strong>{% if not loop.last %} → {% endif %}
+      {% endfor %}
+    </p>
+    {% endif %}
+    <form method="post" action="{{ url_for('main.ai_analyze') }}">
+      {{ confirm_form.hidden_tag() }}
+      <button class="btn btn-primary" type="submit">Analyze now</button>
+    </form>
+    {% if ai_providers %}
+    <p class="muted small">Tries each provider in order; falls back to the next on rate-limit or server errors.</p>
+    {% endif %}
+  {% else %}
+    <p class="muted">Add an AI provider on the
+      <a href="{{ url_for('main.settings') }}">Settings</a> page to enable one-click analysis.</p>
+  {% endif %}
+</section>
+{% endif %}
+{% if claude_buttons_enabled %}
+<section class="card">
+  <h2>Run it in your Claude</h2>
+  <p>This opens a new Claude chat with a ready prompt. Claude uses your JobSquire connector to read the
+    pipeline and write the analysis back. Make sure the connector is added in Claude first (see Connections).</p>
+  <button class="btn btn-outline open-in-claude-btn"
+          data-prompt="{{ analyze_prompt | e }}">Open in Claude to analyze ↗</button>
+  {% if not mcp_configured %}
+    <p class="muted small">The connector is not set up yet. Add it on the
+      <a href="{{ url_for('main.settings') }}">Settings</a> page.</p>
+  {% endif %}
+</section>
+{% endif %}
+{% if not cfg.api_enabled and not claude_buttons_enabled %}
+<section class="card">
+  <p class="muted">Enable <strong>Automatic Features</strong> or <strong>Claude.ai buttons</strong> on the
+    <a href="{{ url_for('main.settings') }}">Settings</a> page to run analysis from here.
+    Or use the manual export below.</p>
+</section>
+{% endif %}
+
+<section class="card">
+  <h2>Manual (works with any Claude)</h2>
+  <p class="muted small">Copy this prompt into a new Claude chat, attach the downloaded JSON, and paste Claude's
+    JSON answer back below. Available in any mode as a fallback.</p>
+  <label>Prompt to copy</label>
+  <textarea rows="5" readonly class="select-on-click">{{ manual_prompt }}</textarea>
+  <div class="actions" style="margin:.6rem 0">
+    <a class="btn btn-outline" href="{{ url_for('main.export_ai') }}">Download Job Squire JSON</a>
+  </div>
+  <form method="post" enctype="multipart/form-data" class="form" action="{{ url_for('main.ai_hub') }}">
+    {{ form.hidden_tag() }}
+    {{ form.payload(rows=6, placeholder='Paste Claude\'s JSON answer here...') }}
+    <div class="field">{{ form.file.label }} {{ form.file() }}</div>
+    {{ form.submit(class="btn btn-primary") }}
+  </form>
+</section>
+
+{% if insights %}
+<section class="card">
+  <h2>Analysis history</h2>
+  {% for ins in insights %}
+  <div class="debrief">
+    <div class="debrief-head"><strong>{{ ins.source }}</strong><span class="muted small">{{ ins.created_at | local_dt }} · {{ ins.created_by }}</span></div>
+    {% if ins.summary %}<p class="pre">{{ ins.summary }}</p>{% endif %}
+    {% if ins.recommendations %}
+      <span class="lbl-inline">Recommendations</span>
+      <ul>{% for r in ins.recommendations.split('\n') %}{% if r.strip() %}<li>{{ r }}</li>{% endif %}{% endfor %}</ul>
+    {% endif %}
+  </div>
+  {% endfor %}
+</section>
+{% endif %}
+
+{% if analyzed_jobs %}
+<section class="card">
+  <h2>Per-job analysis</h2>
+  <ul class="followups">
+    {% for j in analyzed_jobs %}
+    <li><a href="{{ url_for('main.job_detail', job_id=j.id) }}">{{ j.title }} — {{ j.company }}</a>
+        <span class="muted small">{{ j.ai_analysis_at | local_date if j.ai_analysis_at else '' }}</span></li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+{% endblock %}

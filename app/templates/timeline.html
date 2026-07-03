@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% block title %}Timeline · JobSquire{% endblock %}
+{% block content %}
+<div class="card-head">
+  <h1>Application timeline</h1>
+  <div class="tl-summary-chips">
+    <span class="chip">{{ total_applied }} applied</span>
+    <span class="chip">{{ total_interviews }} interview{{ 's' if total_interviews != 1 }}</span>
+  </div>
+</div>
+
+<!-- -----------------------------------------------------------------------
+     Weekly bar chart — applications submitted per week (last 12 weeks)
+     ----------------------------------------------------------------------- -->
+<section class="card">
+  <h2>Applications per week <span class="muted small">(last 12 weeks)</span></h2>
+  {% if total_applied == 0 %}
+  <p class="muted">No applications recorded yet. Add a date-applied on each job to see the chart.</p>
+  {% else %}
+  <div class="tl-chart" aria-label="Applications per week bar chart">
+    {% for w in chart_weeks %}
+    <div class="tl-bar-col">
+      <span class="tl-bar-count">{{ w.count if w.count else '' }}</span>
+      <div class="tl-bar-track">
+        <div class="tl-bar{{ ' tl-bar-current' if w.start <= today <= w.end }}"
+             style="height: {{ (w.count / max_count * 100) | round(0, 'floor') }}%"
+             title="{{ w.count }} application{{ 's' if w.count != 1 }} week of {{ w.label }}"></div>
+      </div>
+      <span class="tl-bar-label">{{ w.label }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</section>
+
+<!-- -----------------------------------------------------------------------
+     Chronological activity feed grouped by date
+     ----------------------------------------------------------------------- -->
+<section class="card">
+  <h2>Activity feed</h2>
+  {% if feed_groups %}
+  <div class="tl-feed">
+    {% for group in feed_groups %}
+    <div class="tl-day">
+      <div class="tl-day-label">{{ group.date.strftime('%A, %B %-d, %Y') }}</div>
+      <ul class="tl-day-events">
+        {% for e in group.events %}
+        <li class="tl-event tl-event-{{ e.type }}">
+          <span class="tl-event-label">{{ e.label }}</span>
+          <a href="{{ e.url }}" class="tl-event-detail">{{ e.detail }}</a>
+          {% if e.status %}
+          <span class="status s-{{ e.status | replace(' ', '') }} tl-event-status">{{ e.status }}</span>
+          {% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="muted">No activity yet. Apply to some jobs and log interviews to see the feed here.</p>
+  {% endif %}
+</section>
+
+<style>
+/* ---- Summary chips ---- */
+.tl-summary-chips { display: flex; gap: .5rem; flex-wrap: wrap; }
+
+/* ---- Bar chart ---- */
+.tl-chart {
+  display: flex; align-items: flex-end; gap: .35rem;
+  height: 160px; padding: .5rem 0 0;
+  overflow-x: auto;
+}
+.tl-bar-col {
+  display: flex; flex-direction: column; align-items: center;
+  flex: 1; min-width: 36px; max-width: 60px; gap: .2rem;
+}
+.tl-bar-count {
+  font-size: .75rem; font-weight: 600; color: var(--accent, #6c4beb);
+  min-height: 1rem;
+}
+.tl-bar-track {
+  width: 100%; flex: 1;
+  display: flex; flex-direction: column; justify-content: flex-end;
+  background: var(--bg-subtle, #1e2530); border-radius: 4px 4px 0 0;
+}
+.tl-bar {
+  width: 100%; min-height: 3px; border-radius: 4px 4px 0 0;
+  background: var(--accent, #6c4beb); transition: opacity .15s;
+}
+.tl-bar:hover { opacity: .8; }
+.tl-bar-current { background: #4caf50; }
+.tl-bar-col:has(.tl-bar-current) .tl-bar-count { color: #4caf50; }
+.tl-bar-label {
+  font-size: .7rem; color: var(--text-muted, #8899aa);
+  white-space: nowrap; margin-top: .25rem;
+}
+
+/* ---- Activity feed ---- */
+.tl-feed { display: flex; flex-direction: column; gap: 1.25rem; }
+.tl-day { }
+.tl-day-label {
+  font-size: .8rem; font-weight: 600; color: var(--text-muted, #8899aa);
+  text-transform: uppercase; letter-spacing: .06em;
+  border-bottom: 1px solid var(--border, #2a3244);
+  padding-bottom: .3rem; margin-bottom: .5rem;
+}
+.tl-day-events { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: .35rem; }
+.tl-event {
+  display: flex; align-items: center; gap: .6rem;
+  flex-wrap: wrap; font-size: .9rem;
+  padding: .35rem .5rem; border-radius: 6px;
+  background: var(--bg-subtle, #1e2530);
+}
+.tl-event-label {
+  font-size: .72rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .05em; white-space: nowrap;
+  padding: .15rem .45rem; border-radius: 4px; min-width: 5rem; text-align: center;
+}
+/* Label colors by event type */
+.tl-event-applied   .tl-event-label { background: #1a2a3a; color: #5b9bd5; }
+.tl-event-interview .tl-event-label { background: #1a3a2a; color: #4caf50; }
+.tl-event-status    .tl-event-label { background: #2a2a1a; color: #c8a94c; }
+.tl-event-kit       .tl-event-label { background: #2a1a3a; color: #a97be0; }
+.tl-event-detail { flex: 1; color: var(--text, #e0e0e0); min-width: 0; }
+.tl-event-detail:hover { color: var(--accent, #6c4beb); }
+.tl-event-status { flex-shrink: 0; font-size: .75rem; }
+</style>
+{% endblock %}

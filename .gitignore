@@ -1,0 +1,9 @@
+data/
+*.db
+*.sqlite
+__pycache__/
+*.pyc
+.venv/
+CLAUDE.md
+AGENTS.md
+.DS_Store

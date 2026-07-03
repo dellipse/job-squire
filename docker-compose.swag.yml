@@ -1,0 +1,92 @@
+# docker-compose.swag.yml — SWAG / shared-network mode
+#
+# Use this file when Job Squire runs on the same Docker network as SWAG
+# (or another nginx reverse proxy container). No host ports are exposed;
+# SWAG reaches the containers by name on their internal ports.
+#
+# Usage:
+#   docker compose -f docker-compose.swag.yml --env-file data/.env up -d
+#
+# SWAG proxy targets:
+#   App:  http://<INSTANCE_NAME>:8000       (set INSTANCE_NAME in data/.env)
+#   MCP:  http://<INSTANCE_NAME>-mcp:9000
+#
+# The network name is read from SWAG_NETWORK in data/.env (default: swag).
+# Find your SWAG network with: docker network ls
+#
+# install.sh writes the correct compose file choice to .install.state so
+# that uninstall.sh uses the same file automatically.
+
+services:
+  job-squire:
+    build:
+      context: .
+      args:
+        PUID: "${PUID:-1000}"
+        PGID: "${PGID:-1000}"
+        BUILD_VERSION: ${BUILD_VERSION:-dev}
+    image: ghcr.io/dellipse/job-squire:latest
+    container_name: ${INSTANCE_NAME:-job-squire}
+    restart: unless-stopped
+    user: "${PUID:-1000}:${PGID:-1000}"
+    env_file:
+      - data/.env
+    volumes:
+      - ${DATA_HOST_DIR:-./job-squire/data}:/data
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    networks:
+      - swag_net
+
+  job-squire-worker:
+    build:
+      context: .
+      args:
+        PUID: "${PUID:-1000}"
+        PGID: "${PGID:-1000}"
+        BUILD_VERSION: ${BUILD_VERSION:-dev}
+    image: ghcr.io/dellipse/job-squire:latest
+    container_name: ${INSTANCE_NAME:-job-squire}-worker
+    restart: unless-stopped
+    user: "${PUID:-1000}:${PGID:-1000}"
+    command: ["python", "-m", "app.worker"]
+    env_file:
+      - data/.env
+    volumes:
+      - ${DATA_HOST_DIR:-./job-squire/data}:/data
+    depends_on:
+      job-squire:
+        condition: service_healthy
+    networks:
+      - swag_net
+
+  job-squire-mcp:
+    build:
+      context: .
+      args:
+        PUID: "${PUID:-1000}"
+        PGID: "${PGID:-1000}"
+        BUILD_VERSION: ${BUILD_VERSION:-dev}
+    image: ghcr.io/dellipse/job-squire:latest
+    container_name: ${INSTANCE_NAME:-job-squire}-mcp
+    restart: unless-stopped
+    user: "${PUID:-1000}:${PGID:-1000}"
+    command: ["python", "-m", "app.mcp_server"]
+    env_file:
+      - data/.env
+    volumes:
+      - ${DATA_HOST_DIR:-./job-squire/data}:/data
+    depends_on:
+      job-squire:
+        condition: service_healthy
+    networks:
+      - swag_net
+
+networks:
+  swag_net:
+    external: true
+    name: ${SWAG_NETWORK:-swag}

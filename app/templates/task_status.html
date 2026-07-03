@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}{{ label }} — Running{% endblock %}
+
+{% block content %}
+{# data-poll-url / data-task are read by app.js (inline scripts are blocked by CSP) #}
+<div id="task-status-root"
+     data-poll-url="{{ url_for('main.ai_task_poll', run_id=run_id) }}"
+     data-task="{{ task }}">
+
+  <div class="task-status-page">
+    <h2 id="ts-heading">
+      <span id="ts-spinner" class="ts-spinner" aria-hidden="true"></span>
+      {{ label }}
+    </h2>
+
+    <p id="ts-summary" class="muted">Starting…</p>
+
+    <div id="ts-log-box" class="task-log-box" aria-live="polite" aria-label="Task log"></div>
+
+    <div id="ts-done-actions" style="display:none; margin-top:1.5rem;">
+      <button id="ts-close-btn" class="btn btn-primary" style="display:none;">Close tab</button>
+    </div>
+
+    {# Populated by JS only when the finished task is a kit build. #}
+    <div id="ts-kit-extra" style="display:none; margin-top:1.5rem;">
+      <a id="ts-kit-job-link" class="btn btn-primary" style="display:none"></a>
+
+      <div id="ts-kit-output-wrap" class="card ai-card" style="display:none; margin-top:1rem;">
+        <div class="card-head">
+          <h3 style="margin:0">Application kit</h3>
+          <button class="btn btn-sm copy-btn" data-target="ts-kit-output-text">Copy</button>
+        </div>
+        <p class="muted small">This posting was not saved to Job Squire, so nothing was written
+          to the database. Copy or download the kit below before you close this tab.</p>
+        <div id="ts-kit-output-text" class="pre" style="font-size:.9rem;white-space:pre-wrap"></div>
+        <form method="post" action="{{ url_for('main.kit_download_docx') }}" style="margin-top:.75rem">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <textarea name="kit_markdown" id="ts-kit-docx-markdown" hidden></textarea>
+          <input type="hidden" name="company" id="ts-kit-docx-company">
+          <input type="hidden" name="title" id="ts-kit-docx-title">
+          <button class="btn btn-outline" type="submit">Download as .docx</button>
+        </form>
+      </div>
+    </div>
+
+    {# Populated by JS for the single-job tasks: ats_gap, score_fit, draft_followup. #}
+    <div id="ts-job-extra" style="display:none; margin-top:1.5rem;">
+      <a id="ts-job-link" class="btn btn-primary" style="display:none"></a>
+
+      <div id="ts-job-result-wrap" class="card ai-card" style="display:none; margin-top:1rem;">
+        <div class="card-head">
+          <h3 id="ts-job-result-title" style="margin:0"></h3>
+          <button class="btn btn-sm copy-btn" data-target="ts-job-result-text">Copy</button>
+        </div>
+        <div id="ts-job-result-text" class="pre" style="font-size:.9rem;white-space:pre-wrap"></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}

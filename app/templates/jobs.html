@@ -1,0 +1,240 @@
+{% extends "base.html" %}
+{% block title %}Jobs · JobSquire{% endblock %}
+{% block container_class %}container-wide{% endblock %}
+{% block content %}
+<div class="card-head">
+  <h1>Jobs</h1>
+  <div class="actions">
+    {% if claude_buttons_enabled and search_prompt %}
+    <button class="btn btn-outline open-in-claude-btn" data-prompt="{{ search_prompt | e }}">Search jobs in Claude ↗</button>
+    {% endif %}
+    <a class="btn btn-outline" href="{{ url_for('main.export_csv') }}">Export CSV</a>
+    <a class="btn btn-primary" href="{{ url_for('main.job_new') }}">+ Add job</a>
+  </div>
+</div>
+
+<form class="filters" method="get" action="{{ url_for('main.jobs_list') }}" id="jobs-filter-form">
+  <input type="hidden" name="sort" id="sort-input" value="{{ sort_str }}">
+  <input type="hidden" name="per_page" id="per-page-input" value="{{ per_page }}">
+  <input type="text" name="q" value="{{ q }}" placeholder="Search company, title, location">
+  <select name="status" data-autosubmit>
+    <option value="">All statuses (hides Pass)</option>
+    <option value="all" {% if current_status=='all' %}selected{% endif %}>All (including Pass)</option>
+    <option value="active" {% if current_status=='active' %}selected{% endif %}>— Active only —</option>
+    <option value="stale" {% if current_status=='stale' %}selected{% endif %}>— Stale only —</option>
+    <option value="unkitted" {% if current_status=='unkitted' %}selected{% endif %}>— Applied, no kit —</option>
+    {% for s in statuses %}
+    <option value="{{ s }}" {% if current_status==s %}selected{% endif %}>{{ s }}</option>
+    {% endfor %}
+  </select>
+  <button class="btn" type="submit">Filter</button>
+</form>
+
+<div class="table-toolbar">
+  <div class="table-info">
+    <span class="muted">{{ total }} job{{ 's' if total != 1 }}</span>
+    {% if sort_str and sort_str != 'created_at:desc' %}
+    <a class="clear-sort" href="{{ url_for('main.jobs_list', q=q, status=current_status, per_page=per_page, sort='') }}">✕ Clear sort</a>
+    {% endif %}
+  </div>
+  <div class="toolbar-right">
+    <div class="save-view-wrap">
+      <form method="post" action="{{ url_for('main.jobs_save_default_view') }}" id="save-view-form">
+        {{ confirm_form.hidden_tag() }}
+        <input type="hidden" name="sort" value="{{ sort_str }}">
+        <input type="hidden" name="status" value="{{ current_status }}">
+        <input type="hidden" name="per_page" value="{{ per_page }}">
+        <button type="submit" class="btn btn-sm btn-save-view" title="Save current filter, sort, and page size as your default view">⭐ Save view</button>
+      </form>
+      {% if has_default_view %}
+      <form method="post" action="{{ url_for('main.jobs_clear_default_view') }}" style="display:inline">
+        {{ confirm_form.hidden_tag() }}
+        <button type="submit" class="btn btn-sm btn-clear-view" title="Reset to system defaults">✕ Clear default</button>
+      </form>
+      {% endif %}
+    </div>
+    <div class="per-page-wrap">
+      <label for="per-page-select">Show:</label>
+      <select id="per-page-select">
+        {% for n, lbl in [(10,'10'),(25,'25'),(50,'50'),(100,'100'),(0,'All')] %}
+        <option value="{{ n }}" {% if per_page == n %}selected{% endif %}>{{ lbl }}</option>
+        {% endfor %}
+      </select>
+    </div>
+  </div>
+</div>
+
+<!-- Hidden bulk-update form. Checkboxes write into this form. -->
+<form id="bulk-form" method="post" action="{{ url_for('main.jobs_bulk_update') }}" style="display:none">
+  {{ confirm_form.hidden_tag() }}
+  <div id="bulk-job-ids"></div>
+  <input type="hidden" name="action" id="bulk-action" value="">
+  <input type="hidden" name="status"  id="bulk-status" value="">
+</form>
+
+{% if jobs %}
+<div class="table-wrap">
+<table class="list sortable" id="jobs-table" data-sort="{{ sort_str }}">
+  <thead>
+    <tr>
+      <th class="col-cb"><input type="checkbox" id="select-all-cb" title="Select all"></th>
+      {# mob-hide = hidden on phones ≤560px; keep Company, Title, Status, Applied always visible #}
+      {% set col_defs = [
+        ('company',       'Company',   ''),
+        ('title',         'Title',     ''),
+        ('location',      'Location',  'mob-hide'),
+        ('status',        'Status',    ''),
+        ('ai_fit_score',  'Fit',       'mob-hide col-fit'),
+        ('created_at',    'Added',     'mob-hide'),
+        ('date_applied',  'Applied',   ''),
+        ('follow_up_date','Follow-up', 'mob-hide'),
+      ] %}
+      {% for col, label, extra in col_defs %}
+      {% set is_sorted = col in sort_dir %}
+      <th data-sortcol="{{ col }}"
+          class="{{ extra }}{{ ' col-sorted' if is_sorted }}">
+        {{ label }}
+        {% if is_sorted %}
+          <span class="sort-ind">{{ '↑' if sort_dir[col] == 'asc' else '↓' }}</span>
+          {% if sort_priority | length > 1 %}<sup class="sort-pri">{{ sort_priority[col] }}</sup>{% endif %}
+        {% else %}
+          <span class="sort-ind sort-none">⇅</span>
+        {% endif %}
+      </th>
+      {% endfor %}
+    </tr>
+  </thead>
+  <tbody>
+    {% for j in jobs %}
+    <tr data-href="{{ url_for('main.job_detail', job_id=j.id) }}">
+      <td class="col-cb" onclick="event.stopPropagation()">
+        <input type="checkbox" class="job-cb" value="{{ j.id }}" aria-label="Select {{ j.company }}">
+      </td>
+      <td>{{ j.company }}</td>
+      <td>{{ j.title }}</td>
+      <td class="mob-hide">{{ j.location or '—' }}</td>
+      <td>
+        <span class="status s-{{ j.status | replace(' ', '') }}">{{ j.status }}</span>
+        {% if j.id in stale_map %}
+        <span class="stale-badge {{ stale_map[j.id] }}"
+              title="{{ 'Saved 14+ days — posting may be expired' if stale_map[j.id] == 'stale-lead' else 'No update in 21+ days — may be ghosted' }}">
+          {{ 'stale' }}
+        </span>
+        {% endif %}
+      </td>
+      <td class="mob-hide col-fit">
+        {% if j.ai_fit_score %}
+        <span class="fit-badge fit-{{ 'hi' if j.ai_fit_score >= 8 else ('mid' if j.ai_fit_score >= 5 else 'lo') }}"
+              title="{{ j.ai_fit_reason or '' }}">{{ j.ai_fit_score }}/10</span>
+        {% else %}—{% endif %}
+      </td>
+      <td class="mob-hide">{{ j.created_at | local_dt }}</td>
+      <td>{{ j.date_applied.strftime('%-m/%-d/%Y') if j.date_applied else '—' }}</td>
+      <td class="mob-hide">
+        {% if j.follow_up_date %}
+          <span class="{% if j.follow_up_due %}due-now{% endif %}">{{ j.follow_up_date.strftime('%-m/%-d/%Y') }}</span>
+        {% else %}—{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<!-- Floating bulk-action bar (shown when ≥1 checkbox is checked) -->
+<div id="bulk-bar" class="bulk-bar" aria-live="polite">
+  <span class="bulk-count"><span id="bulk-count-num">0</span> selected</span>
+  <div class="bulk-actions">
+    <select id="bulk-status-sel" aria-label="Change status to">
+      <option value="">— Set status —</option>
+      {% for s in statuses %}
+      <option value="{{ s }}">{{ s }}</option>
+      {% endfor %}
+    </select>
+    <button class="btn btn-sm" id="bulk-set-status">Apply</button>
+    <button class="btn btn-sm bulk-btn-secondary" id="bulk-withdrawn">Mark Withdrawn</button>
+    <button class="btn btn-sm bulk-btn-secondary" id="bulk-ghosted">Mark Ghosted</button>
+    <button class="btn btn-sm bulk-btn-secondary" id="bulk-pass">Mark Pass</button>
+  </div>
+  <button class="bulk-clear" id="bulk-clear" aria-label="Clear selection">✕</button>
+</div>
+
+{% if pagination %}
+<div class="pagination">
+  <div class="page-links">
+    {% if pagination.has_prev %}
+    <a href="{{ url_for('main.jobs_list', page=pagination.prev_num, per_page=per_page, q=q, status=current_status, sort=sort_str) }}">&laquo;</a>
+    {% else %}
+    <span class="page-disabled">&laquo;</span>
+    {% endif %}
+
+    {% for p in pagination.iter_pages(left_edge=1, right_edge=1, left_current=2, right_current=2) %}
+      {% if p %}
+        <a href="{{ url_for('main.jobs_list', page=p, per_page=per_page, q=q, status=current_status, sort=sort_str) }}"
+           class="{{ 'page-current' if p == pagination.page else '' }}">{{ p }}</a>
+      {% else %}
+        <span class="page-ellipsis">…</span>
+      {% endif %}
+    {% endfor %}
+
+    {% if pagination.has_next %}
+    <a href="{{ url_for('main.jobs_list', page=pagination.next_num, per_page=per_page, q=q, status=current_status, sort=sort_str) }}">&raquo;</a>
+    {% else %}
+    <span class="page-disabled">&raquo;</span>
+    {% endif %}
+  </div>
+  <span class="page-info muted">Page {{ pagination.page }} of {{ pagination.pages }}</span>
+</div>
+{% endif %}
+
+{% else %}
+<p class="muted">No jobs match. <a href="{{ url_for('main.job_new') }}">Add one</a>.</p>
+{% endif %}
+
+<style>
+<style>
+/* Stale badges */
+.stale-badge {
+  display: inline-block; font-size: .7rem; font-weight: 600;
+  padding: .1rem .4rem; border-radius: 4px; margin-left: .35rem;
+  vertical-align: middle; text-transform: uppercase; letter-spacing: .03em;
+}
+.stale-lead  { background: #3a1a10; color: #ff6b35; border: 1px solid #ff6b35; }
+.stale-active { background: #1a1a3a; color: #7b8cde; border: 1px solid #7b8cde; }
+
+/* Fit score column */
+.col-fit { width: 4rem; text-align: center; }
+.fit-badge {
+  display: inline-block; font-size: .75rem; font-weight: 700;
+  padding: .15rem .45rem; border-radius: 4px; letter-spacing: .02em;
+}
+.fit-hi  { background: #0d2e1a; color: #3ddc84; border: 1px solid #3ddc84; }
+.fit-mid { background: #2a2010; color: #f0a020; border: 1px solid #f0a020; }
+.fit-lo  { background: #2e0d0d; color: #e05555; border: 1px solid #e05555; }
+
+/* Checkbox column */
+.col-cb { width: 2rem; padding-right: 0; text-align: center; }
+#jobs-table tr.row-selected td { background: var(--bg-subtle, #1e2530); }
+
+/* Floating bulk-action bar */
+.bulk-bar {
+  display: none;
+  position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%);
+  background: var(--bg-card, #161d26); border: 1px solid var(--accent, #6c4beb);
+  border-radius: 10px; padding: .65rem 1rem;
+  box-shadow: 0 4px 24px rgba(0,0,0,.5);
+  z-index: 200; align-items: center; gap: .75rem; flex-wrap: wrap;
+  min-width: 320px; max-width: 90vw;
+}
+.bulk-bar.visible { display: flex; }
+.bulk-count { font-size: .9rem; font-weight: 600; white-space: nowrap; color: var(--accent, #6c4beb); }
+.bulk-actions { display: flex; gap: .4rem; flex-wrap: wrap; align-items: center; }
+.bulk-btn-secondary { background: transparent; border: 1px solid var(--border, #2a3244); }
+.bulk-btn-secondary:hover { border-color: var(--accent, #6c4beb); }
+.bulk-clear {
+  background: none; border: none; cursor: pointer; color: var(--text-muted, #8899aa);
+  font-size: 1rem; padding: .2rem .4rem; border-radius: 4px; margin-left: auto;
+}
+.bulk-clear:hover { color: var(--text, #e0e0e0); }
+</style>
+{% endblock %}

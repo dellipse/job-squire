@@ -1,0 +1,100 @@
+services:
+  job-squire:
+    build:
+      context: .
+      args:
+        PUID: "${PUID:-1000}"
+        PGID: "${PGID:-1000}"
+        BUILD_VERSION: ${BUILD_VERSION:-dev}
+    image: ghcr.io/dellipse/job-squire:latest
+    container_name: ${INSTANCE_NAME:-job-squire}
+    restart: unless-stopped
+    user: "${PUID:-1000}:${PGID:-1000}"
+    env_file:
+      - data/.env
+    volumes:
+      # Persistent data (SQLite DB + uploads) lives on the host for easy backup.
+      # Set DATA_HOST_DIR in data/.env; defaults to ./job-squire/data.
+      - ${DATA_HOST_DIR:-./job-squire/data}:/data
+    healthcheck:
+      # Uses Python (always available in the image) rather than curl.
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    # Option A (default — standalone / host-port mode): SWAG or another reverse
+    # proxy can reach the app at http://<host-ip>:${APP_HOST_PORT}. No shared
+    # Docker network needed. Override APP_HOST_PORT if 8080 is already in use.
+    ports:
+      - "127.0.0.1:${APP_HOST_PORT:-8080}:8000"
+    # Option B (shared network with SWAG or another nginx container): comment out
+    # the ports block above and uncomment the networks block below. The proxy
+    # reaches job-squire by name on port 8000 without exposing a host port.
+    # networks:
+    #   - swag
+
+  # Scheduler: runs the automated job search on a cron cadence. Same image,
+  # same database volume, different command. Runs as one instance so each
+  # scheduled slot fires exactly once.
+  job-squire-worker:
+    build:
+      context: .
+      args:
+        PUID: "${PUID:-1000}"
+        PGID: "${PGID:-1000}"
+        BUILD_VERSION: ${BUILD_VERSION:-dev}
+    image: ghcr.io/dellipse/job-squire:latest
+    container_name: ${INSTANCE_NAME:-job-squire}-worker
+    restart: unless-stopped
+    user: "${PUID:-1000}:${PGID:-1000}"
+    command: ["python", "-m", "app.worker"]
+    env_file:
+      - data/.env
+    volumes:
+      # Persistent data (SQLite DB + uploads) lives on the host for easy backup.
+      # Set DATA_HOST_DIR in data/.env; defaults to ./job-squire/data.
+      - ${DATA_HOST_DIR:-./job-squire/data}:/data
+    depends_on:
+      job-squire:
+        condition: service_healthy
+
+  # MCP connector server (AI analysis "MCP" mode). Serves Streamable HTTP on 9000.
+  # Add a reverse-proxy conf (examples/nginx/mcp-squire.subdomain.conf) and set
+  # PUBLIC_MCP_URL and PUBLIC_MCP_HOST in data/.env.
+  job-squire-mcp:
+    build:
+      context: .
+      args:
+        PUID: "${PUID:-1000}"
+        PGID: "${PGID:-1000}"
+        BUILD_VERSION: ${BUILD_VERSION:-dev}
+    image: ghcr.io/dellipse/job-squire:latest
+    container_name: ${INSTANCE_NAME:-job-squire}-mcp
+    restart: unless-stopped
+    user: "${PUID:-1000}:${PGID:-1000}"
+    command: ["python", "-m", "app.mcp_server"]
+    env_file:
+      - data/.env
+    volumes:
+      # Persistent data (SQLite DB + uploads) lives on the host for easy backup.
+      # Set DATA_HOST_DIR in data/.env; defaults to ./job-squire/data.
+      - ${DATA_HOST_DIR:-./job-squire/data}:/data
+    depends_on:
+      job-squire:
+        condition: service_healthy
+    # Option A (standalone): published on localhost so your reverse proxy can
+    # reach it at http://<host-ip>:${MCP_HOST_PORT}. MCP_PORT controls the port
+    # uvicorn listens on inside the container (must match MCP_PORT in data/.env).
+    # Override MCP_HOST_PORT if the host port is already in use.
+    ports:
+      - "127.0.0.1:${MCP_HOST_PORT:-9000}:${MCP_PORT:-9000}"
+    # Option B (shared network with SWAG): comment out ports above and uncomment:
+    # networks:
+    #   - swag
+
+# Uncomment if using Option B (shared network with SWAG or another nginx container).
+# Create the network once with: docker network create <network-name>
+# networks:
+#   swag:
+#     external: true

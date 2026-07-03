@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}Build Kits · JobSquire{% endblock %}
+{% block content %}
+<h1>Build Application Kits</h1>
+<p class="muted small">
+  Generates a tailored resume, cover letter, and interview prep for each Applied job that doesn't have a kit yet.
+</p>
+
+{% if run_id %}
+{# ── Live run view — polls for log output, then reveals results ── #}
+<div id="kit-run-root"
+     data-poll-url="{{ poll_url }}"
+     data-job-url-base="/jobs/">
+
+  <section class="card" style="margin-bottom:1.25rem">
+    <div class="card-head">
+      <h2>
+        <span id="kb-spinner" class="ts-spinner" aria-hidden="true"></span>
+        <span id="kb-heading-text">Building kits&hellip;</span>
+      </h2>
+      <span id="kb-run-summary" class="muted small">Starting&hellip;</span>
+    </div>
+    <div id="kb-log-box" class="task-log-box" aria-live="polite" aria-label="Task log"></div>
+  </section>
+
+  <section class="card" id="kb-results-card" style="display:none;margin-bottom:1.25rem">
+    <div class="card-head">
+      <h2>Results</h2>
+      <span id="kb-result-meta" class="muted small"></span>
+    </div>
+    <table class="table" style="margin-top:.5rem">
+      <thead>
+        <tr>
+          <th>Status</th>
+          <th>Title</th>
+          <th>Company</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="kb-result-body"></tbody>
+    </table>
+  </section>
+
+  <div class="card" id="kb-all-done-card" style="display:none;text-align:center;padding:1.5rem">
+    <p style="font-size:1.1rem;margin:0">All kits built &mdash; nothing left in the queue.</p>
+    <a class="btn btn-outline" href="{{ url_for('main.jobs_list', status='Applied') }}" style="margin-top:.75rem">View Applied jobs</a>
+  </div>
+
+  <div class="card" id="kb-partial-done-card" style="display:none;text-align:center;padding:1.5rem">
+    <p style="font-size:1.1rem;margin:0" id="kb-partial-msg"></p>
+    <div style="margin-top:.75rem;display:flex;gap:.5rem;justify-content:center">
+      <a class="btn btn-outline" href="{{ url_for('main.jobs_list', status='unkitted') }}">View remaining</a>
+      <a class="btn btn-primary" href="{{ url_for('main.kit_batch') }}">Run again</a>
+    </div>
+  </div>
+
+</div>
+
+{% elif total_remaining == 0 %}
+{# ── All caught up ── #}
+<div class="card" style="text-align:center;padding:2rem">
+  <p style="font-size:1.25rem">All caught up &mdash; no Applied jobs are missing kits.</p>
+  <a class="btn btn-outline" href="{{ url_for('main.jobs_list', status='Applied') }}">View Applied jobs</a>
+</div>
+
+{% else %}
+{# ── Initial form ── #}
+<section class="card">
+  <div class="card-head">
+    <h2>Run batch</h2>
+    <span class="muted small">{{ total_remaining }} Applied job{{ 's' if total_remaining != 1 }} without a kit</span>
+  </div>
+  <form method="post" action="{{ url_for('main.kit_batch') }}" class="form" style="margin-top:.75rem">
+    {{ confirm_form.hidden_tag() }}
+    <button type="submit" class="btn btn-primary">Build {{ total_remaining }} kit{{ 's' if total_remaining != 1 }} &rarr;</button>
+  </form>
+</section>
+{% endif %}
+
+<p style="margin-top:1.5rem">
+  <a href="{{ url_for('main.dashboard') }}">&larr; Back to Dashboard</a>
+</p>
+{% endblock %}

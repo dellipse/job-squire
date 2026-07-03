@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}Application kit · JobSquire{% endblock %}
+{% block content %}
+<h1>Application kit generator</h1>
+<p class="muted">Build a kit for a role: User's master profile plus the job plus a ready-to-paste
+  prompt. Pick a job already in Job Squire to auto-fill, or paste a new posting.</p>
+
+<section class="card">
+  <h2>Use a tracked job</h2>
+  <div class="filters">
+    <div class="job-picker" data-navigate="{{ url_for('main.kit_hub') }}?job_id=">
+      <input class="job-picker-search" type="text" autocomplete="off" spellcheck="false"
+             placeholder="Type company or title to filter…"
+             value="{% if selected %}{{ selected.company }} — {{ selected.title }}{% if selected.status %} ({{ selected.status }}){% endif %}{% endif %}">
+      <ul class="job-picker-list" role="listbox" hidden>
+        {% for j in job_options %}
+        <li role="option" data-value="{{ j.id }}">
+          <span class="jpc-company">{{ j.company }}</span>
+          <span class="jpc-meta">{{ j.title }}{% if j.status %} &middot; {{ j.status }}{% endif %}</span>
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% if selected %}<a class="btn btn-outline" href="{{ url_for('main.kit_hub') }}">Clear</a>{% endif %}
+  </div>
+  <p class="muted small">Selecting a job fills in the form below. Then download the kit file,
+    {% if claude_buttons_enabled %}use <strong>Build kit in Claude</strong>,{% endif %}
+    {% if ai_api_enabled %}or use <strong>Build kit via API</strong> to generate it with your
+    configured AI provider (Claude, OpenAI, or a free-tier provider like Ollama, Groq, or
+    OpenRouter){% else %}or enable Automatic features in Settings &gt; AI for a one-click API
+    option that also works with free-tier providers{% endif %}.</p>
+</section>
+
+<form method="post" class="card form" novalidate action="{{ url_for('main.kit_hub') }}">
+  {{ form.hidden_tag() }}
+  {% if selected %}<input type="hidden" name="tracked_job_id" value="{{ selected.id }}">{% endif %}
+  <h2>{{ 'Edit the details' if selected else 'Or paste a new posting' }}</h2>
+  <div class="form-grid">
+    <div class="field">{{ form.job_title.label }} {{ form.job_title() }}</div>
+    <div class="field">{{ form.company.label }} {{ form.company() }}</div>
+    <div class="field">{{ form.location.label }} {{ form.location() }}</div>
+    <div class="field">{{ form.url.label }} {{ form.url() }}</div>
+    <div class="field field-wide">
+      {{ form.job_description.label }}
+      {{ form.job_description(rows=10) }}
+      {% if selected and selected.notes and selected.notes|length < 600 %}
+      <p class="muted small" style="margin:.25rem 0 0">This job was imported from a search provider, which only returns a short snippet. For best results, replace the text above with the full job posting.</p>
+      {% endif %}
+    </div>
+    {% if selected %}
+    <input type="hidden" name="save_job" value="no">
+    <p class="muted small field-wide">This kit will be saved to the existing tracked job
+      ("{{ selected.company }} — {{ selected.title }}"), not a new one.</p>
+    {% else %}
+    <div class="field">{{ form.save_job.label }} {{ form.save_job() }}</div>
+    {% endif %}
+  </div>
+  {% for field in form %}
+    {% if field.errors %}{% for e in field.errors %}<p class="err">{{ field.label.text }}: {{ e }}</p>{% endfor %}{% endif %}
+  {% endfor %}
+  <div class="actions">
+    {% if ai_api_enabled %}
+    <button class="btn btn-primary" type="submit" formaction="{{ url_for('main.kit_run') }}"
+            formtarget="_blank" formnovalidate data-loading-text="Opened in a new tab…">Build kit via API</button>
+    {% endif %}
+    {% if claude_buttons_enabled %}
+    <a id="kit-claude-btn" class="btn btn-outline" href="#" rel="noopener">Build kit in Claude ↗</a>
+    {% endif %}
+    {{ form.submit(class="btn btn-outline", value="Download kit prompt (.md)") }}
+    <span class="muted small">
+      {% if ai_api_enabled %}"Build kit via API" opens a live status page in a new tab that calls your configured AI provider directly.{% endif %}
+      {% if claude_buttons_enabled %}"Build kit in Claude" opens a chat via the connector.{% endif %}
+      "Download kit prompt (.md)" gives you the file to paste into any AI assistant yourself.
+    </span>
+  </div>
+</form>
+
+<section class="card">
+  <h3>How it works</h3>
+  <ol class="how">
+    <li>Pick a tracked job (auto-fills) or paste a posting.</li>
+    <li><strong>Build kit in Claude</strong> (MCP mode) opens a chat with live connector access:
+      Claude fetches the live posting, researches the company and salary, and produces a
+      tailored resume, cover letter, emails, and interview questions, then saves both a
+      <strong>.md</strong> and a <strong>.docx</strong> file to your Application Kits folder and
+      pushes the kit back to Job Squire.</li>
+    <li><strong>Build kit via API</strong> opens a live status page in a new tab (like the other
+      automatic AI tasks) and calls whatever AI provider you've configured in Settings &gt; AI
+      (Claude, OpenAI, or a free-tier provider like Ollama, Groq, Gemini, or OpenRouter). It runs
+      a best-effort web search first to research the company and salary range, then generates
+      the kit, working from the profile, job description, and research findings. If the posting
+      is saved as a job, the kit text is saved to the job record and a matching <strong>.docx</strong>
+      file is attached to that job so you can download it from the job's detail page like any
+      other file. If you didn't save it as a job, the kit is shown on the status page itself, with
+      a button to download it as .docx before you navigate away.</li>
+    <li>Downloading the kit file gives you the full prompt to paste into any AI assistant
+      yourself, if you'd rather run it manually.</li>
+  </ol>
+</section>
+{% endblock %}

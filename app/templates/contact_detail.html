@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}{{ contact.name }} · Recruiters{% endblock %}
+{% block content %}
+<div class="card-head">
+  <div>
+    <h1>{{ contact.name }}</h1>
+    <p class="sub">{% if contact.title %}{{ contact.title }} · {% endif %}{{ contact.agency or 'No agency' }} · <span class="chip">{{ contact.contact_type }}</span></p>
+  </div>
+  <div class="actions">
+    <a class="btn btn-primary" href="{{ url_for('main.submission_new', contact_id=contact.id) }}">+ Log submission</a>
+    <a class="btn btn-outline" href="{{ url_for('main.contact_edit', contact_id=contact.id) }}">Edit</a>
+    <form method="post" action="{{ url_for('main.contact_delete', contact_id=contact.id) }}"
+          data-confirm="Delete this contact and their submissions?" style="display:inline">
+      {{ confirm_form.hidden_tag() }}
+      <button class="btn btn-danger" type="submit">Delete</button>
+    </form>
+  </div>
+</div>
+
+<div class="grid-2">
+  <section class="card">
+    <h2>Details</h2>
+    <dl class="kv">
+      <dt>Email</dt><dd>{% if contact.email %}<a href="mailto:{{ contact.email }}">{{ contact.email }}</a>{% else %}—{% endif %}</dd>
+      <dt>Phone</dt><dd>{{ contact.phone or '—' }}</dd>
+      <dt>LinkedIn</dt><dd>{% if contact.linkedin_url %}<a href="{{ contact.linkedin_url }}" target="_blank" rel="noopener noreferrer">Profile ↗</a>{% else %}—{% endif %}</dd>
+      <dt>Last contacted</dt><dd>{{ contact.last_contacted or '—' }}</dd>
+      <dt>Follow-up</dt><dd>{% if contact.follow_up_date %}<span class="{% if contact.follow_up_due %}due-now{% endif %}">{{ contact.follow_up_date }}</span>{% else %}—{% endif %}</dd>
+    </dl>
+    {% if contact.notes %}<h3>Notes</h3><p class="pre">{{ contact.notes }}</p>{% endif %}
+  </section>
+
+  <section class="card">
+    <h2>At a glance</h2>
+    <dl class="kv">
+      <dt>Total submissions</dt><dd>{{ contact.submissions | length }}</dd>
+      <dt>Open submissions</dt><dd>{{ contact.open_submissions | length }}</dd>
+    </dl>
+  </section>
+</div>
+
+<section class="card">
+  <div class="card-head">
+    <h2>Submissions</h2>
+    <a class="btn btn-primary" href="{{ url_for('main.submission_new', contact_id=contact.id) }}">+ Log submission</a>
+  </div>
+  {% if contact.submissions %}
+  <div class="table-wrap">
+  <table class="list">
+    <thead>
+      <tr><th>Company</th><th>Role</th><th>Status</th><th class="mob-hide">Submitted</th><th class="mob-hide">Follow-up</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for s in contact.submissions %}
+      <tr>
+        <td>{% if s.job_id %}<a href="{{ url_for('main.job_detail', job_id=s.job_id) }}">{{ s.company or '(tracked job)' }}</a>{% else %}{{ s.company or '—' }}{% endif %}</td>
+        <td>{{ s.role_title or '—' }}</td>
+        <td><span class="status s-{{ s.status | replace(' ', '') }}">{{ s.status }}</span></td>
+        <td class="mob-hide">{{ s.submitted_date or '—' }}</td>
+        <td class="mob-hide">{% if s.follow_up_date %}<span class="{% if s.follow_up_due %}due-now{% endif %}">{{ s.follow_up_date }}</span>{% else %}—{% endif %}</td>
+        <td class="nowrap">
+          <a class="link-btn" href="{{ url_for('main.submission_edit', sub_id=s.id) }}">edit</a>
+          <form method="post" action="{{ url_for('main.submission_delete', sub_id=s.id) }}"
+                data-confirm="Remove this submission?" style="display:inline">
+            {{ confirm_form.hidden_tag() }}
+            <button class="link-btn" type="submit">delete</button>
+          </form>
+        </td>
+      </tr>
+      {% if s.notes %}<tr><td colspan="6" class="muted small pre">{{ s.notes }}</td></tr>{% endif %}
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="muted">No submissions logged for this contact yet. When they put User forward for a role, record it here so you know who submitted him where.</p>
+  {% endif %}
+</section>
+{% endblock %}

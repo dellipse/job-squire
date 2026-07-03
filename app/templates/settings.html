@@ -1,0 +1,1470 @@
+{% extends "base.html" %}
+{% block title %}Settings · JobSquire{% endblock %}
+{% block content %}
+<div class="card-head">
+  <h1>Settings</h1>
+  <form method="post" action="{{ url_for('main.settings_run') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button class="btn btn-primary" type="submit">Run search now</button>
+  </form>
+</div>
+
+<nav class="page-tabs">
+  <button data-tab="tab-search">Search</button>
+  <button data-tab="tab-sources">Sources</button>
+  <button data-tab="tab-email">Email</button>
+  <button data-tab="tab-claude">AI</button>
+  <button data-tab="tab-documents">Candidate Profile</button>
+  <button data-tab="tab-kit">Application Kit</button>
+  <button data-tab="tab-history">History</button>
+</nav>
+
+{# ── Search ──────────────────────────────────────────────── #}
+<div id="tab-search" class="tab-panel">
+  <section class="card">
+    <h2>What to search for</h2>
+    <form method="post" action="{{ url_for('main.settings_search') }}" class="form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-grid">
+        <div class="field field-wide">
+          <label>Job titles / keywords (one per line)</label>
+          <textarea name="titles" rows="6">{{ cfg.titles }}</textarea>
+        </div>
+        <div class="field">
+          <label>Location <span class="muted">(City, ST)</span></label>
+          <input type="text" name="location" value="{{ cfg.location }}"
+                 placeholder="City, ST" required
+                 pattern="^.+,\s*[A-Za-z]{2}(\s+\d{5})?$"
+                 title="Use City, ST (two-letter state), e.g. City, ST">
+          <span class="muted small">City and two-letter state. ZIP codes and addresses
+            aren't supported; use Radius to widen the area.</span>
+        </div>
+        <div class="field"><label>Radius (miles)</label><input type="text" name="radius_miles" value="{{ cfg.radius_miles }}"></div>
+        <div class="field"><label>Minimum salary (blank = no filter)</label><input type="text" name="min_salary" value="{{ cfg.min_salary or '' }}"></div>
+        <div class="field"><label>Max posting age (days)</label><input type="text" name="max_age_days" value="{{ cfg.max_age_days }}"></div>
+        <div class="field"><label>Results per query (1-50)</label><input type="text" name="results_per_query" value="{{ cfg.results_per_query }}"></div>
+        <div class="field"><label><input type="checkbox" name="enabled" {% if cfg.enabled %}checked{% endif %}> Automated search enabled</label></div>
+      </div>
+      <div class="actions"><button class="btn btn-primary" type="submit">Save search settings</button></div>
+    </form>
+    {% if mcp_configured and ai_cfg.connector_name %}
+    {% set _cname = ai_cfg.connector_name %}
+    {% set search_prompt = "Use my job-search connectors (Indeed, ZipRecruiter, Dice, Google Jobs) to find current postings. First call the \"" ~ _cname ~ "\" connector's get_search_targets tool to get my exact titles, location, and criteria. Then search those connectors and collect matching jobs. For each new posting, call the \"" ~ _cname ~ "\" connector's add_jobs tool with an array of objects in this format: {\"title\": \"...\", \"company\": \"...\", \"location\": \"...\", \"url\": \"...\", \"salary\": \"...\", \"source\": \"<board name, e.g. indeed>\", \"external_id\": \"<board's job id>\", \"description\": \"...\"}. The tool returns how many were added vs. skipped as duplicates." %}
+    <div class="mcp-info">
+      <a class="btn btn-outline" target="_blank" rel="noopener noreferrer"
+         href="https://claude.ai/new?q={{ search_prompt | urlencode }}">Search jobs in Claude ↗</a>
+      <span class="muted small">Opens Claude, which searches your job connectors and pushes new finds
+        directly into Job Squire via the <strong>{{ _cname }}</strong> connector.</span>
+    </div>
+    {% endif %}
+  </section>
+</div>
+
+{# ── Sources ─────────────────────────────────────────────── #}
+<div id="tab-sources" class="tab-panel">
+  <section class="card">
+    <h2>Job sources</h2>
+    <p class="muted small">Dice uses a public RSS feed — no key needed, just enable it.
+      ZipRecruiter, Google Jobs (SerpApi), Adzuna, and Jooble use free API keys from their respective providers.
+      Google Jobs aggregates Indeed, LinkedIn, and hundreds of other boards in a single call — see its quota note below.
+      Secrets are encrypted at rest; leave a secret field blank to keep the saved value.</p>
+    {% for p in providers %}
+    <div class="provider" data-provider="{{ p.key }}">
+      <form method="post" action="{{ url_for('main.settings_provider', provider=p.key) }}" class="form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="provider-head">
+          <strong>{{ p.label }}</strong>
+          {% if p.enabled %}<span class="chip on">enabled</span>{% else %}<span class="chip">off</span>{% endif %}
+          {% if p.fields %}
+          <a class="muted small" href="{{ p.signup_url }}" target="_blank" rel="noopener noreferrer">get a key ↗</a>
+          {% else %}
+          <a class="muted small" href="{{ p.signup_url }}" target="_blank" rel="noopener noreferrer">visit site ↗</a>
+          {% endif %}
+        </div>
+        <p class="muted small">{{ p.note }}</p>
+        <div class="form-grid">
+          {% for f in p.fields %}
+          <div class="field">
+            <label>{{ f.label }}{% if not f.required %} <span class="muted">(optional)</span>{% endif %}</label>
+            {% if f.secret %}
+              <input type="password" name="{{ f.name }}" autocomplete="new-password"
+                     placeholder="{{ '•••••• saved (leave blank to keep)' if f.is_set else '' }}">
+            {% elif f.get('input_type') == 'number' %}
+              <input type="number" min="1" name="{{ f.name }}" value="{{ f.value }}"
+                     placeholder="{{ f.get('placeholder', '') }}">
+            {% else %}
+              <input type="text" name="{{ f.name }}" value="{{ f.value }}">
+            {% endif %}
+          </div>
+          {% endfor %}
+          {% if p.key == 'googlejobs' %}
+          {% set _pages = ((cfg.results_per_query or 25) + 9) // 10 %}
+          <div class="field field-wide" data-serpapi-calc data-pages="{{ _pages }}">
+            <span id="serpapi-monthly-estimate" class="muted small"></span>
+            <span class="muted small"> — free tier limit: 250/month</span>
+          </div>
+          {% endif %}
+          <div class="field"><label><input type="checkbox" name="enabled" {% if p.enabled %}checked{% endif %}> Use this source</label></div>
+        </div>
+        <div class="actions">
+          <button class="btn" type="submit">Save {{ p.label }}</button>
+        </div>
+      </form>
+      <div class="provider-actions">
+        <form method="post" action="{{ url_for('main.settings_provider_test', provider=p.key) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button class="btn btn-outline" type="submit">Test connection</button>
+        </form>
+        <form method="post" action="{{ url_for('main.settings_provider_pull', provider=p.key) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button class="btn btn-primary" type="submit">Pull now</button>
+        </form>
+        <span class="muted small">Test: verifies your key with 1 result. Pull: full search, saves new jobs to Job Squire.</span>
+      </div>
+    </div>
+    {% endfor %}
+    <p class="muted small">Note: LinkedIn, Monster, and Indeed block direct automated access and are not
+      available as standalone sources. Google Jobs (via SerpApi) pulls from Google's job index, which
+      aggregates Indeed, LinkedIn, and hundreds of ATS boards indirectly — making it the highest-coverage
+      single source here. Dice uses a public RSS feed with no key required. ZipRecruiter requires a free
+      partner key. Together with Adzuna, Jooble, The Muse, and USAJOBS, these sources give broad US
+      coverage across all roles and experience levels.</p>
+  </section>
+</div>
+
+{# ── Email ───────────────────────────────────────────────── #}
+<div id="tab-email" class="tab-panel">
+  <section class="card">
+    <h2>Email notifications</h2>
+    <p class="muted small">When a run finds new postings, Job Squire emails this address. Use any SMTP
+      server (Brevo, a Gmail app password, SendGrid, etc.).</p>
+    <p class="muted small"><strong>Username</strong> is the provider's SMTP login, not always your
+      account email. For <strong>Brevo</strong>, use the dedicated SMTP login shown on the
+      SMTP &amp; API page (not your Brevo account email). <strong>Password</strong> is the SMTP key /
+      app password, not your account password.</p>
+    <form method="post" action="{{ url_for('main.settings_smtp') }}" class="form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-grid">
+        <div class="field"><label>SMTP host</label><input type="text" name="host" value="{{ smtp.host }}"></div>
+        <div class="field"><label>Port</label><input type="text" name="port" value="{{ smtp.port }}"></div>
+        <div class="field"><label>Username</label><input type="text" name="username" value="{{ smtp.username }}" autocomplete="off"></div>
+        <div class="field"><label>Password</label><input type="password" name="password" autocomplete="new-password" placeholder="{{ '•••••• saved (leave blank to keep)' if smtp.password_enc else '' }}"></div>
+        <div class="field"><label>From address</label><input type="text" name="from_addr" value="{{ smtp.from_addr }}"></div>
+        <div class="field"><label>Send to — job seeker (User)</label><input type="text" name="to_addr" value="{{ smtp.to_addr }}"></div>
+        <div class="field">
+          <label>Admin error alerts (Admin) <span class="muted">(optional)</span></label>
+          <input type="text" name="admin_email" value="{{ smtp.admin_email or '' }}">
+          <span class="muted small">Receives an email when a search run hits errors. If left blank, errors only appear in History. If the same as the job-seeker address, only one email is sent.</span>
+        </div>
+        <div class="field"><label><input type="checkbox" name="use_tls" {% if smtp.use_tls %}checked{% endif %}> Use STARTTLS (port 587)</label></div>
+        <div class="field"><label><input type="checkbox" name="enabled" {% if smtp.enabled %}checked{% endif %}> Email notifications enabled</label></div>
+      </div>
+      <div class="actions"><button class="btn btn-primary" type="submit">Save email settings</button></div>
+    </form>
+    <div class="test-email">
+      <form method="post" action="{{ url_for('main.settings_test_email') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button class="btn btn-outline" type="submit">Send test email</button>
+      </form>
+      <span class="muted small">Save your settings first, then send a test to confirm they work.</span>
+    </div>
+  </section>
+</div>
+
+{# ── AI ────────────────────────────────────────────────────── #}
+<div id="tab-claude" class="tab-panel">
+
+  <nav class="ai-sub-tabs">
+    <button data-ai-tab="ai-sub-features">Features</button>
+    <button data-ai-tab="ai-sub-providers">Providers</button>
+    <button data-ai-tab="ai-sub-tasks">Auto Tasks</button>
+    <button data-ai-tab="ai-sub-connectors">Connectors</button>
+    <button data-ai-tab="ai-sub-tools">Tools</button>
+  </nav>
+
+  {# ── Sub-panel: Features ── #}
+  <div id="ai-sub-features" class="ai-sub-panel">
+
+  {# ── Card 1: Automatic Features ── #}
+  <section class="card">
+    <h2>Automatic Features</h2>
+    <p class="muted small">
+      Run scheduled AI tasks in the background using a configured provider. Independent of
+      the MCP Connector — you can use one, the other, or both.
+    </p>
+    <form method="post" action="{{ url_for('main.settings_ai_mode') }}" class="form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-grid">
+        <div class="field field-wide">
+          <label>
+            <input type="checkbox" name="api_enabled" id="api-enabled-toggle"
+                   {% if ai_cfg.api_enabled %}checked{% endif %}>
+            <strong>Enable automatic features</strong>
+          </label>
+          <span class="muted small">
+            Scores new jobs, drafts follow-up emails, generates weekly strategy reviews, and
+            alerts on rejection patterns. Runs on a schedule in the background. Requires at least
+            one AI provider configured in the Providers tab.
+          </span>
+        </div>
+      </div>
+      <div class="mode-info-box" style="margin-top:.75rem">
+        <strong>No AI provider?</strong> You can still use Manual mode — export your pipeline as JSON,
+        paste it into any AI chat with the prompt shown on the
+        <a href="{{ url_for('main.ai_hub') }}">AI analysis</a> page, and paste the result back.
+        Works with any AI tool, no API key needed.
+      </div>
+      <div class="actions" style="margin-top:1.25rem">
+        <button class="btn btn-primary" type="submit">Save</button>
+      </div>
+    </form>
+  </section>
+
+  </div>{# end ai-sub-features #}
+
+  {# ── Sub-panel: Providers ── #}
+  <div id="ai-sub-providers" class="ai-sub-panel">
+
+  <section class="card" id="ai-providers-card">
+    <h2>AI Providers</h2>
+
+    <div class="mode-info-box mode-info-warning" style="margin-bottom:1rem">
+      <strong>Privacy notice:</strong> Cloud AI providers may use your data for model training.
+      Do not send sensitive personal information (SSN, salary history, home address, health data)
+      in job descriptions or profile text. If privacy is a concern, use a local provider such as
+      Ollama or LiteLLM, or review each provider's data usage policy before adding them.
+    </div>
+
+    <p class="muted small" style="margin-bottom:.75rem">
+      Providers are tried in rank order — the first that succeeds handles the request.
+      Use capabilities to control which task types each provider handles.
+      Uncheck <strong>Analysis</strong> for providers with small context windows (e.g. Cerebras free tier, &lt;16K tokens).
+      <strong>OpenRouter is recommended</strong> for most users — free API key, access to dozens of models.
+    </p>
+
+    {% if ai_providers %}
+
+    {# ── Provider table with inline edit rows ── #}
+    <table class="table provider-summary-table" style="margin-bottom:.75rem">
+      <thead>
+        <tr>
+          <th style="width:2.5rem">Rank</th>
+          <th>Provider / Model</th>
+          <th style="width:9rem">Can do</th>
+          <th style="width:4rem">Status</th>
+          <th style="width:10rem"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in ai_providers %}
+
+        {# ── Summary row ── #}
+        <tr class="provider-row{% if not p.enabled %} provider-row--disabled{% endif %}" data-pid="{{ p.id }}">
+          <td class="mono" style="text-align:center">{{ p.rank }}</td>
+          <td>
+            <strong>{{ p.display_name }}</strong>
+            <br><span class="muted small mono">{{ p.model or '(default)' }}</span>
+            {% if p.base_url %}<br><span class="muted small">{{ p.base_url[:30] }}{% if p.base_url|length > 30 %}…{% endif %}</span>{% endif %}
+          </td>
+          <td><span class="chip chip-sm">{{ p.capability_label }}</span></td>
+          <td>
+            <form method="post" action="{{ url_for('main.ai_provider_toggle', pid=p.id) }}" style="display:inline">
+              {{ confirm_form.hidden_tag() }}
+              <button class="btn btn-xs {{ 'btn-success' if p.enabled else 'btn-outline' }}" type="submit">
+                {{ 'On' if p.enabled else 'Off' }}
+              </button>
+            </form>
+          </td>
+          <td>
+            <form class="provider-row-actions" method="post">
+              {{ confirm_form.hidden_tag() }}
+              <button class="btn btn-xs btn-outline" type="submit"
+                      formaction="{{ url_for('main.ai_provider_move_up', pid=p.id) }}"
+                      title="Move up"{% if loop.first %} style="visibility:hidden"{% endif %}>▲</button>
+              <button class="btn btn-xs btn-outline" type="submit"
+                      formaction="{{ url_for('main.ai_provider_move_down', pid=p.id) }}"
+                      title="Move down"{% if loop.last %} style="visibility:hidden"{% endif %}>▼</button>
+              <button class="btn btn-xs btn-outline provider-edit-btn" type="button"
+                      data-pid="{{ p.id }}">Edit</button>
+              <button class="btn btn-xs btn-danger provider-delete-btn" type="submit"
+                      formaction="{{ url_for('main.ai_provider_delete', pid=p.id) }}"
+                      data-name="{{ p.display_name }}" title="Remove">✕</button>
+            </form>
+          </td>
+        </tr>
+
+        {# ── Inline edit row (hidden until Edit is clicked) ── #}
+        <tr class="provider-edit-row" id="edit-row-{{ p.id }}" style="display:none">
+          <td colspan="5" style="padding:0">
+            <div class="provider-inline-edit">
+              <div class="provider-inline-edit-head">
+                <strong>{{ p.display_name }}</strong>
+                <div style="display:flex;gap:.5rem;align-items:center">
+                  <form method="post" action="{{ url_for('main.ai_provider_test', pid=p.id) }}" style="display:inline">
+                    {{ confirm_form.hidden_tag() }}
+                    <button class="btn btn-sm btn-outline" type="submit">Test connection</button>
+                  </form>
+                  <button class="btn btn-sm btn-outline provider-close-btn" type="button" data-pid="{{ p.id }}">Close</button>
+                </div>
+              </div>
+              <form method="post" action="{{ url_for('main.ai_provider_edit', pid=p.id) }}" class="form">
+                {{ confirm_form.hidden_tag() }}
+                <div class="form-grid" style="grid-template-columns:1fr 1fr">
+                  <div class="field">
+                    <label>Label <span class="muted">(optional)</span></label>
+                    <input type="text" name="label" value="{{ p.label }}" placeholder="{{ p.provider.title() }}">
+                  </div>
+                  <div class="field">
+                    <label>API key <span class="muted">(leave blank to keep current)</span></label>
+                    <input type="password" name="api_key" autocomplete="new-password" placeholder="•••• saved">
+                  </div>
+                  <div class="field field-wide">
+                    <label>Base URL <span class="muted">(leave blank to keep current)</span></label>
+                    <input type="text" name="base_url" value="{{ p.base_url }}" placeholder="https://...">
+                    <span class="muted small">Required only for Ollama, LiteLLM, or custom deployments.</span>
+                  </div>
+                  <div class="field field-wide">
+                    <label>Model <span class="muted">(leave blank for provider default)</span></label>
+                    <input type="text" name="model" value="{{ p.model }}" placeholder="e.g. google/gemini-2.0-flash">
+                  </div>
+                  {% if p.provider == 'anthropic' %}
+                  <div class="field field-wide">
+                    <label>Thinking mode</label>
+                    <select name="thinking_mode">
+                      <option value="disabled" {% if (p.thinking_mode or 'disabled') == 'disabled' %}selected{% endif %}>Disabled — fastest &amp; cheapest</option>
+                      <option value="low"    {% if p.thinking_mode == 'low'    %}selected{% endif %}>Low — light reasoning (~1K token budget)</option>
+                      <option value="medium" {% if p.thinking_mode == 'medium' %}selected{% endif %}>Medium — moderate reasoning (~5K token budget)</option>
+                      <option value="high"   {% if p.thinking_mode == 'high'   %}selected{% endif %}>High — deep reasoning (~10K token budget, slowest)</option>
+                    </select>
+                  </div>
+                  {% endif %}
+                  <div class="field field-wide">
+                    <label>Capabilities</label>
+                    <div style="display:flex;gap:1.5rem;margin-top:.25rem">
+                      <label style="font-weight:normal;display:flex;align-items:center;gap:.4rem">
+                        <input type="checkbox" name="use_for_analysis" {% if p.use_for_analysis %}checked{% endif %}> Analysis tasks
+                      </label>
+                      <label style="font-weight:normal;display:flex;align-items:center;gap:.4rem">
+                        <input type="checkbox" name="use_for_triage" {% if p.use_for_triage %}checked{% endif %}> Triage tasks
+                      </label>
+                    </div>
+                    <span class="muted small">Analysis = weekly review, rejection alert. Triage = job scoring, follow-up drafts.</span>
+                  </div>
+                </div>
+                <div class="actions">
+                  <button class="btn btn-primary" type="submit">Save changes</button>
+                </div>
+              </form>
+            </div>
+          </td>
+        </tr>
+
+        {% endfor %}
+      </tbody>
+    </table>
+
+    {% else %}
+    <p class="muted small" style="margin-bottom:1rem">No providers configured yet. Add one below.</p>
+    {% endif %}
+
+    {# ── Add provider form ── #}
+    <details id="add-provider-details">
+      <summary class="btn btn-sm btn-outline" style="list-style:none;cursor:pointer;display:inline-block">+ Add provider</summary>
+      <div style="margin-top:1rem;padding:1rem;background:var(--surface-alt,#f9fafb);border-radius:6px;border:1px solid var(--border,#e5e7eb)">
+        <form method="post" action="{{ url_for('main.ai_provider_add') }}" class="form">
+          {{ confirm_form.hidden_tag() }}
+          <div class="form-grid">
+            <div class="field">
+              <label>Provider type</label>
+              <select name="provider" id="new-provider-type">
+                <optgroup label="Recommended — free API key, many models">
+                  <option value="openrouter">OpenRouter (recommended)</option>
+                  <option value="gemini">Google AI Studio (Gemini)</option>
+                  <option value="nous_portal">Nous Portal</option>
+                </optgroup>
+                <optgroup label="Other free &amp; low-cost portals">
+                  <option value="cerebras">Cerebras (small context — uncheck Analysis)</option>
+                  <option value="github_models">GitHub Models</option>
+                  <option value="groq">Groq</option>
+                </optgroup>
+                <optgroup label="Subscription / pay-as-you-go">
+                  <option value="anthropic">Anthropic (Claude)</option>
+                  <option value="openai">OpenAI</option>
+                  <option value="mistral">Mistral</option>
+                </optgroup>
+                <optgroup label="Local / private">
+                  <option value="ollama">Ollama (local)</option>
+                  <option value="litellm">LiteLLM (local proxy)</option>
+                  <option value="custom">Custom (OpenAI-compatible)</option>
+                </optgroup>
+              </select>
+            </div>
+            <div class="field">
+              <label>Label <span class="muted">(optional)</span></label>
+              <input type="text" name="label" placeholder="e.g. OpenRouter Free Tier">
+            </div>
+            <div class="field field-wide">
+              <label>API key</label>
+              <input type="password" name="api_key" autocomplete="new-password" placeholder="Required for cloud providers">
+              <details style="margin-top:.5rem">
+                <summary class="muted small" style="cursor:pointer">Where to get API keys</summary>
+                <div class="muted small" style="margin-top:.4rem;padding:.5rem;background:var(--surface,#fff);border-radius:4px;border:1px solid var(--border,#e5e7eb)">
+                  <strong>Anthropic</strong> — <a href="https://console.anthropic.com" target="_blank" rel="noopener noreferrer">console.anthropic.com</a>. Pay-as-you-go (~$2–5/mo for an active search).<br>
+                  <strong>OpenRouter</strong> — <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer">openrouter.ai/keys</a>. Free API key. Routes to dozens of providers with many free-tier models. Single setup, easiest to start.<br>
+                  <strong>Google AI Studio</strong> — <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer">aistudio.google.com</a> → Get API key. Free tier: 15 req/min, 1M tokens/day on Gemini Flash.<br>
+                  <strong>Nous Portal</strong> — <a href="https://nousresearch.com" target="_blank" rel="noopener noreferrer">nousresearch.com</a>. Hermes model family. Direct API at <code>https://inference-api.nousresearch.com/v1</code>.<br>
+                  <strong>Cerebras</strong> — <a href="https://cloud.cerebras.ai" target="_blank" rel="noopener noreferrer">cloud.cerebras.ai</a>. Very fast inference. Free tier limited to ~8K context — uncheck Analysis capability.<br>
+                  <strong>GitHub Models</strong> — <a href="https://github.com/marketplace/models" target="_blank" rel="noopener noreferrer">github.com/marketplace/models</a>. Use your GitHub personal access token.<br>
+                  <strong>Groq</strong> — <a href="https://console.groq.com/keys" target="_blank" rel="noopener noreferrer">console.groq.com</a>. Free tier on Llama/Mixtral with rate limits.<br>
+                  <strong>OpenAI</strong> — <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">platform.openai.com</a>. Pay-as-you-go.<br>
+                  <strong>Mistral</strong> — <a href="https://console.mistral.ai/api-keys" target="_blank" rel="noopener noreferrer">console.mistral.ai</a>. Pay-as-you-go.<br>
+                  <strong>Ollama</strong> — No API key needed. Run locally. <a href="https://ollama.com" target="_blank" rel="noopener noreferrer">ollama.com</a>.<br>
+                  <strong>LiteLLM</strong> — No API key needed. Local proxy that routes to many backends. <a href="https://docs.litellm.ai" target="_blank" rel="noopener noreferrer">docs.litellm.ai</a>.<br>
+                  <em>These URLs were current at time of release. Check each provider's site if they have changed.</em>
+                </div>
+              </details>
+            </div>
+            <div class="field" id="new-provider-thinking-field" style="display:none">
+              <label>Thinking mode <span class="muted">(Anthropic only)</span></label>
+              <select name="thinking_mode">
+                <option value="disabled" selected>Disabled — fastest &amp; cheapest (default)</option>
+                <option value="low">Low — light reasoning (~1K token budget)</option>
+                <option value="medium">Medium — moderate reasoning (~5K token budget)</option>
+                <option value="high">High — deep reasoning (~10K token budget, slowest)</option>
+              </select>
+            </div>
+            <div class="field field-wide">
+              <label>Base URL <span class="muted">(leave blank for provider default)</span></label>
+              <input type="text" name="base_url" placeholder="e.g. http://localhost:11434/v1 for Ollama">
+              <span class="muted small">Required only for Ollama, LiteLLM, or custom deployments.</span>
+            </div>
+            <div class="field field-wide">
+              <label>Model <span class="muted">(leave blank for provider default)</span></label>
+              <input type="text" name="model" placeholder="e.g. google/gemini-2.0-flash, meta-llama/llama-3.3-70b">
+            </div>
+            <div class="field field-wide">
+              <label>Capabilities</label>
+              <div style="display:flex;gap:1.5rem;margin-top:.25rem">
+                <label style="font-weight:normal;display:flex;align-items:center;gap:.4rem">
+                  <input type="checkbox" name="use_for_analysis" checked> Analysis tasks
+                </label>
+                <label style="font-weight:normal;display:flex;align-items:center;gap:.4rem">
+                  <input type="checkbox" name="use_for_triage" checked> Triage tasks
+                </label>
+              </div>
+              <span class="muted small">Uncheck Analysis for providers with small context windows (e.g. Cerebras free tier).</span>
+            </div>
+          </div>
+          <div class="actions">
+            <button class="btn btn-primary" type="submit">Add provider</button>
+          </div>
+        </form>
+      </div>
+    </details>
+  </section>
+
+  </div>{# end ai-sub-providers #}
+
+  {# ── Sub-panel: Auto Tasks ── #}
+  <div id="ai-sub-tasks" class="ai-sub-panel">
+
+  {# ── Card 3: Automatic Feature Settings ── #}
+  <section class="card" id="ai-auto-settings-card">
+    <h2>Automatic Feature Settings</h2>
+    <p class="muted small">
+      Configure each automatic task independently. For each task you can set a preferred provider,
+      a backup provider, and whether to continue down the ranked chain if both fail.
+      Setting a provider to "Ranked chain" means the app tries providers in rank order.
+    </p>
+
+    <form id="ai-tasks-form" method="post" action="{{ url_for('main.settings_ai_tasks') }}" class="form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+      {% set task_meta = {
+        'triage': {
+          'label': 'Auto-triage',
+          'icon': '🎯',
+          'desc': 'Scores each new "Saved" job for fit after every search run. Runs on every incoming job — use a fast, cheap model.',
+          'task_type': 'triage',
+          'cost': '~$0.002/job (Haiku) or free with OpenRouter free models',
+          'schedule': 'After every scheduled search run'
+        },
+        'followup': {
+          'label': 'Follow-up drafts',
+          'icon': '✉️',
+          'desc': 'Drafts follow-up emails for overdue applications daily at 6 AM. Each draft is saved to the job and emailed to you.',
+          'task_type': 'triage',
+          'cost': '~$0.003/draft or free with OpenRouter free models',
+          'schedule': 'Daily at 6 AM (override: FOLLOWUP_DRAFT_HOUR env var)'
+        },
+        'weekly_review': {
+          'label': 'Weekly strategy review',
+          'icon': '📊',
+          'desc': 'Full funnel analysis every Monday at 6 AM — what worked, what stalled, action items. Saved to AI insights and emailed.',
+          'task_type': 'analysis',
+          'cost': '~$0.05–0.15/review (Sonnet) or free with OpenRouter free models',
+          'schedule': 'Monday at 6 AM (override: WEEKLY_REVIEW_HOUR env var)'
+        },
+        'rejection_alert': {
+          'label': 'Rejection alert',
+          'icon': '⚠️',
+          'desc': 'Triggers a rejection pattern analysis and email when the configured threshold is reached within 14 days.',
+          'task_type': 'analysis',
+          'cost': '~$0.05–0.15/alert or free with OpenRouter free models',
+          'schedule': 'Checked after every search run; alert fires at most once per 7 days'
+        }
+      } %}
+
+      {% for task_name in ai_task_names %}
+      {% set tc = ai_task_configs.get(task_name) %}
+      {% set meta = task_meta[task_name] %}
+      {% set is_triage = meta.task_type == 'triage' %}
+      <div id="feature-{{ task_name }}" style="border:1px solid var(--border,#e5e7eb);border-radius:8px;padding:1rem;margin-bottom:1rem">
+        <div style="display:flex;align-items:flex-start;gap:.75rem;margin-bottom:.75rem">
+          <span style="font-size:1.25rem">{{ meta.icon }}</span>
+          <div style="flex:1">
+            <label style="font-weight:600;font-size:1rem;display:flex;align-items:center;gap:.5rem">
+              <input type="checkbox" name="{{ task_name }}_enabled"
+                     {% if tc and tc.enabled %}checked{% elif tc is none %}checked{% endif %}>
+              {{ meta.label }}
+              <span class="badge badge-{% if is_triage %}info{% else %}warning{% endif %}" style="font-size:.7rem">
+                {{ 'triage task' if is_triage else 'analysis task' }}
+              </span>
+            </label>
+            <p class="muted small" style="margin:.25rem 0 0">{{ meta.desc }}</p>
+            <p class="muted small" style="margin:.1rem 0 0">
+              Schedule: {{ meta.schedule }}.
+              Estimated cost: {{ meta.cost }}.
+            </p>
+          </div>
+        </div>
+        <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:.75rem">
+          <div class="field">
+            <label>Primary provider</label>
+            <select name="{{ task_name }}_provider_id">
+              <option value="">Ranked chain (try all in order)</option>
+              {% for p in ai_providers %}
+              {% if p.enabled and ((is_triage and p.use_for_triage) or (not is_triage and p.use_for_analysis)) %}
+              <option value="{{ p.id }}"
+                      {% if tc and tc.provider_id == p.id %}selected{% endif %}>
+                {{ p.display_name }}{% if p.triage_model and is_triage %} ({{ p.triage_model }}){% elif p.model %} ({{ p.model }}){% endif %}
+              </option>
+              {% endif %}
+              {% endfor %}
+            </select>
+          </div>
+          <div class="field">
+            <label>Backup provider <span class="muted">(if primary fails)</span></label>
+            <select name="{{ task_name }}_backup_provider_id">
+              <option value="">None</option>
+              {% for p in ai_providers %}
+              {% if p.enabled and ((is_triage and p.use_for_triage) or (not is_triage and p.use_for_analysis)) %}
+              <option value="{{ p.id }}"
+                      {% if tc and tc.backup_provider_id == p.id %}selected{% endif %}>
+                {{ p.display_name }}
+              </option>
+              {% endif %}
+              {% endfor %}
+            </select>
+          </div>
+          <div class="field field-wide">
+            <label>
+              <input type="checkbox" name="{{ task_name }}_chain_fallback"
+                     {% if tc is none or tc.use_ranked_chain_fallback %}checked{% endif %}>
+              If both fail, continue down the ranked provider chain
+            </label>
+          </div>
+        </div>
+        {% if task_name in ('triage', 'followup', 'weekly_review') and ai_cfg.api_enabled %}
+        <div style="margin-top:.75rem;padding-top:.75rem;border-top:1px solid var(--border,#e5e7eb);display:flex;align-items:center;gap:.75rem">
+          {% if task_name == 'triage' %}
+          <a href="{{ url_for('main.triage_batch') }}" class="btn btn-sm btn-outline">Run now</a>
+          {% else %}
+          <button type="submit" form="run-task-{{ task_name }}" class="btn btn-sm">Run now</button>
+          {% endif %}
+          <span class="muted small">Runs {{ meta.label }} immediately using the providers configured above.</span>
+        </div>
+        {% endif %}
+      </div>
+      {% endfor %}
+
+      <hr style="margin:1.25rem 0;border:none;border-top:1px solid var(--border,#e5e7eb)">
+      <h3 style="margin:0 0 .75rem">Rejection alert threshold</h3>
+      <div class="form-grid">
+        <div class="field">
+          <label>Rejection alert threshold <span class="muted">(rejections in 14 days)</span></label>
+          <input type="number" name="rejection_alert_threshold" min="1" max="50"
+                 value="{{ ai_cfg.rejection_alert_threshold or 5 }}">
+          <span class="muted small">
+            When this many rejections/ghostings occur in 14 days, the rejection alert task fires.
+            Set to 50 to effectively disable. Default: 5.
+          </span>
+        </div>
+      </div>
+
+      <div class="actions" style="margin-top:1.25rem">
+        <button class="btn btn-primary" type="submit">Save task settings</button>
+      </div>
+    </form>
+
+    {# Hidden mini-forms for "Run now" buttons (follow-up and weekly review only).
+       Triage uses a plain <a> link to /tools/triage-batch instead. #}
+    {% if ai_cfg.api_enabled %}
+    {% for task_name in ('followup', 'weekly_review') %}
+    <form id="run-task-{{ task_name }}" method="post"
+          action="{{ url_for('main.ai_run_task', task=task_name) }}"
+          target="_blank"
+          style="display:none">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    </form>
+    {% endfor %}
+    {% endif %}
+
+  </section>
+
+  </div>{# end ai-sub-tasks #}
+
+  {# ── Sub-panel: Connectors ── #}
+  <div id="ai-sub-connectors" class="ai-sub-panel">
+
+  {# ── Card: MCP Connector ── #}
+  <section class="card" id="ai-mcp-card">
+    <h2>MCP Connector</h2>
+    <p class="muted small">
+      Exposes 22 read/write tools via the Model Context Protocol. Claude Pro, Hermes Agent,
+      OpenClaw, and any MCP-compatible tool can connect. No automatic features or AI providers
+      are required — the connector runs independently.
+    </p>
+
+    {# ── Enable toggle + connector name — one combined form ── #}
+    <form method="post" action="{{ url_for('main.settings_claude_pro') }}" class="form" id="connector-settings-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      {# carry claude_buttons_enabled through so toggling MCP doesn't uncheck it #}
+      {% if ai_cfg.claude_buttons_enabled %}<input type="hidden" name="claude_buttons_enabled" value="on">{% endif %}
+      <div class="form-grid">
+        <div class="field field-wide">
+          <label>
+            <input type="checkbox" name="mcp_enabled" id="mcp-enabled-toggle"
+                   {% if ai_cfg.mcp_enabled %}checked{% endif %}>
+            <strong>Enable MCP Connector</strong> — expose Job Squire to AI agents
+          </label>
+        </div>
+      </div>
+    </form>
+
+    {# ── Connector name (separate route — just saves the label) ── #}
+    <form method="post" action="{{ url_for('main.settings_ai') }}" class="form" style="margin-top:.75rem">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-grid">
+        <div class="field">
+          <label>Connector name</label>
+          <input type="text" name="connector_name" value="{{ ai_cfg.connector_name or 'job-squire' }}"
+                 placeholder="job-squire">
+          <span class="muted small">Used in Claude's Connectors panel and in the routine prompts below.</span>
+        </div>
+      </div>
+      <div class="actions" style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
+        <button class="btn btn-primary" type="submit">Save name</button>
+        <button class="btn btn-primary" type="submit" form="connector-settings-form">Save enable toggle</button>
+      </div>
+    </form>
+
+    {% if not mcp_configured %}
+    <div class="mode-info-box" style="margin-top:.75rem">
+      The MCP service container is not running or <code>PUBLIC_MCP_URL</code> is not set.
+      Both are required. See the deployment docs or ask your admin.
+    </div>
+    {% else %}
+    <div style="margin-top:.75rem">
+      <p class="muted small">Connector URL (use this in any client below):</p>
+      <div class="copy-block">
+        <code id="settings-connector-url">{{ public_mcp_url ~ '/mcp' }}</code>
+        <button class="btn btn-sm copy-btn" data-target="settings-connector-url">Copy</button>
+      </div>
+    </div>
+    {% endif %}
+  </section>
+
+  {# ── Card: Connected Clients ── #}
+  <section class="card">
+    <div class="card-head">
+      <h2>Connected clients</h2>
+      {% if oauth_tokens %}
+      <form method="post" action="{{ url_for('main.settings_mcp_revoke_all') }}" style="display:inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button class="btn btn-sm btn-danger revoke-all-btn" type="submit"
+                data-confirm="Revoke all {{ oauth_tokens|length }} token{{ 's' if oauth_tokens|length != 1 else '' }}? Every connected client will need to re-authorize.">
+          Revoke all
+        </button>
+      </form>
+      {% endif %}
+    </div>
+    <p class="muted small">
+      Each row is a live OAuth session. Revoke a client to force it to re-authorize — useful
+      if a device is lost or you want to cycle credentials.
+      Tokens expire automatically after 30 days.
+    </p>
+
+    {% if oauth_tokens %}
+    <table class="table" style="margin-top:.75rem">
+      <thead>
+        <tr>
+          <th>Client</th>
+          <th style="width:10rem">Issued</th>
+          <th style="width:10rem">Expires</th>
+          <th style="width:6rem"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for tok in oauth_tokens %}
+        <tr>
+          <td><strong>{{ tok.client_name }}</strong></td>
+          <td class="muted small">
+            {% if tok.issued_at %}
+              {{ (tok.issued_at | int) | local_date }}
+            {% else %}
+              <span class="muted">—</span>
+            {% endif %}
+          </td>
+          <td class="muted small">{{ (tok.exp | int) | local_date }}</td>
+          <td>
+            <form method="post" action="{{ url_for('main.settings_mcp_revoke_token') }}" style="display:inline">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="token_id" value="{{ tok.token_id }}">
+              <button class="btn btn-xs btn-danger" type="submit">Revoke</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="muted small" style="margin-top:.75rem">
+      No active OAuth sessions.
+      {% if not mcp_configured %}
+      Configure <code>PUBLIC_MCP_URL</code> and connect a client to see sessions here.
+      {% else %}
+      Connect Claude Pro, Hermes Agent, or OpenClaw using the instructions below.
+      {% endif %}
+    </p>
+    {% endif %}
+  </section>
+
+  {# ── Card: Claude Pro ── #}
+  <section class="card">
+    <div class="card-head">
+      <h2>Claude Pro</h2>
+      <span class="chip" style="background:var(--accent-light,#ede9fe);color:var(--accent,#6c4beb);font-weight:600">No API key needed</span>
+    </div>
+    <p class="muted small">
+      Claude Pro subscribers connect via OAuth — no API key, no provider configuration.
+      The app handles authentication automatically using OAuth 2.0/PKCE.
+    </p>
+
+    {# ── Claude buttons toggle ── #}
+    <form method="post" action="{{ url_for('main.settings_claude_pro') }}" class="form" style="margin-bottom:1rem">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      {# carry mcp_enabled through so the route doesn't accidentally clear it #}
+      {% if ai_cfg.mcp_enabled %}<input type="hidden" name="mcp_enabled" value="on">{% endif %}
+      <div class="form-grid">
+        <div class="field field-wide">
+          <label>
+            <input type="checkbox" name="claude_buttons_enabled" id="claude-buttons-toggle"
+                   {% if ai_cfg.claude_buttons_enabled %}checked{% endif %}>
+            <strong>Show "Open in Claude" buttons</strong> throughout the app
+          </label>
+          <span class="muted small">
+            Adds buttons that open Claude.ai with pre-filled prompts for Job Triage, Application Kits,
+            Morning Briefing, and more. Requires a Claude Pro subscription and the MCP Connector connected.
+          </span>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="btn btn-primary" type="submit">Save</button>
+      </div>
+    </form>
+
+    {% if mcp_configured %}
+    <div class="setup-status ok" style="margin-bottom:.75rem">
+      <strong>Connector URL configured.</strong>
+      Accessible at <code>{{ public_mcp_url }}/mcp</code>.
+    </div>
+    {% endif %}
+
+    <h3 style="margin:.75rem 0 .4rem">Connect Claude Pro</h3>
+    <ol class="setup-list">
+      <li>Open <a href="https://claude.ai" target="_blank" rel="noopener noreferrer">claude.ai</a> → profile → <strong>Settings</strong> → <strong>Connectors</strong>.</li>
+      <li>Click <strong>Add custom connector</strong>.</li>
+      <li>Paste the connector URL above and name it <strong>{{ connector }}</strong>.</li>
+      <li>Click <strong>Connect</strong>, sign in, then <strong>Authorize</strong>.</li>
+    </ol>
+    {% if mcp_configured %}
+    <div style="margin-top:.75rem">
+      {% set test_prompt = 'Test my "' ~ connector ~ '" connector by calling list_jobs() and telling me how many jobs are in my Job Squire instance and what statuses they are in.' %}
+      <button class="btn btn-outline open-in-claude-btn" data-prompt="{{ test_prompt | e }}">Test the connection in Claude ↗</button>
+      <span class="muted small" style="margin-left:.5rem">Opens Claude. If it returns your job counts, the connector is working.</span>
+    </div>
+    {% endif %}
+  </section>
+
+  {# ── Card: Hermes Agent ── #}
+  <section class="card">
+    <h2>Hermes Agent</h2>
+    <p class="muted small">
+      <a href="https://hermes-agent.nousresearch.com" target="_blank" rel="noopener noreferrer">Hermes Agent</a>
+      (NousResearch) is a multi-provider autonomous agent with native MCP support. Add Job Squire
+      as an HTTP MCP server in <code>~/.hermes/config.yaml</code>. It supports both OAuth and a
+      static bearer token.
+    </p>
+
+    {% if mcp_configured %}
+
+    <h3 style="margin:.75rem 0 .4rem">Option A — OAuth (recommended)</h3>
+    <p class="muted small">Hermes opens a browser on first connect and caches the token automatically.</p>
+    {% set hermes_oauth_cfg %}mcp_servers:
+  {{ connector }}:
+    url: "{{ public_mcp_url }}/mcp"
+    auth: oauth{% endset %}
+    <div class="copy-block" style="margin-bottom:.75rem">
+      <code id="hermes-oauth-cfg" style="white-space:pre;font-size:.8rem">{{ hermes_oauth_cfg }}</code>
+      <button class="btn btn-sm copy-btn" data-target="hermes-oauth-cfg">Copy</button>
+    </div>
+
+    <h3 style="margin:.75rem 0 .4rem">Option B — Static API key</h3>
+    <p class="muted small">Generate a key in the Scripts section below, then paste it here.</p>
+    {% set hermes_key_cfg %}mcp_servers:
+  {{ connector }}:
+    url: "{{ public_mcp_url }}/mcp"
+    headers:
+      Authorization: "Bearer YOUR_API_KEY"{% endset %}
+    <div class="copy-block">
+      <code id="hermes-key-cfg" style="white-space:pre;font-size:.8rem">{{ hermes_key_cfg }}</code>
+      <button class="btn btn-sm copy-btn" data-target="hermes-key-cfg">Copy</button>
+    </div>
+
+    <p class="muted small" style="margin-top:.6rem">
+      After editing your config, run <code>hermes mcp doctor {{ connector }} --probe</code> to
+      verify the connection.
+    </p>
+
+    {% else %}
+    <div class="mode-info-box" style="margin-top:.5rem">
+      Set <code>PUBLIC_MCP_URL</code> first — the config snippets will appear here once it's configured.
+    </div>
+    {% endif %}
+  </section>
+
+  {# ── Card: OpenClaw ── #}
+  <section class="card">
+    <h2>OpenClaw</h2>
+    <p class="muted small">
+      <a href="https://openclaw.ai" target="_blank" rel="noopener noreferrer">OpenClaw</a>
+      is an open-source multi-platform AI agent framework with a built-in MCP client registry.
+      Add Job Squire with one CLI command.
+    </p>
+
+    {% if mcp_configured %}
+
+    <h3 style="margin:.75rem 0 .4rem">Option A — OAuth (recommended)</h3>
+    {% set oc_oauth_cmd %}openclaw mcp add {{ connector }} \
+  --url {{ public_mcp_url }}/mcp \
+  --transport streamable-http \
+  --auth oauth
+
+# Authorize (opens browser):
+openclaw mcp login {{ connector }}
+
+# Verify:
+openclaw mcp doctor {{ connector }} --probe{% endset %}
+    <div class="copy-block" style="margin-bottom:.75rem">
+      <code id="oc-oauth-cmd" style="white-space:pre;font-size:.8rem">{{ oc_oauth_cmd }}</code>
+      <button class="btn btn-sm copy-btn" data-target="oc-oauth-cmd">Copy</button>
+    </div>
+
+    <h3 style="margin:.75rem 0 .4rem">Option B — Static API key</h3>
+    {% set oc_key_cmd %}openclaw mcp add {{ connector }} \
+  --url {{ public_mcp_url }}/mcp \
+  --transport streamable-http \
+  --header "Authorization: Bearer YOUR_API_KEY"
+
+openclaw mcp doctor {{ connector }} --probe{% endset %}
+    <div class="copy-block">
+      <code id="oc-key-cmd" style="white-space:pre;font-size:.8rem">{{ oc_key_cmd }}</code>
+      <button class="btn btn-sm copy-btn" data-target="oc-key-cmd">Copy</button>
+    </div>
+
+    {% else %}
+    <div class="mode-info-box" style="margin-top:.5rem">
+      Set <code>PUBLIC_MCP_URL</code> first — the CLI commands will appear here once it's configured.
+    </div>
+    {% endif %}
+  </section>
+
+  {# ── Card: Scripts / other tools ── #}
+  <section class="card">
+    <h2>Scripts and other tools</h2>
+    <p class="muted small">
+      Any tool that sends <code>Authorization: Bearer &lt;key&gt;</code> can call the MCP endpoint
+      without OAuth. This includes <code>jt-cli</code>, curl, custom scripts, or any agent harness
+      that supports HTTP MCP transport.
+    </p>
+    {% if mcp_api_key_set %}
+    <div class="mode-info-box" style="margin-bottom:.75rem">
+      A static API key is active. Generate a new one to rotate it, or revoke to disable bearer-token access.
+    </div>
+    {% else %}
+    <div class="mode-info-box" style="margin-bottom:.75rem">
+      No static API key is set. Generate one to enable bearer-token access for scripts and non-OAuth tools.
+    </div>
+    {% endif %}
+    <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+      <button class="btn btn-sm btn-primary" type="submit" form="mcp-api-key-generate-form">
+        {{ 'Rotate key' if mcp_api_key_set else 'Generate key' }}
+      </button>
+      {% if mcp_api_key_set %}
+      <button class="btn btn-sm btn-danger" type="submit" form="mcp-api-key-revoke-form">Revoke key</button>
+      {% endif %}
+    </div>
+    <p class="muted small" style="margin-top:.5rem">
+      The key is shown once in the flash message when generated. Copy it immediately.
+    </p>
+
+    <div class="mode-info-box" style="margin-top:1rem">
+      <strong>Machine ingest (optional):</strong> A separate token-protected endpoint at
+      <code>POST /api/ingest</code> lets scripts push job postings directly.
+      {% if ingest_enabled %}It is <strong>enabled</strong> (INGEST_API_KEY is set).
+      {% else %}Set <code>INGEST_API_KEY</code> in the environment to enable it.{% endif %}
+      Send <code>{"jobs":[...]}</code> with header <code>X-API-Key: &lt;key&gt;</code>.
+    </div>
+  </section>
+
+  {# Hidden forms for MCP key management #}
+  <form id="mcp-api-key-generate-form" method="post"
+        action="{{ url_for('main.settings_mcp_api_key') }}" style="display:none">
+    {{ confirm_form.hidden_tag() }}
+    <input type="hidden" name="action" value="generate">
+  </form>
+  <form id="mcp-api-key-revoke-form" method="post"
+        action="{{ url_for('main.settings_mcp_api_key') }}" style="display:none">
+    {{ confirm_form.hidden_tag() }}
+    <input type="hidden" name="action" value="revoke">
+  </form>
+
+  {# ── Card: Daily Routines ── #}
+  <section class="card">
+    <div class="card-head">
+      <h2>Daily routines</h2>
+      <span class="muted small">Works with Claude Pro, Hermes Agent, OpenClaw, or any MCP agent</span>
+    </div>
+    <p class="muted small">
+      Each prompt below works with any MCP-capable tool connected to your Job Squire instance.
+      Claude Pro users can click <strong>Open in Claude</strong> to run it now or schedule it.
+      Hermes and OpenClaw users can paste the same prompts into their agent config.
+    </p>
+    <details class="setup-how-to" style="margin-bottom:1rem">
+      <summary style="cursor:pointer;color:var(--accent,#6c4beb)"><strong>How to schedule a routine in Claude Pro</strong></summary>
+      <ol class="setup-list" style="margin-top:.6rem">
+        <li>Go to <a href="https://claude.ai/code/routines" target="_blank" rel="noopener noreferrer">claude.ai/code/routines</a> or open Routines in the Claude desktop app.</li>
+        <li>Click <strong>New routine</strong>.</li>
+        <li>Paste the prompt below into the Instructions box and give it a name.</li>
+        <li>Select a GitHub repository (required — a blank placeholder works).</li>
+        <li>Under <strong>Select a trigger</strong>, choose <strong>Schedule</strong>.</li>
+        <li>Confirm your {{ connector }} connector is listed, then click <strong>Create</strong>.</li>
+      </ol>
+    </details>
+    <div class="routine-grid">
+      {% for r in routines %}
+      <div class="routine-card" id="routine-{{ r.slot }}">
+        <div class="routine-card-head">
+          <span class="routine-icon">{{ r.icon }}</span>
+          <div>
+            <strong>Slot {{ r.slot }} — {{ r.title }}</strong>
+            <span class="muted small routine-time">Suggested: {{ r.suggested_time }}</span>
+          </div>
+        </div>
+        <p class="routine-desc">{{ r.description }}</p>
+        <div class="routine-prompt-section">
+          <div class="routine-prompt-label">
+            <span class="lbl-inline">Prompt</span>
+            <button class="btn btn-sm copy-btn" data-target="routine-prompt-{{ r.slot }}">Copy</button>
+          </div>
+          <textarea id="routine-prompt-{{ r.slot }}" class="routine-prompt-text select-on-click"
+                    rows="5" readonly>{{ r.prompt }}</textarea>
+        </div>
+        <div class="routine-actions">
+          {% if claude_buttons_enabled %}
+          <button class="btn btn-outline open-in-claude-btn"
+                  data-prompt-id="routine-prompt-{{ r.slot }}"
+                  data-prompt="{{ r.prompt | e }}">Open in Claude ↗</button>
+          <span class="routine-open-status muted small"></span>
+          {% else %}
+          <span class="muted small">Enable <strong>Claude.ai buttons</strong> in the Claude Pro section to run routines directly from here.</span>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+
+  </div>{# end ai-sub-connectors #}
+
+  {# ── Sub-panel: Tools ── #}
+  <div id="ai-sub-tools" class="ai-sub-panel">
+
+  {# ── Quick-apply bookmarklet ────────────────────────────── #}
+  <section class="card">
+    <h2>Quick-apply bookmarklet</h2>
+    <p class="muted small">
+      When you find a job posting on Indeed, LinkedIn, ZipRecruiter, or anywhere else,
+      click this bookmark to open your Job Squire instance with the title, company, and URL already filled in.
+      Set it up once below — takes about 30 seconds.
+    </p>
+
+    <h3>Step 1: Copy the bookmarklet code</h3>
+    <div class="bm-code-block">
+      <textarea id="bm-code" class="bm-code-area select-on-click" rows="3"
+                readonly>{{ bookmarklet_js }}</textarea>
+      <button class="btn btn-primary copy-btn" data-target="bm-code">Copy code</button>
+    </div>
+
+    <h3 style="margin-top:1rem">Step 2: Create the bookmark</h3>
+    <div class="bm-instructions">
+      <details open>
+        <summary><strong>Chrome / Edge</strong></summary>
+        <ol class="setup-list" style="margin-top:.5rem">
+          <li>Right-click an empty spot on your bookmarks bar and choose <strong>Add page…</strong> (or <strong>Add bookmark</strong>).</li>
+          <li>Set the <strong>Name</strong> to something short like <em>Add to JobSquire</em>.</li>
+          <li>Clear the <strong>URL</strong> field and paste the code you copied.</li>
+          <li>Click <strong>Save</strong>.</li>
+        </ol>
+      </details>
+      <details style="margin-top:.5rem">
+        <summary><strong>Firefox</strong></summary>
+        <ol class="setup-list" style="margin-top:.5rem">
+          <li>Open <strong>Bookmarks → Manage Bookmarks</strong> (Ctrl+Shift+O).</li>
+          <li>Right-click <strong>Bookmarks Toolbar</strong> → <strong>New Bookmark…</strong></li>
+          <li>Set the <strong>Name</strong> and paste the code into the <strong>URL</strong> field.</li>
+          <li>Click <strong>Add</strong>.</li>
+        </ol>
+      </details>
+      <details style="margin-top:.5rem">
+        <summary><strong>Safari</strong></summary>
+        <ol class="setup-list" style="margin-top:.5rem">
+          <li>Add any page as a bookmark to the Favorites bar first.</li>
+          <li>Open <strong>Bookmarks → Edit Bookmarks</strong>.</li>
+          <li>Find the placeholder bookmark, right-click its URL and paste the code.</li>
+        </ol>
+      </details>
+    </div>
+
+    <h3 style="margin-top:1rem">How it works</h3>
+    <p class="muted small">
+      Click the bookmark while on any job posting. It tries to extract the title and company
+      from Indeed, LinkedIn, and ZipRecruiter automatically, and falls back to the page title
+      for any other site. Your Job Squire instance opens in a new tab — review the pre-filled fields and
+      click Save.
+    </p>
+  </section>
+
+  {# ── Per-job Claude actions ─────────────────────────────── #}
+  <section class="card">
+    <h2>Per-job actions</h2>
+    <p class="muted small">
+      Each job's detail page has <strong>Open in Claude</strong> buttons for one-off tasks.
+      These only appear when the MCP Connector is enabled and Claude.ai buttons are on (see the Connectors tab).
+    </p>
+    <div class="setup-perjob-list">
+      <div class="perjob-item">
+        <strong>Build Application Kit</strong>
+        <span class="muted small">Tailored resume bullets, cover letter, application email, and follow-up emails.</span>
+      </div>
+      <div class="perjob-item">
+        <strong>Prep for Interview</strong>
+        <span class="muted small">Likely questions, STAR story mappings, and things to research about the company.</span>
+      </div>
+      <div class="perjob-item">
+        <strong>Draft Follow-Up Email</strong>
+        <span class="muted small">A ready-to-send follow-up appropriate to the current stage.</span>
+      </div>
+      <div class="perjob-item">
+        <strong>Score This Job</strong>
+        <span class="muted small">An immediate 1-10 fit score with reasoning, saved back to the job record.</span>
+      </div>
+    </div>
+  </section>
+
+  </div>{# end ai-sub-tools #}
+
+</div>
+
+{# ── Candidate Profile ───────────────────────────────────── #}
+<div id="tab-documents" class="tab-panel">
+
+  {# ── Editable profile ── #}
+  <section class="card">
+    <h2>Candidate profile</h2>
+    <p class="muted small">This profile is returned by <code>get_candidate_profile()</code>
+      via the MCP connector and is the base for all application kits. Edit it directly below
+      and save, or use the button to ask Claude to rebuild it from the uploaded documents.</p>
+    <form method="post" action="{{ url_for('main.settings_profile') }}" class="form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <textarea name="candidate_profile" rows="22" class="mono" style="font-size:.8rem">{{ candidate_profile }}</textarea>
+      <div class="actions" style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-top:.6rem">
+        <button class="btn btn-primary" type="submit">Save profile</button>
+        {% if mcp_configured and ai_cfg.connector_name %}
+        <a class="btn btn-outline" target="_blank" rel="noopener noreferrer"
+           href="https://claude.ai/new?q={{ regen_profile_prompt | urlencode }}">Regenerate from documents in Claude ↗</a>
+        <span class="muted small">Claude reads all uploaded documents, writes an updated profile, and saves it back automatically via MCP.</span>
+        {% endif %}
+      </div>
+    </form>
+    <div style="margin-top:1rem;padding-top:1rem;border-top:1px solid var(--border)">
+      <p class="muted small" style="margin:0 0 .4rem">Or upload a <code>.md</code> file to replace the profile directly:</p>
+      <form method="post" action="{{ url_for('main.settings_profile_upload') }}"
+            enctype="multipart/form-data"
+            style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="file" name="profile_file" accept=".md,text/markdown">
+        <button class="btn" type="submit">Upload .md</button>
+      </form>
+    </div>
+  </section>
+
+  {# ── Profile generation prompt ── #}
+  <section class="card">
+    <h2>Profile generation prompt</h2>
+    <p class="muted small">These are the instructions Claude follows when regenerating the
+      candidate profile from uploaded documents. Edit them to tune what Claude looks for or
+      how it structures the output. The connector name and current profile are appended
+      automatically when the "Regenerate" button is used.</p>
+    <form method="post" action="{{ url_for('main.settings_profile_prompt') }}" class="form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <textarea name="profile_prompt" rows="9">{{ profile_prompt }}</textarea>
+      <div class="actions" style="margin-top:.6rem">
+        <button class="btn btn-primary" type="submit">Save prompt</button>
+      </div>
+    </form>
+  </section>
+
+  {# ── Upload form ── #}
+  <section class="card">
+    <h2>Candidate documents</h2>
+    <p class="muted small">Upload User's master resume, recommendation letters, certifications, and
+      other reference files here. These are stored once and available to Claude when building
+      application kits, and via the MCP connector's <code>get_candidate_assets</code> tool.</p>
+
+    <form method="post" action="{{ url_for('main.settings_asset_upload') }}"
+          enctype="multipart/form-data" class="form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-grid">
+        <div class="field">
+          <label>Document type</label>
+          {{ asset_form.kind(class="form-control") }}
+        </div>
+        <div class="field">
+          <label>Label <span class="muted">(optional)</span></label>
+          {{ asset_form.label(class="form-control", placeholder='e.g. "ATS Resume v3" or "Amy Draper — Letter of Rec"') }}
+        </div>
+        <div class="field field-wide">
+          <label>Notes for Claude <span class="muted">(optional)</span></label>
+          {{ asset_form.notes(class="form-control", rows=2, placeholder="Context Claude should know when using this file — e.g. which roles or tailored version.") }}
+        </div>
+        <div class="field">
+          <label>File <span class="muted">(PDF, DOCX, TXT, MD, image)</span></label>
+          {{ asset_form.file(class="form-control") }}
+        </div>
+      </div>
+      <div class="actions">
+        <button class="btn btn-primary" type="submit">Upload document</button>
+      </div>
+    </form>
+
+    {% if mcp_configured and ai_cfg.connector_name %}
+    <div class="mcp-info" style="margin-top:1.25rem">
+      <a class="btn btn-outline" target="_blank" rel="noopener noreferrer"
+         href="https://claude.ai/new?q={{ evaluate_docs_prompt | urlencode }}">Evaluate documents in Claude ↗</a>
+      <span class="muted small">Opens Claude, which reads all uploaded documents via the
+        <strong>{{ ai_cfg.connector_name }}</strong> connector and provides a quality
+        assessment with improvement recommendations.</span>
+    </div>
+    {% endif %}
+  </section>
+
+  {# ── Document table ── #}
+  {% if assets %}
+  <section class="card">
+    <h2>Uploaded documents</h2>
+    <div class="table-wrap">
+    <table class="list">
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Name / Label</th>
+          <th class="mob-hide">File</th>
+          <th class="mob-hide">Size</th>
+          <th class="mob-hide">Uploaded</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for asset in assets %}
+        <tr>
+          <td><span class="chip">{{ asset.kind }}</span></td>
+          <td>
+            <strong>{{ asset.display_name }}</strong>
+            {% if asset.notes %}
+            <br><span class="muted small">{{ asset.notes[:120] }}{% if asset.notes|length > 120 %}…{% endif %}</span>
+            {% endif %}
+          </td>
+          <td class="muted small mob-hide">{{ asset.original_name }}</td>
+          <td class="muted small mob-hide">{{ asset.size_kb }} KB</td>
+          <td class="muted small mob-hide">{{ asset.uploaded_at | local_date }}</td>
+          <td>
+            <div class="row-actions">
+              <a class="btn btn-sm btn-outline" href="{{ url_for('main.asset_download', asset_id=asset.id) }}">Download</a>
+
+              {# Inline edit form #}
+              <details class="inline-edit">
+                <summary class="btn btn-sm btn-outline">Edit</summary>
+                <form method="post" action="{{ url_for('main.asset_edit', asset_id=asset.id) }}"
+                      class="form inline-edit-form">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <div class="form-grid">
+                    <div class="field">
+                      <label>Type</label>
+                      <select name="kind">
+                        {% for k in asset_kinds %}
+                        <option value="{{ k }}" {% if k == asset.kind %}selected{% endif %}>{{ k }}</option>
+                        {% endfor %}
+                      </select>
+                    </div>
+                    <div class="field">
+                      <label>Label</label>
+                      <input type="text" name="label" value="{{ asset.label }}">
+                    </div>
+                    <div class="field field-wide">
+                      <label>Notes for Claude</label>
+                      <textarea name="notes" rows="2">{{ asset.notes }}</textarea>
+                    </div>
+                  </div>
+                  <div class="actions">
+                    <button class="btn btn-primary" type="submit">Save</button>
+                  </div>
+                </form>
+              </details>
+
+              <form method="post" action="{{ url_for('main.asset_delete', asset_id=asset.id) }}"
+                    style="display:inline"
+                    onsubmit="return confirm('Remove this document? This cannot be undone.')">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button class="btn btn-sm btn-danger" type="submit">Delete</button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </section>
+  {% else %}
+  <section class="card">
+    <p class="muted">No documents uploaded yet. Add User's base resume and any recommendation letters above.</p>
+  </section>
+  {% endif %}
+</div>
+
+{# ── Application Kit ─────────────────────────────────────── #}
+<div id="tab-kit" class="tab-panel">
+  <section class="card">
+    <h2>Fit assessment</h2>
+    <form method="post" action="{{ url_for('main.settings_kit') }}" class="form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-grid">
+        <div class="field">
+          <label>Salary floor ($/year)</label>
+          <input type="number" name="fit_salary_floor" min="0" step="1000"
+                 value="{{ kit_cfg.fit_salary_floor or 60000 }}">
+          <span class="muted small">If a posting's stated salary range tops out below
+            this amount, the fit assessment will flag it as a concern.</span>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="btn btn-primary" type="submit">Save kit settings</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="card">
+    <h2>The <code>get_kit_instructions</code> workflow</h2>
+    <p class="muted small">When Claude calls <code>get_kit_instructions</code> via the MCP connector,
+      it receives a complete six-step playbook that drives every application kit build. Here is what
+      each step does:</p>
+
+    <div class="kit-workflow">
+
+      <div class="kit-step">
+        <div class="kit-step-head">
+          <span class="chip">Step 0</span>
+          <strong>Fit Assessment</strong>
+        </div>
+        <p class="muted small">Before any documents are written, Claude compares the live posting
+          against the candidate profile and outputs a one-line verdict (<em>Strong Fit</em>,
+          <em>Partial Fit</em>, or <em>Stretch</em>). It flags concerns — salary below the floor
+          set above, hard requirements not met, overqualification, or location conflicts — and
+          closes with a recommendation to Proceed, Proceed with caveats, or Consider skipping.
+          If the recommendation is "Consider skipping," Claude stops and asks before continuing.</p>
+      </div>
+
+      <div class="kit-step">
+        <div class="kit-step-head">
+          <span class="chip">Step 1</span>
+          <strong>Gather Reference Documents</strong>
+        </div>
+        <p class="muted small">Claude pulls the candidate's source documents. When the MCP
+          connector is active it calls <code>get_candidate_assets()</code> to retrieve uploaded
+          resumes and templates. In Cowork mode it reads the .docx files directly from the
+          Resumes folder. If neither is available it falls back to the embedded candidate
+          profile.</p>
+      </div>
+
+      <div class="kit-step">
+        <div class="kit-step-head">
+          <span class="chip">Step 2</span>
+          <strong>Fetch the Live Posting &amp; Research the Company</strong>
+        </div>
+        <p class="muted small">Claude fetches the current posting URL to get the full, up-to-date
+          job description (not just the captured snapshot). It also runs a web search for recent
+          company news, market position, and team context. Findings are summarized in a
+          <em>Research Notes</em> block that appears at the top of every kit output.</p>
+      </div>
+
+      <div class="kit-step">
+        <div class="kit-step-head">
+          <span class="chip">Step 3</span>
+          <strong>Build the Application Package</strong>
+        </div>
+        <p class="muted small">Claude extracts the 10-15 most important ATS keywords from the
+          posting, marks each as Present, Partial, Absent, or a Gap against the profile, and
+          notes how each will be incorporated. It then produces five deliverables using the live
+          posting and research findings: a tailored ATS resume, a cover letter (under 300 words
+          referencing a specific company detail), an application email, three follow-up and
+          thank-you emails, and three role-specific interview questions. All writing follows a
+          strict style guide: no em-dashes, no AI clichés, no fabricated facts.</p>
+      </div>
+
+      <div class="kit-step">
+        <div class="kit-step-head">
+          <span class="chip">Step 4</span>
+          <strong>Save Artifacts</strong>
+        </div>
+        <p class="muted small">The completed kit is saved in two formats to
+          <code>Application Kits/</code> under the project folder: a Markdown file
+          (<code>kit-output-{slug}.md</code>) for easy reference, and a formatted Word document
+          (<code>kit-output-{slug}.docx</code>) with proper headings. Both are presented to
+          the user as downloadable files.</p>
+      </div>
+
+      <div class="kit-step">
+        <div class="kit-step-head">
+          <span class="chip">Step 5</span>
+          <strong>Push to Job Squire</strong>
+        </div>
+        <p class="muted small">If the MCP connector is active and the kit header contains a
+          Job ID, Claude calls <code>save_kit()</code> to attach the full kit markdown (including
+          the fit assessment) back to the job record in Job Squire. The kit then appears on the
+          job detail page. If no Job ID is present, this step is skipped and noted.</p>
+      </div>
+
+    </div>
+
+    <p class="muted small" style="margin-top:1rem">
+      To trigger the workflow from Claude, open a chat with the Job Squire connector active
+      and say: <em>"Build an application kit for job ID [number]."</em> Claude will call
+      <code>get_kit_instructions</code> automatically and follow the steps above.
+      You can also build a kit from the
+      <a href="{{ url_for('main.kit_hub') }}">Application Kits</a> tab by clicking
+      <strong>Build Kit</strong> on any saved job.
+    </p>
+  </section>
+</div>
+
+{# ── History ─────────────────────────────────────────────── #}
+<div id="tab-history" class="tab-panel">
+  <section class="card">
+    <h2>Recent search runs</h2>
+    {% if runs %}
+    <div class="table-wrap">
+    <table class="list">
+      <thead><tr><th>When</th><th class="mob-hide">Trigger</th><th>New</th><th class="mob-hide">Skipped</th><th class="mob-hide">Seen</th><th class="mob-hide">Email</th><th>Status</th></tr></thead>
+      <tbody>
+        {% for r in runs %}
+        <tr>
+          <td>{{ r.started_at | local_dt }}</td>
+          <td class="mob-hide">{{ r.trigger }}</td>
+          <td>{{ r.created }}</td>
+          <td class="mob-hide">{{ r.skipped }}</td>
+          <td class="mob-hide">{{ r.found }}</td>
+          <td class="mob-hide">{{ 'sent' if r.emailed else '—' }}</td>
+          <td><span class="status {{ 's-Offer' if r.status=='ok' else 's-Rejected' }}">{{ r.status }}</span>
+              {% if r.detail %}<br><span class="muted small">{{ r.detail }}</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% else %}
+    <p class="muted">No runs yet. Add a source, then "Run search now".</p>
+    {% endif %}
+  </section>
+</div>
+
+<style>
+/* Connector setup */
+.setup-status { padding:.6rem .9rem; border-radius:6px; margin:.6rem 0; font-size:.9rem; }
+.setup-status.ok   { background:#1a3a1a; border-left:3px solid #4caf50; }
+.setup-status.warn { background:#3a2a10; border-left:3px solid #ff9800; }
+.copy-block { display:flex; align-items:center; gap:.5rem; background:var(--bg-subtle,#1e2530); padding:.5rem .75rem; border-radius:6px; margin:.4rem 0; font-family:monospace; font-size:.9rem; }
+.copy-block code { flex:1; word-break:break-all; }
+.setup-list { padding-left:1.5rem; }
+.setup-list li { margin-bottom:.4rem; }
+/* Routine cards */
+.routine-grid { display:grid; gap:1.25rem; margin-top:.75rem; }
+.routine-card { border:1px solid var(--border,#2a3244); border-radius:8px; padding:1.25rem; background:var(--bg-subtle,#1e2530); }
+.routine-card-head { display:flex; align-items:flex-start; gap:.75rem; margin-bottom:.6rem; }
+.routine-icon { font-size:1.6rem; line-height:1; }
+.routine-time { display:block; }
+.routine-desc { font-size:.95rem; color:var(--text-muted,#8899aa); margin-bottom:.75rem; }
+.routine-prompt-section { margin-bottom:.75rem; }
+.routine-prompt-label { display:flex; align-items:center; justify-content:space-between; margin-bottom:.3rem; }
+.routine-prompt-text { width:100%; font-family:monospace; font-size:.82rem; background:var(--bg,#0f1419); border:1px solid var(--border,#2a3244); border-radius:6px; padding:.5rem .6rem; color:var(--text,#e0e0e0); resize:vertical; }
+.routine-actions { display:flex; gap:.5rem; flex-wrap:wrap; margin-top:.5rem; }
+/* Bookmarklet */
+.bm-code-block { display:flex; align-items:flex-start; gap:.75rem; margin:.75rem 0; }
+.bm-code-area { flex:1; font-family:monospace; font-size:.75rem; background:var(--bg-subtle,#1e2530); border:1px solid var(--border,#2a3244); border-radius:6px; color:var(--text-muted,#8899aa); padding:.5rem .75rem; resize:none; word-break:break-all; }
+.bm-instructions details { border:1px solid var(--border,#2a3244); border-radius:6px; padding:.5rem .75rem; }
+.bm-instructions summary { cursor:pointer; padding:.25rem 0; }
+.bm-instructions details[open] summary { margin-bottom:.25rem; }
+/* Per-job list */
+.setup-perjob-list { display:grid; gap:.75rem; margin-top:.5rem; }
+.perjob-item { display:flex; flex-direction:column; gap:.15rem; padding:.6rem .8rem; border:1px solid var(--border,#2a3244); border-radius:6px; }
+@media (min-width:800px) {
+  .routine-grid { grid-template-columns:1fr 1fr; }
+  .setup-perjob-list { grid-template-columns:1fr 1fr; }
+}
+/* AI mode panels */
+.ai-mode-panel { display:none; }
+.ai-mode-panel.active { display:block; }
+.mode-info-box {
+  background:var(--bg-subtle,#1e2530);
+  border:1px solid var(--border,#2a3244);
+  border-left:3px solid var(--accent,#6c4beb);
+  border-radius:6px;
+  padding:.85rem 1rem;
+  font-size:.9rem;
+  line-height:1.55;
+  color:var(--text,#e0e0e0);
+  margin-top:.75rem;
+}
+</style>
+{% endblock %}

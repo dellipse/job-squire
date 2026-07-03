@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Interview debrief · {{ job.company }}{% endblock %}
+{% block content %}
+<h1>{{ 'Edit' if mode=='edit' else 'Add' }} interview debrief</h1>
+<p class="sub">{{ job.title }} — {{ job.company }}</p>
+
+<form method="post" class="card form" novalidate
+      action="{{ url_for('main.interview_edit', iv_id=request.view_args.iv_id) if mode=='edit' else url_for('main.interview_new', job_id=job.id) }}">
+  {{ form.hidden_tag() }}
+  <div class="form-grid">
+    <div class="field">{{ form.interview_date.label }} {{ form.interview_date() }}</div>
+    <div class="field">{{ form.round_type.label }} {{ form.round_type() }}</div>
+    <div class="field">{{ form.interview_format.label }} {{ form.interview_format() }}</div>
+    <div class="field">{{ form.self_rating.label }} {{ form.self_rating() }}</div>
+    <div class="field field-wide">{{ form.interviewer.label }} {{ form.interviewer() }}</div>
+    <div class="field field-wide">{{ form.questions_asked.label }} {{ form.questions_asked(rows=4) }}</div>
+    <div class="field field-wide">{{ form.went_well.label }} {{ form.went_well(rows=3) }}</div>
+    <div class="field field-wide">{{ form.to_improve.label }} {{ form.to_improve(rows=3) }}</div>
+    <div class="field field-wide">{{ form.notes.label }} {{ form.notes(rows=3) }}</div>
+  </div>
+  <div class="actions">
+    {{ form.submit(class="btn btn-primary") }}
+    <a class="btn btn-outline" href="{{ url_for('main.job_detail', job_id=job.id) }}">Cancel</a>
+    {% if gcal_url %}
+    <a class="btn btn-outline" href="{{ gcal_url }}" target="_blank" rel="noopener noreferrer">
+      Add to Google Calendar ↗
+    </a>
+    {% endif %}
+  </div>
+</form>
+{% endblock %}

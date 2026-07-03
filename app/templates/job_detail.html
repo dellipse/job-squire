@@ -1,0 +1,274 @@
+{% extends "base.html" %}
+{% block title %}{{ job.title }} · {{ job.company }}{% endblock %}
+{% block content %}
+<div class="card-head">
+  <div>
+    <h1>{{ job.title }}</h1>
+    <p class="sub">{{ job.company }}{% if job.location %} · {{ job.location }}{% endif %} · <span class="status s-{{ job.status | replace(' ', '') }}">{{ job.status }}</span></p>
+  </div>
+  <div class="actions">
+    {% if ai_mode == 'api' %}
+    <form method="post" action="{{ url_for('main.job_score_fit', job_id=job.id) }}" target="_blank" style="display:inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="btn btn-primary" type="submit" data-loading-text="Opened in a new tab…">Score fit</button>
+    </form>
+    <form method="post" action="{{ url_for('main.job_draft_followup', job_id=job.id) }}" target="_blank" style="display:inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="btn" type="submit" data-loading-text="Opened in a new tab…">Draft follow-up</button>
+    </form>
+    <form method="post" action="{{ url_for('main.kit_run') }}" target="_blank" style="display:inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="job_id" value="{{ job.id }}">
+      <button class="btn" type="submit" data-loading-text="Opened in a new tab…">Build kit</button>
+    </form>
+    {% elif claude_buttons_enabled %}
+    {% set kit_prompt = 'Using my "' ~ connector_name ~ '" connector: call get_kit_instructions() to load the full workflow, then call get_job(' ~ job.id ~ ') and get_candidate_profile(), and follow those instructions exactly. Job: #' ~ job.id ~ ' (' ~ job.title ~ ' at ' ~ job.company ~ ').' %}
+    <button class="btn btn-outline open-in-claude-btn"
+            data-prompt="{{ kit_prompt | e }}">Build kit in Claude ↗</button>
+    {% set score_prompt = 'Use my "' ~ connector_name ~ '" connector to score job #' ~ job.id ~ ' for fit: call get_job(' ~ job.id ~ '), call get_candidate_profile(), score 1-10, then call set_job_fit(' ~ job.id ~ ', score, reason). Report the score and reasoning.' %}
+    <button class="btn btn-outline open-in-claude-btn"
+            data-prompt="{{ score_prompt | e }}">Score fit in Claude ↗</button>
+    {% set fu_prompt = 'Use my "' ~ connector_name ~ '" connector to draft a follow-up email for job #' ~ job.id ~ ' (' ~ job.title ~ ' at ' ~ job.company ~ ', status: ' ~ job.status ~ '). Call get_job(' ~ job.id ~ '), call get_candidate_profile(), write a brief professional follow-up (3-4 sentences max, no em-dashes, no cliches, include subject line), then call save_followup_draft(' ~ job.id ~ ', email_text). Show me the draft.' %}
+    <button class="btn btn-outline open-in-claude-btn"
+            data-prompt="{{ fu_prompt | e }}">Draft follow-up in Claude ↗</button>
+    {% endif %}
+    {% if ai_mode == 'api' %}
+    <form method="post" action="{{ url_for('main.job_ats_gap', job_id=job.id) }}"
+          target="_blank" style="display:inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="btn" type="submit" data-loading-text="Opened in a new tab…">ATS gap analysis</button>
+    </form>
+    {% endif %}
+    <a class="btn btn-outline" href="{{ url_for('main.job_kit', job_id=job.id) }}"
+       title="Downloads a prompt file to paste into any AI assistant yourself">Download kit prompt (.md)</a>
+    <a class="btn btn-outline" href="{{ url_for('main.job_edit', job_id=job.id) }}">Edit</a>
+    {% if current_user.is_admin %}
+    <form method="post" action="{{ url_for('main.job_delete', job_id=job.id) }}"
+          data-confirm="Delete this job and its debriefs/attachments?" style="display:inline">
+      {{ confirm_form.hidden_tag() }}
+      <button class="btn btn-danger" type="submit">Delete</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
+<div class="grid-2">
+  <section class="card">
+    <h2>Details</h2>
+    <dl class="kv">
+      <dt>Work mode</dt><dd>{{ job.work_mode }}</dd>
+      <dt>Source</dt><dd>{{ job.source or '—' }}</dd>
+      <dt>Salary</dt><dd>{{ job.salary or '—' }}</dd>
+      <dt>Date applied</dt><dd>{{ job.date_applied or '—' }}</dd>
+      <dt>Follow-up</dt><dd>{% if job.follow_up_date %}<span class="{% if job.follow_up_due %}due-now{% endif %}">{{ job.follow_up_date }}</span>{% else %}—{% endif %}</dd>
+      <dt>Contact</dt><dd>{{ job.contact_name or '—' }}{% if job.contact_email %} · {{ job.contact_email }}{% endif %}</dd>
+      <dt>Posting</dt><dd>{% if job.url %}<a href="{{ job.url }}" target="_blank" rel="noopener noreferrer">View posting ↗</a>{% else %}—{% endif %}</dd>
+    </dl>
+    {% if job.notes %}<h3>Notes</h3><p class="pre">{{ job.notes }}</p>{% endif %}
+  </section>
+
+  <section class="card">
+    <div class="card-head"><h2>Attachments</h2></div>
+    {% if job.attachments %}
+    <ul class="attachments">
+      {% for a in job.attachments %}
+      <li>
+        <span class="kind">{{ a.kind }}</span>
+        <a href="{{ url_for('main.attachment_download', att_id=a.id) }}">{{ a.original_name }}</a>
+        <span class="muted small">{{ (a.size / 1024) | round(0) }} KB</span>
+        <form method="post" action="{{ url_for('main.attachment_delete', att_id=a.id) }}"
+              data-confirm="Remove this file?" style="display:inline">
+          {{ confirm_form.hidden_tag() }}
+          <button class="link-btn" type="submit">remove</button>
+        </form>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="muted">No files yet. Attach the tailored resume / cover letter you used.</p>
+    {% endif %}
+    <form method="post" enctype="multipart/form-data" class="upload-form"
+          action="{{ url_for('main.attachment_upload', job_id=job.id) }}">
+      {{ confirm_form.csrf_token }}
+      <select name="kind">
+        <option>Resume</option><option>Cover Letter</option>
+        <option>Job Description</option><option>Other</option>
+      </select>
+      <input type="file" name="file" accept=".pdf,.doc,.docx,.txt,.rtf,.odt" required>
+      <button class="btn" type="submit">Upload</button>
+    </form>
+  </section>
+</div>
+
+<section class="card">
+  <div class="card-head">
+    <h2>Activity log</h2>
+    <form method="post" action="{{ url_for('main.job_set_followup', job_id=job.id) }}" class="inline-form">
+      {{ confirm_form.hidden_tag() }}
+      <input type="date" name="follow_up_date" id="followup-date-input" class="date-input">
+      <button class="btn" type="submit">Set follow-up</button>
+    </form>
+  </div>
+
+  <form method="post" action="{{ url_for('main.job_add_note', job_id=job.id) }}" class="note-add-form">
+    {{ confirm_form.hidden_tag() }}
+    <textarea name="content" placeholder="Add a note..." rows="2" class="note-textarea" required></textarea>
+    <button class="btn" type="submit">Add note</button>
+  </form>
+
+  {% if job.notes_log %}
+  <ul class="notes-log">
+    {% for n in job.notes_log %}
+    <li class="note-entry note-{{ n.note_type }}">
+      <span class="note-meta">{{ n.created_at | local_dt }}{% if n.created_by %} · {{ n.created_by }}{% endif %}</span>
+      <span class="note-content pre">{{ n.content }}</span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted">No activity yet.</p>
+  {% endif %}
+</section>
+
+{% if job.ai_fit_score %}
+<section class="card ai-card">
+  <div class="card-head">
+    <h2>Fit score</h2>
+    <span class="fit-score fit-score-{{ 'high' if job.ai_fit_score >= 7 else ('mid' if job.ai_fit_score >= 5 else 'low') }}">
+      {{ job.ai_fit_score }}/10
+    </span>
+  </div>
+  {% if job.ai_fit_reason %}<p class="pre">{{ job.ai_fit_reason }}</p>{% endif %}
+</section>
+{% endif %}
+
+{% if job.followup_draft %}
+<section class="card ai-card">
+  <div class="card-head">
+    <h2>Follow-up draft</h2>
+    <button class="btn btn-sm copy-btn" data-target="followup-draft-text">Copy</button>
+  </div>
+  <p class="muted small">Review this draft and personalize before sending.</p>
+  <textarea id="followup-draft-text" class="select-on-click" rows="8" readonly
+            style="width:100%;font-family:inherit;font-size:.9rem;padding:.5rem;border-radius:6px;background:var(--bg,#0f1419);border:1px solid var(--border,#2a3244);color:var(--text,#e0e0e0)">{{ job.followup_draft }}</textarea>
+</section>
+{% endif %}
+
+{% if job.kit_output %}
+<section class="card ai-card">
+  <div class="card-head">
+    <h2>Application kit</h2>
+    <button class="btn btn-sm copy-btn" data-target="kit-output-text">Copy</button>
+  </div>
+  <p class="muted small">Review all content carefully before use. Verify facts against your own background.</p>
+  <div id="kit-output-text" class="pre" style="font-size:.9rem;white-space:pre-wrap">{{ job.kit_output }}</div>
+</section>
+{% endif %}
+
+{% if job.kit_ats_gap %}
+<section class="card ai-card">
+  <div class="card-head">
+    <h2>ATS gap analysis</h2>
+    <button class="btn btn-sm copy-btn" data-target="ats-gap-text">Copy</button>
+  </div>
+  <p class="muted small">Keywords and phrases in the job description that are absent or weakly
+    represented in the candidate profile. Review before applying.</p>
+  <div id="ats-gap-text" class="pre" style="font-size:.9rem">{{ job.kit_ats_gap }}</div>
+</section>
+{% endif %}
+
+{% if job.ai_analysis %}
+<section class="card ai-card">
+  <h2>AI analysis {% if job.ai_analysis_at %}<span class="muted small">({{ job.ai_analysis_at | local_date }})</span>{% endif %}</h2>
+  <p class="pre">{{ job.ai_analysis }}</p>
+</section>
+{% endif %}
+
+<section class="card">
+  <div class="card-head">
+    <h2>Recruiter submissions</h2>
+    <a class="btn" href="{{ url_for('main.submission_new', job_id=job.id) }}">+ Log submission</a>
+  </div>
+  {% if job.submissions %}
+  <div class="table-wrap">
+  <table class="list">
+    <thead><tr><th>Recruiter</th><th>Status</th><th class="mob-hide">Submitted</th><th class="mob-hide">Follow-up</th></tr></thead>
+    <tbody>
+      {% for s in job.submissions %}
+      <tr>
+        <td>{% if s.contact %}<a href="{{ url_for('main.contact_detail', contact_id=s.contact_id) }}">{{ s.contact.name }}{% if s.contact.agency %} · {{ s.contact.agency }}{% endif %}</a>{% else %}—{% endif %}</td>
+        <td><span class="status s-{{ s.status | replace(' ', '') }}">{{ s.status }}</span></td>
+        <td class="mob-hide">{{ s.submitted_date or '—' }}</td>
+        <td class="mob-hide">{% if s.follow_up_date %}<span class="{% if s.follow_up_due %}due-now{% endif %}">{{ s.follow_up_date }}</span>{% else %}—{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="muted">No recruiter has been logged as submitting User for this role. If an agency put him forward here, <a href="{{ url_for('main.submission_new', job_id=job.id) }}">log it</a>.</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <div class="card-head">
+    <h2>Interview debriefs</h2>
+    <div class="actions">
+      {% if ai_mode == 'api' %}
+      <form method="post" action="{{ url_for('main.job_prep_interview', job_id=job.id) }}" style="display:inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button class="btn" type="submit" data-loading-text="Preparing…">Prep for interview</button>
+      </form>
+      {% elif claude_buttons_enabled %}
+      {% set iv_round = job.interviews[-1].round_type if job.interviews else '' %}
+      {% set prep_prompt = 'Use my "' ~ connector_name ~ '" connector to prepare me for my upcoming interview' ~ (' (' ~ iv_round ~ ')' if iv_round else '') ~ ' for the ' ~ job.title ~ ' role at ' ~ job.company ~ '. Call get_job(' ~ job.id ~ '), call get_candidate_profile(), then build a prep guide covering: 8-10 likely questions for this specific role, STAR story mappings from my profile, 5 questions to ask them, and any weaknesses to address. Call save_interview_prep(' ~ job.id ~ ', prep_guide) to save it. Show me the full guide.' %}
+      <button class="btn btn-outline open-in-claude-btn"
+              data-prompt="{{ prep_prompt | e }}">Prep for interview in Claude ↗</button>
+      {% endif %}
+      <a class="btn btn-primary" href="{{ url_for('main.interview_new', job_id=job.id) }}">+ Add debrief</a>
+    </div>
+  </div>
+  {% if job.interviews %}
+    {% for iv in job.interviews %}
+    <div class="debrief">
+      <div class="debrief-head">
+        <strong>{{ iv.round_type or 'Interview' }}</strong>
+        {% if iv.interview_format %}<span class="chip">{{ iv.interview_format }}</span>{% endif %}
+        {% if iv.self_rating %}<span class="chip">felt {{ iv.self_rating }}/5</span>{% endif %}
+        <span class="muted small">{{ iv.interview_date or '' }}{% if iv.interviewer %} · {{ iv.interviewer }}{% endif %}</span>
+        <span class="spacer"></span>
+        {% if gcal_urls.get(iv.id) %}
+        <a class="link-btn" href="{{ gcal_urls[iv.id] }}" target="_blank" rel="noopener noreferrer" title="Add to Google Calendar">📅</a>
+        {% endif %}
+        <a class="link-btn" href="{{ url_for('main.interview_edit', iv_id=iv.id) }}">edit</a>
+        <form method="post" action="{{ url_for('main.interview_delete', iv_id=iv.id) }}"
+              data-confirm="Remove this debrief?" style="display:inline">
+          {{ confirm_form.hidden_tag() }}
+          <button class="link-btn" type="submit">delete</button>
+        </form>
+      </div>
+      {% if iv.prep_notes %}
+      <details class="prep-notes-details">
+        <summary><span class="lbl-inline">Interview prep guide</span></summary>
+        <p class="pre" style="margin-top:.5rem">{{ iv.prep_notes }}</p>
+      </details>
+      {% endif %}
+      {% if iv.questions_asked %}<p><span class="lbl-inline">Questions asked</span><span class="pre">{{ iv.questions_asked }}</span></p>{% endif %}
+      {% if iv.went_well %}<p><span class="lbl-inline">Went well</span><span class="pre">{{ iv.went_well }}</span></p>{% endif %}
+      {% if iv.to_improve %}<p><span class="lbl-inline">To improve</span><span class="pre">{{ iv.to_improve }}</span></p>{% endif %}
+      {% if iv.notes %}<p><span class="lbl-inline">Notes</span><span class="pre">{{ iv.notes }}</span></p>{% endif %}
+    </div>
+    {% endfor %}
+  {% else %}
+    <p class="muted">No debriefs yet. After each interview, capture the questions asked while they are fresh.</p>
+  {% endif %}
+</section>
+
+<style>
+.fit-score { font-size: 1.4rem; font-weight: 700; padding: .2rem .6rem; border-radius: 6px; }
+.fit-score-high { color: #4caf50; background: #1a3a1a; }
+.fit-score-mid  { color: #ff9800; background: #3a2a10; }
+.fit-score-low  { color: #f44336; background: #3a1010; }
+.prep-notes-details summary { cursor: pointer; color: var(--accent, #6c4beb); font-size: .9rem; }
+</style>
+{% endblock %}

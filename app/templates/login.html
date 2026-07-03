@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Sign in · JobSquire{% endblock %}
+{% block content %}
+<div class="login-theme-toggle">
+  <button id="theme-toggle" class="theme-toggle" aria-label="Toggle theme">&#9681;</button>
+</div>
+<div class="login-wrap">
+  <div class="card login-card">
+    <img src="{{ url_for('static', filename='JobSquire-Logo-DarkTheme.png') }}" alt="JobSquire" class="login-logo theme-dark">
+    <img src="{{ url_for('static', filename='JobSquire-Logo-LightTheme.png') }}" alt="JobSquire" class="login-logo theme-light">
+    <p class="muted">Sign in to continue.</p>
+    <form method="post" action="{{ url_for('auth.login') }}" novalidate>
+      {{ form.hidden_tag() }}
+      <label>{{ form.username.label.text }}</label>
+      {{ form.username(autofocus=true, autocomplete="username") }}
+      <label>{{ form.password.label.text }}</label>
+      {{ form.password(autocomplete="current-password") }}
+      {{ form.submit(class="btn btn-primary full") }}
+    </form>
+  </div>
+</div>
+{% endblock %}

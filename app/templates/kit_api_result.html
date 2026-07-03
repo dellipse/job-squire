@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Application kit · JobSquire{% endblock %}
+{% block content %}
+<h1>Application kit — {{ title }} at {{ company }}</h1>
+<p class="muted">Generated via API. This posting was not saved to Job Squire, so nothing was
+  written to the database. Copy or download the kit below before you close this page.</p>
+
+<section class="card ai-card">
+  <div class="card-head">
+    <h2>Application kit</h2>
+    <button class="btn btn-sm copy-btn" data-target="kit-api-output-text">Copy</button>
+  </div>
+  <p class="muted small">Review all content carefully before use. Verify facts against your own background.</p>
+  <div id="kit-api-output-text" class="pre" style="font-size:.9rem;white-space:pre-wrap">{{ kit_markdown }}</div>
+</section>
+
+<div class="actions">
+  <form method="post" action="{{ url_for('main.kit_download_docx') }}" style="display:inline">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <textarea name="kit_markdown" hidden>{{ kit_markdown }}</textarea>
+    <input type="hidden" name="company" value="{{ company }}">
+    <input type="hidden" name="title" value="{{ title }}">
+    <button class="btn btn-outline" type="submit">Download as .docx</button>
+  </form>
+  <a class="btn btn-outline" href="{{ url_for('main.kit_hub') }}">Back to kit generator</a>
+</div>
+{% endblock %}
