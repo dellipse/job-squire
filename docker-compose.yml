@@ -5,7 +5,7 @@ services:
       args:
         PUID: "${PUID:-1000}"
         PGID: "${PGID:-1000}"
-        BUILD_VERSION: ${BUILD_VERSION:-dev}
+        BUILD_VERSION: ${BUILD_VERSION:-0.1.0-dev}
     image: ghcr.io/dellipse/job-squire:latest
     container_name: ${INSTANCE_NAME:-job-squire}
     restart: unless-stopped
@@ -43,7 +43,7 @@ services:
       args:
         PUID: "${PUID:-1000}"
         PGID: "${PGID:-1000}"
-        BUILD_VERSION: ${BUILD_VERSION:-dev}
+        BUILD_VERSION: ${BUILD_VERSION:-0.1.0-dev}
     image: ghcr.io/dellipse/job-squire:latest
     container_name: ${INSTANCE_NAME:-job-squire}-worker
     restart: unless-stopped
@@ -68,7 +68,7 @@ services:
       args:
         PUID: "${PUID:-1000}"
         PGID: "${PGID:-1000}"
-        BUILD_VERSION: ${BUILD_VERSION:-dev}
+        BUILD_VERSION: ${BUILD_VERSION:-0.1.0-dev}
     image: ghcr.io/dellipse/job-squire:latest
     container_name: ${INSTANCE_NAME:-job-squire}-mcp
     restart: unless-stopped

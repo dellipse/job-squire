@@ -20,7 +20,10 @@ COPY docs/wiki ./docs/wiki
 
 # Non-root user. Override at build time with --build-arg PUID=… --build-arg PGID=…
 # or set PUID/PGID in data/.env so docker-compose picks them up automatically.
-ARG BUILD_VERSION=dev
+# BUILD_VERSION default below should track the semantic version in ./VERSION;
+# CI overrides it with "<VERSION>-<short sha>" on every publish (see
+# .github/workflows/docker-publish.yml).
+ARG BUILD_VERSION=0.1.0-dev
 ENV BUILD_VERSION=${BUILD_VERSION}
 
 ARG PUID=1000

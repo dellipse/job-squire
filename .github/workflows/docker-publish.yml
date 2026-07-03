@@ -20,6 +20,9 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
 
+      - name: Read app version
+        run: echo "APP_VERSION=$(cat VERSION)" >> $GITHUB_ENV
+
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v4
         with:
@@ -45,6 +48,6 @@ jobs:
           context: .
           push: true
           build-args: |
-            BUILD_VERSION=sha-${{ env.SHORT_SHA }}
+            BUILD_VERSION=${{ env.APP_VERSION }}-${{ env.SHORT_SHA }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
