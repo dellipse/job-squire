@@ -172,7 +172,7 @@ def list_jobs(status: str = "") -> list:
 
 @mcp.tool()
 def get_job(job_id: int) -> dict:
-    """Get full detail for one job, including notes and interview debriefs."""
+    """Get full detail for one job, including notes, AI fit score, and interview debriefs."""
     with flask_app.app_context():
         j = db.session.get(Job, job_id)
         if not j:
@@ -180,7 +180,7 @@ def get_job(job_id: int) -> dict:
         return {
             "id": j.id, "company": j.company, "title": j.title, "location": j.location,
             "work_mode": j.work_mode, "status": j.status, "source": j.source, "url": j.url,
-            "salary": j.salary,
+            "salary": j.salary, "ai_fit_score": j.ai_fit_score,
             "date_applied": str(j.date_applied) if j.date_applied else None,
             "follow_up_date": str(j.follow_up_date) if j.follow_up_date else None,
             "contact_name": j.contact_name, "contact_email": j.contact_email,
