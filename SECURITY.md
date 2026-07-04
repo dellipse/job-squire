@@ -50,6 +50,39 @@ response times rather than same-day turnaround.
   coordinated with you on timing before any public disclosure.
 - Credit in the release notes or the published advisory if you would like it.
 
+## Verifying a published image
+
+Every image pushed to `ghcr.io/dellipse/job-squire` from `main` is:
+
+- built and scanned for known CVEs (Trivy, fails the build on fixable
+  CRITICAL/HIGH findings) before it is pushed,
+- signed keylessly with [cosign](https://github.com/sigstore/cosign) using
+  GitHub's OIDC identity for this repository's CI workflow,
+- published with SLSA build provenance and an SBOM attestation.
+
+To verify a pulled image was built by this repository's CI and not tampered
+with in transit or on the registry:
+
+```bash
+cosign verify \
+  --certificate-identity-regexp "^https://github.com/dellipse/job-squire/" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  ghcr.io/dellipse/job-squire:latest
+```
+
+To inspect the build provenance attestation:
+
+```bash
+cosign verify-attestation \
+  --type slsaprovenance \
+  --certificate-identity-regexp "^https://github.com/dellipse/job-squire/" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  ghcr.io/dellipse/job-squire:latest
+```
+
+A versioned CycloneDX SBOM is also committed to [`sbom/`](sbom/) on every
+build.
+
 ## Security model and scope
 
 Understanding the intended model helps separate real vulnerabilities from

@@ -1,0 +1,234 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dev dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Ruff check
+        # Formatting (ruff format) is intentionally not gated yet — the
+        # codebase predates ruff and hasn't been swept for formatting, and
+        # reformatting ~25 files in the same change that introduces the gate
+        # is too large a diff to review safely. Lint rules (real bugs, not
+        # style) are gated now; formatting can be ratcheted in separately.
+        run: ruff check .
+
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run tests under coverage
+        # The test suite is self-contained: tests/conftest.py sets SECRET_KEY,
+        # a temp DATA_DIR, and seed passwords itself, so no secrets are needed.
+        run: coverage run --source=app -m pytest -q
+
+      - name: Coverage report
+        run: coverage report --show-missing
+
+      - name: Enforce overall coverage floor
+        # Ratchet: raise this as coverage of the remaining modules (ai, main,
+        # worker, notify, websearch) is added. Measured 35% at this pass.
+        run: coverage report --fail-under=33
+
+      - name: Enforce critical-module coverage floor
+        # The security- and correctness-critical surfaces carry a higher bar:
+        # crypto + auth are fully covered; mcp_server (the public OAuth server),
+        # providers, and search sit well above this floor. Measured 61%.
+        run: >
+          coverage report --fail-under=58
+          --include="app/crypto.py,app/auth.py,app/mcp_server.py,app/providers.py,app/search.py"
+
+  pip-audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install pip-audit
+        run: pip install pip-audit==2.10.1
+
+      - name: Audit pinned dependencies for known CVEs
+        run: pip-audit -r requirements.txt -r requirements-dev.txt
+
+  build-and-publish:
+    # Gate: this job only runs after lint, test, and pip-audit all pass, and
+    # only for pushes to main — not for pull_request events (fork PRs have no
+    # access to GHCR credentials anyway, and shouldn't be building/pushing).
+    needs: [lint, test, pip-audit]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      security-events: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Read app version
+        run: echo "APP_VERSION=$(cat VERSION)" >> $GITHUB_ENV
+
+      - name: Set short SHA
+        run: echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build image (local only — not pushed until it clears the scan)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: false
+          load: true
+          tags: job-squire:scan
+          build-args: |
+            BUILD_VERSION=${{ env.APP_VERSION }}-${{ env.SHORT_SHA }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Scan image (full report, non-blocking, uploaded to Security tab)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: job-squire:scan
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+          exit-code: "0"
+
+      - name: Upload scan results to code scanning
+        uses: github/codeql-action/upload-sarif@v4
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
+
+      - name: Scan image (gate — fails the build on fixable CRITICAL/HIGH CVEs)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: job-squire:scan
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Build and push image
+        id: push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          provenance: true
+          sbom: true
+          build-args: |
+            BUILD_VERSION=${{ env.APP_VERSION }}-${{ env.SHORT_SHA }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Sign published image (keyless, via GitHub OIDC)
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          while IFS= read -r tag; do
+            [ -z "$tag" ] && continue
+            cosign sign --yes "${tag}@${DIGEST}"
+          done <<< "$TAGS"
+
+      - name: Set up Python for SBOM generation
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install app + SBOM deps
+        run: |
+          pip install -r requirements.txt
+          pip install cyclonedx-bom
+
+      - name: Generate SBOM
+        run: python scripts/generate_sbom.py
+
+      - name: Attest SBOM to the published image
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          cosign attest --yes \
+            --predicate sbom/job-squire.cdx.json \
+            --type cyclonedx \
+            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${DIGEST}"
+
+      - name: Commit SBOM if changed
+        run: |
+          if git diff --quiet -- sbom/job-squire.cdx.json; then
+            echo "SBOM unchanged."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add sbom/job-squire.cdx.json
+          git commit -m "CHORE: Update SBOM (${{ env.SHORT_SHA }}) [skip ci]"
+          git push origin HEAD:main
