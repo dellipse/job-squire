@@ -290,12 +290,12 @@ valid token. The legacy token-in-path (`/mcp/<token>`, via `_legacy_token()`) st
 fallback. `/health` is open. `main()` runs uvicorn on `MCP_PORT` (9000). Reuses the Flask app
 context for DB access; DNS-rebinding protection allowlists `PUBLIC_MCP_HOST`.
 
-The 22 tools span reads and writes. Core tools: `get_pipeline`, `list_jobs`, `get_job`,
+The 23 tools span reads and writes. Core tools: `get_pipeline`, `list_jobs`, `get_job`,
 `get_candidate_profile`, `save_candidate_profile`, `get_candidate_assets`, `add_jobs`,
-`get_search_targets`, `save_analysis`, `get_kit_instructions`, `save_kit`, `set_follow_up`,
-`list_contacts`, `get_contact`, `add_contact`, and `log_submission`. Routine-support tools:
-`list_unanalyzed_jobs`, `set_job_fit`, `list_overdue_followups`, `save_followup_draft`,
-`save_interview_prep`, and `get_weekly_summary`.
+`get_search_targets`, `save_analysis`, `get_kit_instructions`, `update_job_notes`, `save_kit`,
+`set_follow_up`, `list_contacts`, `get_contact`, `add_contact`, and `log_submission`.
+Routine-support tools: `list_unanalyzed_jobs`, `set_job_fit`, `list_overdue_followups`,
+`save_followup_draft`, `save_interview_prep`, and `get_weekly_summary`.
 
 ## `app/static/app.js` — client behavior (CSP-safe)
 

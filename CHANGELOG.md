@@ -12,6 +12,14 @@ footer as `<VERSION>-<build-sha>`.
 
 - `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, and this changelog.
 
+### Fixed
+
+- Docs undercounted the MCP server at 22 tools (16 core + 6 routine-support)
+  and never listed `update_job_notes` anywhere — corrected to 23 tools (17
+  core + 6 routine-support) in `README.md`, `docs/README.md`,
+  `docs/mcp-connector.md`, `docs/mcp-setup-guide.md`, `docs/API-Reference.md`,
+  and `docs/code-reference.md`.
+
 ## [0.1.0] - 2026-07-04
 
 Initial release: a self-hosted, two-user job-search assistant with automated
@@ -27,7 +35,7 @@ paths (manual, direct API, MCP connector).
   states), interview debriefs, recruiter/contact log, file attachments, and
   CSV export.
 - AI integration: manual copy/paste export, direct multi-provider API calls
-  (ranked chain with fallback), and a remote MCP server exposing 22 tools for
+  (ranked chain with fallback), and a remote MCP server exposing 23 tools for
   live read/write by Claude Pro, Hermes Agent, or OpenClaw.
 - Automatic Features: auto-triage after each search, daily follow-up drafts,
   weekly strategy review, ATS keyword gap analysis, rejection pattern alerts.
@@ -36,7 +44,7 @@ paths (manual, direct API, MCP connector).
 - CycloneDX SBOM generation, committed to `sbom/` on every build.
 - pytest suite covering migrations, crypto round-trips, auth/rate-limiting,
   MCP OAuth (PKCE, redirect_uri validation, token TTL, static key), and
-  provider adapters (81 tests).
+  provider adapters (84 tests).
 - Consolidated CI/CD pipeline (`.github/workflows/ci.yml`): ruff lint, tests
   under coverage floors, `pip-audit`, Docker build, Trivy scan (gates on
   fixable CRITICAL/HIGH before push), keyless cosign signing via GitHub OIDC,

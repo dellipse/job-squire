@@ -62,7 +62,7 @@ curl -s -X POST https://squire.yourdomain.com/api/ingest \
 
 ## MCP Connector
 
-The MCP server (`app/mcp_server.py`) runs as a separate container (`job-squire-mcp`) and is reached at `https://mcp-squire.<domain>`. It exposes 22 tools over Streamable HTTP (uvicorn + FastMCP).
+The MCP server (`app/mcp_server.py`) runs as a separate container (`job-squire-mcp`) and is reached at `https://mcp-squire.<domain>`. It exposes 23 tools over Streamable HTTP (uvicorn + FastMCP).
 
 **Authentication.** OAuth 2.0 Authorization Code flow with PKCE. Claude handles the handshake automatically when the connector is added. The user signs in with their Job Squire credentials on the OAuth page; Claude stores a 30-day Bearer token. Tokens are persisted to `DATA_DIR/oauth_tokens.json`.
 
@@ -236,6 +236,16 @@ save_analysis(
   recommendations:   str,
   jobs:              list   # [{job_id, notes, fit_score?}]
 ) -> dict
+```
+
+---
+
+#### `update_job_notes`
+
+Replaces the notes/description on a job record — typically used to save the full posting text fetched from its URL in place of a short imported snippet. Strip navigation, ads, and other page chrome before saving.
+
+```
+update_job_notes(job_id: int, notes: str) -> dict
 ```
 
 ---

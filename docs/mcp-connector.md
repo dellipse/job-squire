@@ -26,7 +26,7 @@ Free/Pro/Max/Team/Enterprise (launched March 2026).
 
 ## Tools exposed
 
-22 tools total across reads and writes.
+23 tools total across reads and writes.
 
 ### Core tools
 
@@ -42,6 +42,7 @@ Free/Pro/Max/Team/Enterprise (launched March 2026).
 | `add_jobs` | `(jobs) -> dict` | Push found jobs into Job Squire as `Saved` (deduped via `ingest_jobs`). |
 | `save_analysis` | `(overall_summary, recommendations, jobs) -> dict` | Write analysis back (global insight + per-job notes). |
 | `get_kit_instructions` | `() -> str` | Return the full step-by-step application-kit prompt (`KIT_PROMPT`). |
+| `update_job_notes` | `(job_id, notes) -> dict` | Replace the notes/description on a job record — e.g. saving the full posting text fetched from its URL in place of a short imported snippet. |
 | `save_kit` | `(job_id, kit_markdown) -> dict` | Save a completed application kit back onto a job record. Also auto-triggers ATS gap analysis if API mode is active. |
 | `set_follow_up` | `(job_id, days_out=6) -> dict` | Set a follow-up reminder N calendar days out. |
 | `list_contacts` | `(contact_type="") -> list` | Recruiter/contact list, optionally filtered by type. |
@@ -62,7 +63,7 @@ These tools support the automated and semi-automated routines (triage, follow-up
 | `save_interview_prep` | `(job_id, prep_notes) -> dict` | Save an AI-generated interview prep guide to the most recent interview record for a job. Falls back to job notes if no interview record exists yet. |
 | `get_weekly_summary` | `() -> dict` | Return a summary of pipeline activity over the past 7 days: new jobs added, status changes, interviews completed, and recent AI insights. Used by the Weekly Strategy Review routine. |
 
-Reads: `get_*`, `list_*`, `get_weekly_summary`. Writes: `save_candidate_profile`, `add_jobs`, `save_analysis`, `save_kit`, `set_follow_up`, `add_contact`, `log_submission`, `set_job_fit`, `save_followup_draft`, `save_interview_prep`.
+Reads: `get_*`, `list_*`, `get_weekly_summary`. Writes: `save_candidate_profile`, `add_jobs`, `save_analysis`, `update_job_notes`, `save_kit`, `set_follow_up`, `add_contact`, `log_submission`, `set_job_fit`, `save_followup_draft`, `save_interview_prep`.
 
 All tools run inside a Flask app context against the shared SQLite DB. The application-kit flow chains: `get_kit_instructions` → build documents → `save_kit` + `set_follow_up`.
 

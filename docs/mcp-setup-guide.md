@@ -185,7 +185,7 @@ You can restrict which Telegram users can trigger OpenClaw commands by adding `a
 
 ---
 
-## Available tools (22)
+## Available tools (23)
 
 All tools are available to every connection method.
 
@@ -199,6 +199,7 @@ All tools are available to every connection method.
 | `get_candidate_profile` | The master candidate profile (Markdown). |
 | `get_candidate_assets` | Master documents (resume, letters, certs); inlines text content. |
 | `get_search_targets` | Target job titles and location — tells the agent what to search. |
+| `get_kit_instructions` | The full step-by-step application-kit prompt. |
 | `list_contacts` | Recruiter/contact list, optionally filtered by type. |
 | `get_contact` | One contact with full submission history. |
 | `list_unanalyzed_jobs` | Saved jobs with no AI fit score yet (up to 50); includes description snippet. |
@@ -212,6 +213,7 @@ All tools are available to every connection method.
 | `save_candidate_profile` | Save an updated master profile back to Job Squire. |
 | `add_jobs` | Push found jobs into Job Squire as `Saved` (deduplicated). |
 | `save_analysis` | Write analysis back: global insight + per-job notes. |
+| `update_job_notes` | Replace the notes/description on a job record (e.g. a full posting fetched from its URL). |
 | `save_kit` | Save a completed application kit to a job record. |
 | `set_follow_up` | Set a follow-up reminder N calendar days out (default 6). |
 | `add_contact` | Add a recruiter or networking contact. |

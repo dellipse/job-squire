@@ -14,7 +14,7 @@ re-reading all the source first.
 | [configuration.md](configuration.md) | Every environment variable and every in-app setting (search providers, SMTP, AI settings, automated features, MCP). |
 | [deployment.md](deployment.md) | Deployment runbook: first-time setup, pulling from ghcr.io, updating, and rollback steps. |
 | [multi-instance.md](multi-instance.md) | Running more than one independent instance on the same host (e.g. one per job seeker): directory layout, port configuration, SWAG setup, and per-instance MCP connectors. |
-| [mcp-connector.md](mcp-connector.md) | The MCP server: its 22 tools (16 core + 6 routine-support), the OAuth auth flow, and how to connect it in Claude or another MCP-capable agent. |
+| [mcp-connector.md](mcp-connector.md) | The MCP server: its 23 tools (17 core + 6 routine-support), the OAuth auth flow, and how to connect it in Claude or another MCP-capable agent. |
 | [mcp-setup-guide.md](mcp-setup-guide.md) | Developer-focused MCP setup guide: all three connection methods (Claude Pro OAuth, Hermes Agent, OpenClaw), full tool listing, and ready-to-use config blocks. |
 | [Setup-Guide.md](Setup-Guide.md) | Step-by-step in-app configuration: search targets, job sources, SMTP, candidate profile, AI, and MCP connector. |
 | [troubleshooting.md](troubleshooting.md) | Every real issue hit during build and deploy, with the cause and the fix. Check here first when something breaks. |
