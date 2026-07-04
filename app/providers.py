@@ -309,7 +309,7 @@ def search_themuse(creds, titles, cfg):
             name = (j.get("name") or "")
             if needles and not any(n in name.lower() for n in needles):
                 continue
-            locs = ", ".join(l.get("name", "") for l in j.get("locations", []))
+            locs = ", ".join(loc.get("name", "") for loc in j.get("locations", []))
             out.append({
                 "external_id": str(j.get("id", "")),
                 "source": "themuse",

@@ -66,7 +66,6 @@ from .models import (
     ASSET_KINDS,
     CONTACT_TYPES,
     STATUSES,
-    SUBMISSION_STATUSES,
     AIConfig,
     AIInsight,
     AIProviderConfig,
@@ -2298,7 +2297,6 @@ def settings_claude_pro():
 @login_required
 @admin_required
 def settings_ai():
-    secret = current_app.config["SECRET_KEY"]
     cfg = _singleton(AIConfig)
     # Connector name (used in MCP prompts and buttons).
     connector_name = request.form.get("connector_name", "").strip()
@@ -3320,7 +3318,7 @@ def kit_batch():
                         built += 1
                         results.append({"id": job.id, "title": job.title,
                                         "company": job.company, "ok": True})
-                        status.log(f"INFO   ✓ done")
+                        status.log("INFO   ✓ done")
                     except Exception as exc:  # noqa: BLE001
                         db.session.rollback()
                         failed += 1

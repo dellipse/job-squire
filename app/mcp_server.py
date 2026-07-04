@@ -29,7 +29,7 @@ import json
 import os
 import secrets
 import time
-from urllib.parse import parse_qs, urlencode
+from urllib.parse import parse_qs
 
 import logging
 import uvicorn

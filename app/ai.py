@@ -1120,14 +1120,14 @@ def run_weekly_review(api_key: str = "", model: str = "",
     params are kept for backward compatibility but ignored.
     Raises requests.HTTPError or ValueError on failure.
     """
-    from datetime import date, timedelta, datetime as dt
+    from datetime import timedelta, datetime as dt
 
     # Build the data payload.
     pipeline = build_export_dict()
     week_ago = dt.now(timezone.utc) - timedelta(days=7)
 
     # Lightweight weekly summary (mirrors get_weekly_summary MCP tool).
-    from .models import AIInsight as _AIInsight, Interview as _Interview, JobNote as _JobNote
+    from .models import Interview as _Interview, JobNote as _JobNote
     new_jobs = Job.query.filter(Job.created_at >= week_ago).all()
     status_notes = (
         _JobNote.query

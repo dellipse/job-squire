@@ -424,7 +424,6 @@ def _seed_anthropic_provider(app):
     Idempotent — does nothing if an Anthropic provider row already exists.
     """
     from .models import AIConfig, AIProviderConfig
-    from .crypto import decrypt
 
     ai_cfg = db.session.get(AIConfig, 1)
     if not ai_cfg or not ai_cfg.api_key_enc:
@@ -433,7 +432,6 @@ def _seed_anthropic_provider(app):
     if AIProviderConfig.query.filter_by(provider="anthropic").first():
         return  # already migrated
 
-    secret = app.config.get("SECRET_KEY", "")
     max_rank = db.session.query(db.func.max(AIProviderConfig.rank)).scalar() or 0
 
     p = AIProviderConfig(
@@ -523,7 +521,7 @@ def _seed_users(app):
                 password = "changeme"
             else:
                 raise RuntimeError(
-                    f"ADMIN_PASSWORD is not set. Generate a password and set it "
+                    "ADMIN_PASSWORD is not set. Generate a password and set it "
                     "in the environment before first start."
                 )
         u = User(username=username, display_name=display_name, role=role)

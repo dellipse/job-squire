@@ -13,7 +13,6 @@ and DB-level dedup in ``ingest_jobs``, the per-provider cooldown after a 503,
 and the daily run-count bookkeeping. The cooldown/daily-run files are redirected
 to a temp path so nothing touches a shared DATA_DIR.
 """
-import json
 from datetime import datetime, timedelta, timezone
 
 import pytest

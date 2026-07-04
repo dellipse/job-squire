@@ -24,7 +24,6 @@ Design rules:
   Claude's shoulder, not for an engineer.
 - No em-dashes, no AI-tell phrases.
 """
-import os
 
 
 def _connector(cfg_row) -> str:

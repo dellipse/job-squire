@@ -15,15 +15,13 @@ from flask_wtf import FlaskForm
 from flask_wtf.file import FileAllowed, FileField, FileRequired
 from wtforms import (
     DateField,
-    HiddenField,
-    IntegerField,
     PasswordField,
     SelectField,
     StringField,
     SubmitField,
     TextAreaField,
 )
-from wtforms.validators import DataRequired, Email, Length, NumberRange, Optional, URL
+from wtforms.validators import DataRequired, Email, Length, Optional, URL
 
 from .models import (
     ASSET_KINDS,
