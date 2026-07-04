@@ -164,3 +164,20 @@ def test_admin_route_allows_admin(client):
     # Admin passes the gate; the request is not a 403 (it fails later on the
     # missing confirm token / absent job, which is fine — the gate is what we test).
     assert resp.status_code != 403
+
+
+# The Settings page exposes stored secrets (provider/SMTP/Anthropic keys) and is
+# now admin-only. These guard the S1 fix: a non-admin user must not reach it.
+SETTINGS_URL = "/settings"  # GET, @login_required + @admin_required
+
+
+def test_settings_forbids_non_admin(client):
+    _login(client, SEEKER_USERNAME, SEEKER_PASSWORD)
+    resp = client.get(SETTINGS_URL, follow_redirects=False)
+    assert resp.status_code == 403
+
+
+def test_settings_allows_admin(client):
+    _login(client, ADMIN_USERNAME, ADMIN_PASSWORD)
+    resp = client.get(SETTINGS_URL, follow_redirects=False)
+    assert resp.status_code == 200

@@ -58,6 +58,7 @@ _log = logging.getLogger(__name__)
 
 from . import create_app
 from .ai import apply_analysis, build_export_dict
+from .crypto import dump_encrypted_json, load_encrypted_json
 from .extensions import db
 from .models import AIConfig, AIInsight, CandidateAsset, Contact, Interview, Job, JobNote, Submission
 
@@ -101,13 +102,13 @@ _codes: dict = {}       # code -> {client_id, redirect_uri, code_challenge, exp}
 # Access tokens ARE persisted to DATA_DIR/oauth_tokens.json so they survive
 # container restarts (30-day TTL means a restart would otherwise force re-auth).
 #
-# SECURITY NOTE: this token store is UNENCRYPTED on disk. Anyone able to read
-# DATA_DIR/oauth_tokens.json can reuse any entry whose "exp" is in the future as
-# a Bearer token and gain full MCP read/write access until it expires. This is an
-# accepted risk for this self-hosted, single-tenant deployment; the mitigations
-# relied upon are cryptographically random 48-byte tokens, a finite TTL, and
-# restrictive permissions on DATA_DIR (non-root owner, chmod 700). Do not relax
-# those assumptions without encrypting this file. See issue #5.
+# SECURITY NOTE: the token store is ENCRYPTED at rest. The whole JSON document
+# is Fernet-encrypted with the SECRET_KEY-derived key (see crypto.py) and written
+# atomically as chmod 0600, so a raw read of DATA_DIR/oauth_tokens.json does not
+# yield usable Bearer tokens. Defense in depth still applies: cryptographically
+# random 48-byte tokens, a finite TTL, and restrictive permissions on DATA_DIR
+# (non-root owner, chmod 700). A legacy plaintext file from an older version is
+# read once for backward compatibility and re-encrypted on the next write.
 _TOKEN_TTL = 3600 * 24 * 30   # 30 days
 
 
@@ -117,23 +118,20 @@ def _token_store_path() -> str:
 
 def _load_tokens() -> dict:
     path = _token_store_path()
-    try:
-        with open(path, "r") as fh:
-            data = json.load(fh)
-        # Prune expired tokens on load.
-        now = time.time()
-        return {k: v for k, v in data.items() if v.get("exp", 0) > now}
-    except (OSError, json.JSONDecodeError):
-        return {}
+    secret = flask_app.config.get("SECRET_KEY", "")
+    data = load_encrypted_json(path, secret, default={})
+    # Prune expired tokens on load.
+    now = time.time()
+    return {k: v for k, v in data.items() if v.get("exp", 0) > now}
 
 
 def _save_tokens(tokens: dict) -> None:
     path = _token_store_path()
+    secret = flask_app.config.get("SECRET_KEY", "")
     now = time.time()
     live = {k: v for k, v in tokens.items() if v.get("exp", 0) > now}
     try:
-        with open(path, "w") as fh:
-            json.dump(live, fh)
+        dump_encrypted_json(path, secret, live)
     except OSError as exc:
         _log.warning("Could not save OAuth tokens to %s: %s", path, exc)
 

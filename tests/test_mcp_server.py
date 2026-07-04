@@ -312,6 +312,24 @@ def test_load_tokens_prunes_expired(mcp):
     assert "dead-token" not in loaded
 
 
+def test_token_store_is_encrypted_at_rest(mcp):
+    """The on-disk OAuth token store must not contain raw bearer tokens.
+
+    Guards the fix for the plaintext-token-store finding: _save_tokens writes an
+    encrypted blob, and _load_tokens round-trips it back.
+    """
+    now = time.time()
+    mcp._tokens["super-secret-raw-token"] = {"client_id": "c", "exp": now + 3600}
+    mcp._save_tokens(mcp._tokens)
+
+    raw = open(mcp._token_store_path()).read()
+    assert raw.startswith("enc:"), "token store is not encrypted on disk"
+    assert "super-secret-raw-token" not in raw, "raw token leaked in plaintext"
+
+    loaded = mcp._load_tokens()
+    assert "super-secret-raw-token" in loaded
+
+
 def test_expired_bearer_rejected_at_mcp(mcp, monkeypatch):
     inner, hits = _sentinel_inner()
     monkeypatch.setattr(mcp, "_inner", inner)

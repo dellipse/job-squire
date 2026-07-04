@@ -38,7 +38,7 @@
     <a href="{{ url_for('main.contacts_list') }}">Recruiters</a>
     <a href="{{ url_for('main.kit_hub') }}">Application kit</a>
     <a href="{{ url_for('main.ai_hub') }}">AI analysis</a>
-    <a href="{{ url_for('main.settings') }}">Settings</a>
+    {% if current_user.is_admin %}<a href="{{ url_for('main.settings') }}">Settings</a>{% endif %}
     <a href="{{ url_for('main.user_guide') }}">Guide</a>
   </nav>
   <div class="user">

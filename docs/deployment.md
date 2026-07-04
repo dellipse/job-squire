@@ -100,6 +100,38 @@ sudo docker compose up -d --no-deps --force-recreate job-squire job-squire-worke
 Set the new values in `data/.env`, add `RESET_UIDS_AND_PWDS_ON_START=true`, `up -d` the web service,
 confirm login, then remove the line and `up -d` again.
 
+## Rotating SECRET_KEY (and re-entering secrets)
+
+`SECRET_KEY` does two jobs: it signs session cookies **and** derives the Fernet
+key that encrypts every stored secret (provider API keys, the Anthropic key, the
+SMTP password, and the on-disk OAuth token store). Rotating it does not corrupt
+the app, but it makes everything encrypted with the old key undecryptable, so
+those secrets must be re-entered afterward. Rotate if the key may have been
+exposed (committed to git, printed in logs, or shared).
+
+There is no re-encrypt-in-place migration by design: the app never holds two
+keys at once. If you only need to cut off access, revoke MCP tokens and reset
+passwords (above) instead of rotating.
+
+Steps:
+
+1. **Revoke live MCP tokens first.** Settings, Connections, "Revoke all tokens".
+   This ensures no old bearer token survives the rotation.
+2. **Generate a new key:** `python -c "import secrets; print(secrets.token_hex(32))"`
+3. **Set it** in `data/.env` as `SECRET_KEY`, then `up -d` all three services
+   (`job-squire`, `job-squire-worker`, `job-squire-mcp`).
+4. **Sign back in.** Every session cookie signed with the old key is now invalid,
+   so all users are logged out.
+5. **Re-enter every stored secret** on the Settings page: provider API keys, the
+   Anthropic API key, and the SMTP password. The UI shows a "could not decrypt"
+   warning for any secret it can no longer read.
+6. **Re-authorize the Claude MCP connector.** Old OAuth tokens can no longer be
+   decrypted (and were revoked in step 1), so clients must re-run authorization.
+
+If you skip the re-entry step, providers surface a decryption warning, SMTP
+sending fails until the password is re-saved, and the MCP connector rejects the
+old tokens. Nothing is silently wrong beyond the secrets themselves.
+
 ## Wiping data (dev / re-init)
 
 Removes all jobs, settings, uploads. Needed if you change `PUID/PGID` or want a clean slate.

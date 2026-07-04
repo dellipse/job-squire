@@ -22,7 +22,9 @@ SECRET_KEY invalidates all stored secrets; users must re-enter them on the
 Settings page after a rotation.
 """
 import base64
+import json
 import logging
+import os
 
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes
@@ -66,3 +68,67 @@ def decrypt(secret_key, stored):
     except InvalidToken:
         logger.warning("crypto.decrypt: InvalidToken — SECRET_KEY may have changed; stored value cannot be decrypted")
         return ""
+
+
+# ---------------------------------------------------------------------------
+# Encrypted JSON file helpers
+#
+# Used for on-disk state that holds live secrets but is shared across processes
+# via a file rather than the database — currently the OAuth access-token store
+# (DATA_DIR/oauth_tokens.json), which holds live bearer tokens. The whole JSON
+# document is encrypted with the same SECRET_KEY-derived Fernet key used for
+# database secrets, so tokens are not readable at rest. Writes are atomic
+# (temp file + os.replace) and the file is chmod 0600 so a torn read across the
+# web/MCP processes can't happen and the file isn't world-readable.
+# ---------------------------------------------------------------------------
+
+def load_encrypted_json(path, secret_key, default=None):
+    """Load JSON written by :func:`dump_encrypted_json`.
+
+    Backward compatible: if ``path`` holds a legacy *plaintext* JSON document
+    (written before encryption was added), it is still parsed and returned, and
+    a warning is logged. It will be encrypted the next time it is written.
+    Returns ``default`` (or ``{}``) when the file is missing, empty, or cannot
+    be decrypted (e.g. SECRET_KEY changed).
+    """
+    fallback = {} if default is None else default
+    try:
+        with open(path, "r") as fh:
+            raw = fh.read().strip()
+    except OSError:
+        return fallback
+    if not raw:
+        return fallback
+    if raw.startswith(_PREFIX):
+        body = raw[len(_PREFIX):]
+        try:
+            raw = _fernet(secret_key).decrypt(body.encode("utf-8")).decode("utf-8")
+        except InvalidToken:
+            logger.warning("crypto.load_encrypted_json: InvalidToken for %s — "
+                           "SECRET_KEY may have changed; treating as empty", path)
+            return fallback
+    else:
+        logger.warning("crypto.load_encrypted_json: %s is unencrypted plaintext — "
+                       "it will be re-encrypted on the next write", path)
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return fallback
+
+
+def dump_encrypted_json(path, secret_key, obj):
+    """Serialize ``obj`` to JSON and write it to ``path`` encrypted at rest.
+
+    The write is atomic (temp file + ``os.replace``) and the resulting file is
+    chmod 0600 so it is not readable by other users on the host.
+    """
+    token = _fernet(secret_key).encrypt(json.dumps(obj).encode("utf-8"))
+    data = _PREFIX + token.decode("utf-8")
+    tmp = f"{path}.tmp.{os.getpid()}"
+    with open(tmp, "w") as fh:
+        fh.write(data)
+    try:
+        os.chmod(tmp, 0o600)
+    except OSError:
+        pass
+    os.replace(tmp, path)

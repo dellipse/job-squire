@@ -44,7 +44,7 @@ from sqlalchemy import func, text
 from werkzeug.utils import secure_filename
 
 from . import ai
-from .crypto import decrypt, encrypt
+from .crypto import decrypt, dump_encrypted_json, encrypt, load_encrypted_json
 
 log = logging.getLogger(__name__)
 from .extensions import csrf, db
@@ -2242,6 +2242,7 @@ def ai_task_poll(run_id: str):
 
 @main_bp.route("/settings/ai-mode", methods=["POST"])
 @login_required
+@admin_required
 def settings_ai_mode():
     """Save Automatic Features toggle (api_enabled only)."""
     cfg = _singleton(AIConfig)
@@ -2264,6 +2265,7 @@ def settings_ai_mode():
 
 @main_bp.route("/settings/claude-pro", methods=["POST"])
 @login_required
+@admin_required
 def settings_claude_pro():
     """Save MCP Connector and Claude Pro toggles (mcp_enabled, claude_buttons_enabled)."""
     cfg = _singleton(AIConfig)
@@ -2294,6 +2296,7 @@ def settings_claude_pro():
 
 @main_bp.route("/settings/ai", methods=["POST"])
 @login_required
+@admin_required
 def settings_ai():
     secret = current_app.config["SECRET_KEY"]
     cfg = _singleton(AIConfig)
@@ -2311,6 +2314,7 @@ def settings_ai():
 # --------------------------------------------------------------------------
 @main_bp.route("/settings/mcp-api-key", methods=["POST"])
 @login_required
+@admin_required
 def settings_mcp_api_key():
     import secrets as _secrets
     secret = current_app.config["SECRET_KEY"]
@@ -2349,11 +2353,7 @@ def _read_oauth_tokens() -> list:
     """
     import hashlib as _hl
     path = _oauth_token_path()
-    try:
-        with open(path, "r") as fh:
-            data = json.load(fh)
-    except (OSError, json.JSONDecodeError):
-        return []
+    data = load_encrypted_json(path, current_app.config["SECRET_KEY"], default={})
     now = time.time()
     result = []
     for raw_token, meta in data.items():
@@ -2373,16 +2373,12 @@ def _revoke_oauth_token_by_id(token_id: str) -> bool:
     """Remove the token whose SHA-256 matches token_id. Returns True if found."""
     import hashlib as _hl
     path = _oauth_token_path()
-    try:
-        with open(path, "r") as fh:
-            data = json.load(fh)
-    except (OSError, json.JSONDecodeError):
-        return False
+    secret = current_app.config["SECRET_KEY"]
+    data = load_encrypted_json(path, secret, default={})
     match = next((k for k in data if _hl.sha256(k.encode()).hexdigest() == token_id), None)
     if match:
         del data[match]
-        with open(path, "w") as fh:
-            json.dump(data, fh)
+        dump_encrypted_json(path, secret, data)
         return True
     return False
 
@@ -2390,19 +2386,16 @@ def _revoke_oauth_token_by_id(token_id: str) -> bool:
 def _revoke_all_oauth_tokens() -> int:
     """Remove all tokens. Returns count removed."""
     path = _oauth_token_path()
-    try:
-        with open(path, "r") as fh:
-            data = json.load(fh)
-    except (OSError, json.JSONDecodeError):
-        return 0
+    secret = current_app.config["SECRET_KEY"]
+    data = load_encrypted_json(path, secret, default={})
     count = len(data)
-    with open(path, "w") as fh:
-        json.dump({}, fh)
+    dump_encrypted_json(path, secret, {})
     return count
 
 
 @main_bp.route("/settings/mcp-revoke-token", methods=["POST"])
 @login_required
+@admin_required
 def settings_mcp_revoke_token():
     token_id = request.form.get("token_id", "").strip()
     if token_id and _revoke_oauth_token_by_id(token_id):
@@ -2414,6 +2407,7 @@ def settings_mcp_revoke_token():
 
 @main_bp.route("/settings/mcp-revoke-all", methods=["POST"])
 @login_required
+@admin_required
 def settings_mcp_revoke_all():
     count = _revoke_all_oauth_tokens()
     flash(f"Revoked {count} token{'s' if count != 1 else ''}.", "success")
@@ -2425,6 +2419,7 @@ def settings_mcp_revoke_all():
 # --------------------------------------------------------------------------
 @main_bp.route("/settings/ai/tasks", methods=["POST"])
 @login_required
+@admin_required
 def settings_ai_tasks():
     from .models import AITaskConfig, AI_TASK_NAMES
     for task_name in AI_TASK_NAMES:
@@ -2460,6 +2455,7 @@ _VALID_PROVIDER_TYPES = {
 
 @main_bp.route("/settings/ai/providers/add", methods=["POST"])
 @login_required
+@admin_required
 def ai_provider_add():
     secret = current_app.config["SECRET_KEY"]
     provider = request.form.get("provider", "").strip().lower()
@@ -2496,6 +2492,7 @@ def ai_provider_add():
 
 @main_bp.route("/settings/ai/providers/<int:pid>/edit", methods=["POST"])
 @login_required
+@admin_required
 def ai_provider_edit(pid):
     secret = current_app.config["SECRET_KEY"]
     p = db.session.get(AIProviderConfig, pid)
@@ -2523,6 +2520,7 @@ def ai_provider_edit(pid):
 
 @main_bp.route("/settings/ai/providers/<int:pid>/delete", methods=["POST"])
 @login_required
+@admin_required
 def ai_provider_delete(pid):
     from .models import AITaskConfig
     p = db.session.get(AIProviderConfig, pid)
@@ -2551,6 +2549,7 @@ def ai_provider_delete(pid):
 
 @main_bp.route("/settings/ai/providers/<int:pid>/toggle", methods=["POST"])
 @login_required
+@admin_required
 def ai_provider_toggle(pid):
     p = db.session.get(AIProviderConfig, pid)
     if not p:
@@ -2564,6 +2563,7 @@ def ai_provider_toggle(pid):
 
 @main_bp.route("/settings/ai/providers/<int:pid>/move-up", methods=["POST"])
 @login_required
+@admin_required
 def ai_provider_move_up(pid):
     p = db.session.get(AIProviderConfig, pid)
     if not p:
@@ -2580,6 +2580,7 @@ def ai_provider_move_up(pid):
 
 @main_bp.route("/settings/ai/providers/<int:pid>/move-down", methods=["POST"])
 @login_required
+@admin_required
 def ai_provider_move_down(pid):
     p = db.session.get(AIProviderConfig, pid)
     if not p:
@@ -2595,6 +2596,7 @@ def ai_provider_move_down(pid):
 
 @main_bp.route("/settings/ai/providers/<int:pid>/test", methods=["POST"])
 @login_required
+@admin_required
 def ai_provider_test(pid):
     import time
     p = db.session.get(AIProviderConfig, pid)
@@ -2645,6 +2647,7 @@ def ai_provider_test(pid):
 
 @main_bp.route("/settings/ai/providers/fallback", methods=["POST"])
 @login_required
+@admin_required
 def ai_provider_fallback_toggle():
     cfg = _singleton(AIConfig)
     cfg.fallback_to_anthropic = bool(request.form.get("fallback_to_anthropic"))
@@ -2686,6 +2689,7 @@ def _singleton(model):
 
 @main_bp.route("/settings")
 @login_required
+@admin_required
 def settings():
     cfg = _singleton(SearchConfig)
     smtp = _singleton(SmtpConfig)
@@ -2828,6 +2832,7 @@ def settings():
 
 @main_bp.route("/settings/search", methods=["POST"])
 @login_required
+@admin_required
 def settings_search():
     cfg = _singleton(SearchConfig)
     location = request.form.get("location", "").strip()
@@ -2854,6 +2859,7 @@ def settings_search():
 
 @main_bp.route("/settings/kit", methods=["POST"])
 @login_required
+@admin_required
 def settings_kit():
     cfg = _singleton(KitConfig)
     cfg.fit_salary_floor = _int(request.form.get("fit_salary_floor"), 60000)
@@ -2864,6 +2870,7 @@ def settings_kit():
 
 @main_bp.route("/settings/provider/<provider>", methods=["POST"])
 @login_required
+@admin_required
 def settings_provider(provider):
     if provider not in PROVIDERS:
         abort(404)
@@ -2913,6 +2920,7 @@ def settings_provider(provider):
 
 @main_bp.route("/settings/provider/<provider>/test", methods=["POST"])
 @login_required
+@admin_required
 def settings_provider_test(provider):
     """Ping one provider with the saved key and report the live result."""
     if provider not in PROVIDERS:
@@ -2948,6 +2956,7 @@ def settings_provider_test(provider):
 
 @main_bp.route("/settings/provider/<provider>/pull", methods=["POST"])
 @login_required
+@admin_required
 def settings_provider_pull(provider):
     """Run a full search for one provider, ingest results, and clear any cooldown."""
     if provider not in PROVIDERS:
@@ -2993,6 +3002,7 @@ def settings_provider_pull(provider):
 
 @main_bp.route("/settings/smtp", methods=["POST"])
 @login_required
+@admin_required
 def settings_smtp():
     secret = current_app.config["SECRET_KEY"]
     smtp = _singleton(SmtpConfig)
@@ -3014,6 +3024,7 @@ def settings_smtp():
 
 @main_bp.route("/settings/test-email", methods=["POST"])
 @login_required
+@admin_required
 def settings_test_email():
     secret = current_app.config["SECRET_KEY"]
     smtp_row = db.session.get(SmtpConfig, 1)
@@ -3051,6 +3062,7 @@ def settings_test_email():
 
 @main_bp.route("/settings/run", methods=["POST"])
 @login_required
+@admin_required
 def settings_run():
     def _bg_search():
         with current_app._get_current_object().app_context():
@@ -3066,6 +3078,7 @@ def settings_run():
 # --------------------------------------------------------------------------
 @main_bp.route("/settings/assets/upload", methods=["POST"])
 @login_required
+@admin_required
 def settings_asset_upload():
     form = CandidateAssetForm()
     if form.validate_on_submit():
@@ -3099,6 +3112,7 @@ def settings_asset_upload():
 
 @main_bp.route("/assets/<int:asset_id>/download")
 @login_required
+@admin_required
 def asset_download(asset_id):
     asset = db.get_or_404(CandidateAsset, asset_id)
     path = os.path.join(current_app.config["UPLOAD_DIR"], asset.stored_name)
@@ -3109,6 +3123,7 @@ def asset_download(asset_id):
 
 @main_bp.route("/assets/<int:asset_id>/edit", methods=["POST"])
 @login_required
+@admin_required
 def asset_edit(asset_id):
     asset = db.get_or_404(CandidateAsset, asset_id)
     form = CandidateAssetEditForm()
@@ -3125,6 +3140,7 @@ def asset_edit(asset_id):
 
 @main_bp.route("/assets/<int:asset_id>/delete", methods=["POST"])
 @login_required
+@admin_required
 def asset_delete(asset_id):
     form = ConfirmForm()
     if not form.validate_on_submit():
@@ -3144,6 +3160,7 @@ def asset_delete(asset_id):
 
 @main_bp.route("/settings/profile", methods=["POST"])
 @login_required
+@admin_required
 def settings_profile():
     """Save the candidate profile markdown to disk."""
     text = request.form.get("candidate_profile", "").rstrip()
@@ -3154,6 +3171,7 @@ def settings_profile():
 
 @main_bp.route("/settings/profile-prompt", methods=["POST"])
 @login_required
+@admin_required
 def settings_profile_prompt():
     """Save the profile generation prompt to disk."""
     text = request.form.get("profile_prompt", "").rstrip()
@@ -3164,6 +3182,7 @@ def settings_profile_prompt():
 
 @main_bp.route("/settings/profile/upload", methods=["POST"])
 @login_required
+@admin_required
 def settings_profile_upload():
     """Replace the candidate profile by uploading a .md file."""
     file = request.files.get("profile_file")
