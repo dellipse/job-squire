@@ -27,21 +27,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
 
-      # continue-on-error below: code scanning (where these results would be
-      # posted) requires the repo to be public or GitHub Advanced Security on
-      # a private repo -- job-squire is private today, so both steps fail with
-      # "Code scanning is not enabled for this repository". Nothing else
-      # depends on this job, so the failure is only cosmetic (a red check),
-      # but there's no reason to show red for something that isn't actionable
-      # yet. Safe to drop continue-on-error once the repo goes public.
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
-        continue-on-error: true
         with:
           languages: ${{ matrix.language }}
 
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@v4
-        continue-on-error: true
         with:
           category: "/language:${{ matrix.language }}"
