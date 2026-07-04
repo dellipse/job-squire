@@ -79,14 +79,14 @@ def build_digest(jobs, base_url=None, recipient_name="you"):
     if base_url:
         lines.append(f"\nReview and triage them here: {base_url}")
     text = "\n".join(lines)
-    html = (
+    html_body = (
         '<div style="font-family:Arial,sans-serif;font-size:14px;color:#222">'
         f"<p>{n} new posting{'s' if n != 1 else ''} added to your Job Squire instance:</p>"
         f'<table style="width:100%;border-collapse:collapse">{"".join(rows)}</table>'
         + (f'<p><a href="{base_url}">Open Job Squire</a></p>' if base_url else "")
         + "</div>"
     )
-    return subject, text, html
+    return subject, text, html_body
 
 
 def build_followup_digest(drafted_jobs, base_url=None, recipient_name="you"):
@@ -194,11 +194,11 @@ def build_error_report(errors, trigger="scheduled", base_url=None):
     if base_url:
         lines.append(f"\nCheck run history: {base_url}/settings")
     text = "\n".join(lines)
-    html = (
+    html_body = (
         '<div style="font-family:Arial,sans-serif;font-size:14px;color:#222">'
         f"<p>The <strong>{html.escape(trigger)}</strong> search run encountered {len(errors)} issue(s):</p>"
         f"<ul style='margin:.5rem 0;padding-left:1.2rem'>{items}</ul>"
         + (f'<p><a href="{base_url}/settings">View run history</a></p>' if base_url else "")
         + "</div>"
     )
-    return subject, text, html
+    return subject, text, html_body
