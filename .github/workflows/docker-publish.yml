@@ -51,3 +51,41 @@ jobs:
             BUILD_VERSION=${{ env.APP_VERSION }}-${{ env.SHORT_SHA }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+  sbom:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install app dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install CycloneDX SBOM generator
+        run: pip install cyclonedx-bom
+
+      - name: Generate SBOM
+        run: python scripts/generate_sbom.py
+
+      - name: Set short SHA
+        run: echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
+
+      - name: Commit SBOM if changed
+        run: |
+          if git diff --quiet -- sbom/job-squire.cdx.json; then
+            echo "SBOM unchanged."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add sbom/job-squire.cdx.json
+          git commit -m "CHORE: Update SBOM (${{ env.SHORT_SHA }}) [skip ci]"
+          git push origin HEAD:main
