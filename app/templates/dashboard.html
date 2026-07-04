@@ -3,7 +3,7 @@
 {% block content %}
 <h1>Dashboard</h1>
 
-{% if unscored_count > 0 or overdue_followup_count > 0 or unkitted_count > 0 or stale_saved_count > 0 or stale_active_count > 0 %}
+{% if unscored_count > 0 or overdue_followup_count > 0 or unkitted_count > 0 or stale_saved_count > 0 or stale_active_count > 0 or worker_stale %}
 <section class="card routine-status-widget">
   <div class="card-head">
     <h2>Daily routine status</h2>
@@ -11,6 +11,21 @@
   </div>
   <p class="muted small">Your Claude Pro routines handle these automatically. This shows what is waiting to be processed.</p>
   <div class="routine-status-grid">
+    {% if worker_stale %}
+    <div class="routine-status-item stale">
+      <span class="routine-status-num stale-num">!</span>
+      <div>
+        <strong>Automated search worker isn't responding</strong>
+        <span class="muted small">
+          {% if worker_last_seen %}Last heartbeat {{ worker_last_seen | local_dt }} — the
+          job-squire-worker container may have crashed or hung.{% else %}No heartbeat seen yet —
+          the job-squire-worker container may not be running.{% endif %}
+          Check <code>docker logs job-squire-worker</code>.
+        </span>
+      </div>
+      <a class="btn btn-sm btn-outline" href="{{ url_for('main.settings', _anchor='tab-history') }}">View history ↗</a>
+    </div>
+    {% endif %}
     {% if unscored_count > 0 %}
     <div class="routine-status-item pending">
       <span class="routine-status-num">{{ unscored_count }}</span>

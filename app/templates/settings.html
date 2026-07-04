@@ -1392,6 +1392,24 @@ openclaw mcp doctor {{ connector }} --probe{% endset %}
 {# ── History ─────────────────────────────────────────────── #}
 <div id="tab-history" class="tab-panel">
   <section class="card">
+    <h2>Automated search worker</h2>
+    {% if worker_stale %}
+    <p class="setup-status warn">
+      <strong>Not responding.</strong>
+      {% if worker_last_seen %}Last heartbeat {{ worker_last_seen | local_dt }}.{% else %}No
+      heartbeat recorded yet.{% endif %}
+      The <code>job-squire-worker</code> container may have crashed, been stopped, or hung —
+      no scheduled searches or automatic features (follow-up drafts, weekly review, rejection
+      alerts) will run until it's back up. Check <code>docker ps</code> and
+      <code>docker logs job-squire-worker</code>.
+    </p>
+    {% else %}
+    <p class="setup-status ok">
+      Running. Last heartbeat {{ worker_last_seen | local_dt }}.
+    </p>
+    {% endif %}
+  </section>
+  <section class="card">
     <h2>Recent search runs</h2>
     {% if runs %}
     <div class="table-wrap">

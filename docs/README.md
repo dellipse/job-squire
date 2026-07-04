@@ -13,6 +13,7 @@ re-reading all the source first.
 | [code-reference.md](code-reference.md) | Module-by-module guide to the Python source: every file in `app/`, the models, the routes, and the key functions. Start here to change behavior. |
 | [configuration.md](configuration.md) | Every environment variable and every in-app setting (search providers, SMTP, AI settings, automated features, MCP). |
 | [deployment.md](deployment.md) | Deployment runbook: first-time setup, pulling from ghcr.io, updating, and rollback steps. |
+| [backup-restore.md](backup-restore.md) | WAL-safe backup and restore runbook: `scripts/backup.sh`/`scripts/restore.sh`, why a plain `tar` of the data folder isn't safe, and a post-restore verification checklist. |
 | [multi-instance.md](multi-instance.md) | Running more than one independent instance on the same host (e.g. one per job seeker): directory layout, port configuration, SWAG setup, and per-instance MCP connectors. |
 | [mcp-connector.md](mcp-connector.md) | The MCP server: its 23 tools (17 core + 6 routine-support), the OAuth auth flow, and how to connect it in Claude or another MCP-capable agent. |
 | [mcp-setup-guide.md](mcp-setup-guide.md) | Developer-focused MCP setup guide: all three connection methods (Claude Pro OAuth, Hermes Agent, OpenClaw), full tool listing, and ready-to-use config blocks. |

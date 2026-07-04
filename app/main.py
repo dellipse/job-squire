@@ -304,6 +304,32 @@ def health():
     return Response('{"ok": true}', status=200, mimetype="application/json")
 
 
+def _worker_heartbeat_status(max_age_seconds=900):
+    """Read the worker's heartbeat file and report whether it looks alive.
+
+    app/worker.py touches DATA_DIR/.worker_heartbeat on startup and every
+    HEARTBEAT_INTERVAL_MINUTES thereafter (default 5), independent of whether
+    automated search is enabled or due to run. So "stale" here means the
+    worker container's process/scheduler has died or wedged -- it is not a
+    statement about search being disabled or merely idle between runs. This
+    backs the same signal the job-squire-worker Docker healthcheck uses, but
+    surfaced in-app (Dashboard + Settings > History) so it doesn't require
+    running `docker ps` to notice.
+
+    Returns a dict: {"last_seen": aware datetime | None, "stale": bool}.
+    """
+    data_dir = current_app.config.get("DATA_DIR") or os.environ.get("DATA_DIR", "/data")
+    path = os.path.join(data_dir, ".worker_heartbeat")
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return {"last_seen": None, "stale": True}
+    return {
+        "last_seen": datetime.fromtimestamp(mtime, tz=timezone.utc),
+        "stale": (time.time() - mtime) > max_age_seconds,
+    }
+
+
 # --------------------------------------------------------------------------
 # Dashboard
 # --------------------------------------------------------------------------
@@ -391,6 +417,8 @@ def dashboard():
     )
     overdue_followup_count = len([j for j in follow_ups if not (j.followup_draft or "").strip()])
 
+    worker_health = _worker_heartbeat_status()
+
     return render_template(
         "dashboard.html",
         metrics=metrics,
@@ -407,6 +435,8 @@ def dashboard():
         overdue_followup_count=overdue_followup_count,
         stale_saved_count=stale_saved_count,
         stale_active_count=stale_active_count,
+        worker_stale=worker_health["stale"],
+        worker_last_seen=worker_health["last_seen"],
     )
 
 
@@ -2802,9 +2832,11 @@ def settings():
     }
 
     oauth_tokens = _read_oauth_tokens()
+    worker_health = _worker_heartbeat_status()
 
     return render_template(
         "settings.html", cfg=cfg, smtp=smtp, providers=providers, runs=runs,
+        worker_stale=worker_health["stale"], worker_last_seen=worker_health["last_seen"],
         ingest_enabled=bool(os.environ.get("INGEST_API_KEY")),
         ai_cfg=ai_cfg, ai_key_set=bool(ai_cfg.api_key_enc),
         kit_cfg=kit_cfg,

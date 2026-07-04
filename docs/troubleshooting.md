@@ -37,6 +37,16 @@ The stack was started with only Job Squire service names, so SWAG was never brou
 **Fix:** Start SWAG from your orchestrator compose, or run `docker compose up -d` with no
 service name to start everything.
 
+### `docker compose ps` shows `job-squire-worker` as `unhealthy`
+The worker has no HTTP endpoint, so its healthcheck instead checks that
+`DATA_DIR/.worker_heartbeat` was touched within the last 15 minutes (the worker touches it every
+`HEARTBEAT_INTERVAL_MINUTES`, default 5). The same signal shows in-app: a banner on the Dashboard
+and a status line on Settings → History. **Fix:** check `sudo docker logs job-squire-worker` for a
+crash/traceback first. If the process looks alive but the heartbeat is still stale, restart it:
+`sudo docker compose restart job-squire-worker`. Note this only detects a dead/wedged *process* —
+it says nothing about whether automated search is enabled; that's a separate check (see the
+`SearchRun` history on the same Settings tab).
+
 ### Certificate stuck "Attempting to renew" / `All renewals failed`
 The certbot debug log (`/containers/docker/swag/config/log/letsencrypt/letsencrypt.log`) showed
 the failure at `finalize_order` talking to **ZeroSSL's** ACME API (`RemoteDisconnected`). Cloudflare
@@ -132,6 +142,21 @@ restart should not require re-authorization. If you still lose the connection, t
 token file may be missing or corrupt.
 **Fix:** in Claude, remove and re-add the connector (~10 seconds) to re-authorize.
 The token file is regenerated automatically.
+
+## Backup / restore
+
+See **[backup-restore.md](backup-restore.md)** for the full runbook. Common issues:
+
+### App can't write after a restore / permission denied
+`scripts/restore.sh` chowns the restored data directory to the `PUID`/`PGID` found in the restored
+`.env` (falling back to 1000:1000). If you restored manually instead of via the script, run
+`sudo chown -R <PUID>:<PGID> ./job-squire/data` yourself before starting the services.
+
+### Secrets show "could not decrypt" after a restore
+The restored `.env`'s `SECRET_KEY` doesn't match the one that encrypted the stored secrets —
+usually because you kept a different `.env` than the one in the backup archive. See "Rotating
+SECRET_KEY" in [deployment.md](deployment.md#rotating-secret_key-and-re-entering-secrets) for the
+re-entry steps; there is no way to recover the old secrets without the original key.
 
 ## General diagnostics
 

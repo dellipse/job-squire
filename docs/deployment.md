@@ -151,11 +151,28 @@ sudo docker compose up -d job-squire job-squire-worker job-squire-mcp
 ## Backups
 
 Everything is in the host data folder (`DATA_HOST_DIR`, default
-`./job-squire/data`): `job-squire.db`, `uploads/`, and `candidate_profile.md`.
+`./job-squire/data`): `job-squire.db`, `uploads/`, `candidate_profile.md`,
+`oauth_tokens.json`, and `.env`.
+
+The database runs in WAL mode, so a plain `tar`/`cp` of the folder while the
+app is live is not guaranteed to be point-in-time consistent (recent commits
+can be sitting in `job-squire.db-wal` rather than `job-squire.db`). Use one of:
 
 ```
-sudo tar czf job-squire-backup-$(date +%F).tgz -C ./job-squire/data .
+./scripts/backup.sh              # hot backup, no downtime (recommended)
 ```
+
+or stop the services first for a cold backup:
+
+```
+sudo docker compose stop job-squire job-squire-worker job-squire-mcp
+sudo tar czf job-squire-backup-$(date +%F).tgz -C ./job-squire/data .
+sudo docker compose up -d job-squire job-squire-worker job-squire-mcp
+```
+
+See **[`backup-restore.md`](backup-restore.md)** for the full runbook: why WAL mode matters, the
+restore procedure (`scripts/restore.sh`), a post-restore verification checklist, and how to
+schedule backups via cron.
 
 ## Running multiple instances
 

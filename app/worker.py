@@ -20,6 +20,11 @@ Run as a separate service from the web app so it fires exactly once per slot
 Cadence is set by env vars (defaults match: 8am, 1pm, 5pm Mon-Fri plus a
 weekend morning). Times use the job-search location's timezone. Schedule
 changes require a worker restart; title/location changes are read live.
+
+Also runs a heartbeat job (DATA_DIR/.worker_heartbeat, default every 5
+minutes) so a dead or wedged process is detectable via the Docker healthcheck
+and the in-app Settings/Dashboard staleness warning, without needing an HTTP
+endpoint on this container.
 """
 import logging
 import os
@@ -40,6 +45,29 @@ from .timezones import timezone_for_location
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [worker] %(message)s")
 log = logging.getLogger("worker")
+
+
+def _heartbeat_path():
+    return os.path.join(os.environ.get("DATA_DIR", "/data"), ".worker_heartbeat")
+
+
+def _touch_heartbeat():
+    """Write the current time to the heartbeat file.
+
+    This is how the Docker healthcheck (and the in-app Settings/Dashboard
+    staleness warning, see ``app.main._worker_heartbeat_status``) tells whether
+    this process is alive. It is written on startup and on its own
+    HEARTBEAT_INTERVAL_MINUTES schedule, deliberately independent of the search
+    cron jobs: a stopped heartbeat means the worker process/scheduler itself
+    died or wedged, not merely that automated search is disabled or between
+    runs. Failures here are logged but never allowed to crash the scheduler.
+    """
+    path = _heartbeat_path()
+    try:
+        with open(path, "w") as f:
+            f.write(str(int(time.time())))
+    except OSError:
+        log.exception("could not write heartbeat file at %s", path)
 
 
 def _resolve_timezone():
@@ -347,9 +375,21 @@ def main():
                                   minute="0", timezone=tz),
                       id="weekly_review", max_instances=1, coalesce=True)
 
-    log.info("scheduler up (tz=%s via %s, weekdays=%s, weekends=%s, followup=%s:00, review=Mon %s:00). Jobs: %s",
+    # Heartbeat — proves the scheduler process itself is alive, independent of
+    # whether search/AI features are enabled or due to run. Backs the Docker
+    # healthcheck (docker-compose.yml) and the in-app staleness warning.
+    heartbeat_minutes = max(1, int(os.environ.get("HEARTBEAT_INTERVAL_MINUTES", "5")))
+    sched.add_job(_touch_heartbeat, "interval", minutes=heartbeat_minutes,
+                  id="heartbeat", max_instances=1, coalesce=True)
+
+    log.info("scheduler up (tz=%s via %s, weekdays=%s, weekends=%s, followup=%s:00, review=Mon %s:00, "
+             "heartbeat=%sm). Jobs: %s",
              tz, tz_source, weekday_hours, weekend_hours, followup_hour, weekly_review_hour,
-             [str(j.trigger) for j in sched.get_jobs()])
+             heartbeat_minutes, [str(j.trigger) for j in sched.get_jobs()])
+
+    # Write one heartbeat immediately so the healthcheck passes during
+    # start_period without waiting for the first interval tick.
+    _touch_heartbeat()
 
     if os.environ.get("RUN_ON_START") == "1":
         _run()

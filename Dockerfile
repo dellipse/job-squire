@@ -37,6 +37,15 @@ USER appuser
 VOLUME ["/data"]
 EXPOSE 8000
 
+# Baseline healthcheck for the default (web) role, so a wedged/crashed container
+# is detectable even outside docker-compose (e.g. `docker run` directly, or an
+# orchestrator that only reads image-level HEALTHCHECK). docker-compose.yml
+# already sets an equivalent check explicitly for clarity; the worker and MCP
+# services override this with their own compose-level healthcheck (the worker
+# has no HTTP endpoint, and MCP listens on a different port).
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
+
 # 2 workers is plenty for two users. Bind to all interfaces inside the container.
 CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "2", "--timeout", "60", \
      "--access-logfile", "-", "--error-logfile", "-", "wsgi:app"]

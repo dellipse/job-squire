@@ -11,6 +11,20 @@ footer as `<VERSION>-<build-sha>`.
 ### Added
 
 - `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, and this changelog.
+- Docker `HEALTHCHECK` in the Dockerfile (baseline for the web role), plus
+  `healthcheck:` blocks for `job-squire-worker` and `job-squire-mcp` in both
+  compose files. The worker has no HTTP endpoint, so it's checked via a new
+  heartbeat file (`DATA_DIR/.worker_heartbeat`, touched every
+  `HEARTBEAT_INTERVAL_MINUTES`, default 5) that's independent of the search
+  schedule — a stale heartbeat means the process died or wedged, not that
+  search is merely idle. The same signal is now surfaced in-app (Dashboard
+  banner + Settings → History tab), not just `docker ps`.
+- `docs/backup-restore.md`, `scripts/backup.sh`, and `scripts/restore.sh`: a
+  WAL-safe hot-backup procedure (SQLite's Online Backup API via stdlib
+  `sqlite3`, with an integrity check before the archive is written) plus a
+  tested restore procedure and post-restore verification checklist. Replaces
+  the untested "just tar the data folder" note in `.env.example`/
+  `deployment.md`, which could produce an inconsistent snapshot under WAL mode.
 
 ### Fixed
 
