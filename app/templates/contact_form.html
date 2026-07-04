@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit' if mode=='edit' else 'Add' }} contact · JobSquire{% endblock %}
+{% block content %}
+<h1>{{ 'Edit contact' if mode=='edit' else 'Add contact' }}</h1>
+
+<form method="post" class="card form" novalidate
+      action="{{ url_for('main.contact_edit', contact_id=contact.id) if mode=='edit' else url_for('main.contact_new') }}">
+  {{ form.hidden_tag() }}
+  <div class="form-grid">
+    <div class="field">{{ form.name.label }} {{ form.name() }}</div>
+    <div class="field">{{ form.contact_type.label }} {{ form.contact_type() }}</div>
+    <div class="field">{{ form.title.label }} {{ form.title() }}</div>
+    <div class="field">{{ form.agency.label }} {{ form.agency() }}</div>
+    <div class="field">{{ form.email.label }} {{ form.email() }}</div>
+    <div class="field">{{ form.phone.label }} {{ form.phone() }}</div>
+    <div class="field field-wide">{{ form.linkedin_url.label }} {{ form.linkedin_url() }}</div>
+    <div class="field">{{ form.last_contacted.label }} {{ form.last_contacted() }}</div>
+    <div class="field">{{ form.follow_up_date.label }} {{ form.follow_up_date() }}</div>
+    <div class="field field-wide">{{ form.notes.label }} {{ form.notes(rows=4) }}</div>
+  </div>
+  {% for field in form %}
+    {% if field.errors %}{% for e in field.errors %}<p class="err">{{ field.label.text }}: {{ e }}</p>{% endfor %}{% endif %}
+  {% endfor %}
+  <div class="actions">
+    {{ form.submit(class="btn btn-primary") }}
+    <a class="btn btn-outline" href="{{ url_for('main.contact_detail', contact_id=contact.id) if mode=='edit' else url_for('main.contacts_list') }}">Cancel</a>
+  </div>
+</form>
+{% endblock %}

@@ -1,0 +1,231 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · JobSquire{% endblock %}
+{% block content %}
+<h1>Dashboard</h1>
+
+{% if unscored_count > 0 or overdue_followup_count > 0 or unkitted_count > 0 or stale_saved_count > 0 or stale_active_count > 0 or worker_stale %}
+<section class="card routine-status-widget">
+  <div class="card-head">
+    <h2>Daily routine status</h2>
+    <a class="btn btn-outline" href="{{ url_for('main.setup') }}">Manage routines</a>
+  </div>
+  <p class="muted small">Your Claude Pro routines handle these automatically. This shows what is waiting to be processed.</p>
+  <div class="routine-status-grid">
+    {% if worker_stale %}
+    <div class="routine-status-item stale">
+      <span class="routine-status-num stale-num">!</span>
+      <div>
+        <strong>Automated search worker isn't responding</strong>
+        <span class="muted small">
+          {% if worker_last_seen %}Last heartbeat {{ worker_last_seen | local_dt }} — the
+          job-squire-worker container may have crashed or hung.{% else %}No heartbeat seen yet —
+          the job-squire-worker container may not be running.{% endif %}
+          Check <code>docker logs job-squire-worker</code>.
+        </span>
+      </div>
+      <a class="btn btn-sm btn-outline" href="{{ url_for('main.settings', _anchor='tab-history') }}">View history ↗</a>
+    </div>
+    {% endif %}
+    {% if unscored_count > 0 %}
+    <div class="routine-status-item pending">
+      <span class="routine-status-num">{{ unscored_count }}</span>
+      <div>
+        <strong>Saved jobs need scoring</strong>
+        <span class="muted small">New Job Triage routine will score these for fit</span>
+      </div>
+      {% if claude_buttons_enabled %}
+      <a class="btn btn-sm btn-outline" href="{{ url_for('main.settings', _anchor='feature-triage') }}">Run now ↗</a>
+      {% endif %}
+    </div>
+    {% endif %}
+    {% if overdue_followup_count > 0 %}
+    <div class="routine-status-item pending">
+      <span class="routine-status-num">{{ overdue_followup_count }}</span>
+      <div>
+        <strong>Follow-ups overdue</strong>
+        <span class="muted small">Follow-Up Drafts routine will write emails for these</span>
+      </div>
+      {% if claude_buttons_enabled %}
+      <a class="btn btn-sm btn-outline" href="{{ url_for('main.settings', _anchor='feature-followup') }}">Run now ↗</a>
+      {% endif %}
+    </div>
+    {% endif %}
+    {% if unkitted_count > 0 %}
+    <div class="routine-status-item pending">
+      <span class="routine-status-num">{{ unkitted_count }}</span>
+      <div>
+        <strong>Applied jobs without kits</strong>
+        <span class="muted small">Application Kit Queue routine will build these</span>
+      </div>
+      {% if ai_mode == 'api' %}
+      <a class="btn btn-sm btn-primary" href="{{ url_for('main.kit_batch') }}">Build kits ↗</a>
+      {% else %}
+      <a class="btn btn-sm btn-outline" href="{{ url_for('main.jobs_list', status='unkitted') }}">View jobs ↗</a>
+      {% endif %}
+    </div>
+    {% endif %}
+    {% if stale_saved_count > 0 %}
+    <div class="routine-status-item stale">
+      <span class="routine-status-num stale-num">{{ stale_saved_count }}</span>
+      <div>
+        <strong>Saved leads have gone stale</strong>
+        <span class="muted small">Added 14+ days ago — postings may have expired. Review or withdraw.</span>
+      </div>
+      <a class="btn btn-sm btn-outline" href="{{ url_for('main.jobs_list', status='stale') }}">Review ↗</a>
+    </div>
+    {% endif %}
+    {% if stale_active_count > 0 %}
+    <div class="routine-status-item stale">
+      <span class="routine-status-num stale-num">{{ stale_active_count }}</span>
+      <div>
+        <strong>Active applications have gone quiet</strong>
+        <span class="muted small">No update in 21+ days — may have been ghosted. Follow up or mark withdrawn.</span>
+      </div>
+      <a class="btn btn-sm btn-outline" href="{{ url_for('main.jobs_list', status='stale') }}">Review ↗</a>
+    </div>
+    {% endif %}
+  </div>
+</section>
+{% endif %}
+
+<div class="metrics">
+  <div class="metric"><span class="num">{{ metrics.active }}</span><span class="lbl">Active</span></div>
+  <div class="metric"><span class="num">{{ metrics.applied }}</span><span class="lbl">Applied</span></div>
+  <div class="metric"><span class="num">{{ metrics.reached_interview }}</span><span class="lbl">Reached interview</span></div>
+  <div class="metric"><span class="num">{{ metrics.offers }}</span><span class="lbl">Offers</span></div>
+  <div class="metric"><span class="num">{{ metrics.interview_rate }}%</span><span class="lbl">Applied → interview</span></div>
+  <div class="metric"><span class="num">{{ metrics.offer_rate }}%</span><span class="lbl">Applied → offer</span></div>
+  <div class="metric"><span class="num">{{ metrics.contacts }}</span><span class="lbl">Recruiters</span></div>
+  <div class="metric"><span class="num">{{ metrics.open_submissions }}</span><span class="lbl">Open submissions</span></div>
+</div>
+
+<div class="grid-2">
+  <section class="card">
+    <h2>Pipeline</h2>
+    {% set maxc = (counts.values() | max) or 1 %}
+    <table class="pipeline">
+      {% for s in statuses %}
+      <tr>
+        <td class="pl-status"><a href="{{ url_for('main.jobs_list', status=s) }}">{{ s }}</a></td>
+        <td class="pl-bar"><span class="bar" style="width: {{ (counts[s] / maxc * 100) | round(0, 'floor') }}%"></span></td>
+        <td class="pl-count">{{ counts[s] }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </section>
+
+  <section class="card">
+    <h2>Follow-ups due</h2>
+    {% if follow_ups %}
+      <ul class="followups">
+        {% for j in follow_ups %}
+        <li>
+          <a href="{{ url_for('main.job_detail', job_id=j.id) }}">{{ j.title }} — {{ j.company }}</a>
+          <span class="due">{{ j.follow_up_date }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="muted">Nothing due. Set follow-up dates on active applications to get nudges here.</p>
+    {% endif %}
+  </section>
+</div>
+
+<div class="grid-2">
+  <section class="card">
+    <div class="card-head">
+      <h2>Recruiter follow-ups due</h2>
+      <a class="btn btn-outline" href="{{ url_for('main.contacts_list') }}">All recruiters</a>
+    </div>
+    {% if contact_follow_ups %}
+      <ul class="followups">
+        {% for c in contact_follow_ups %}
+        <li>
+          <a href="{{ url_for('main.contact_detail', contact_id=c.id) }}">{{ c.name }}{% if c.agency %} — {{ c.agency }}{% endif %}</a>
+          <span class="due">{{ c.follow_up_date }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="muted">No recruiter follow-ups due. Track staffing agencies and set follow-up dates to get nudges here.</p>
+    {% endif %}
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>Open submissions</h2>
+      <a class="btn" href="{{ url_for('main.submission_new') }}">+ Log submission</a>
+    </div>
+    {% if open_submissions %}
+      <ul class="followups">
+        {% for s in open_submissions %}
+        <li>
+          <a href="{{ url_for('main.contact_detail', contact_id=s.contact_id) if s.contact_id else url_for('main.contacts_list') }}">{{ s.role_title or 'Role' }}{% if s.company %} — {{ s.company }}{% endif %}</a>
+          <span class="due">{{ s.status }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="muted">No active submissions. When a recruiter puts User forward, log it to track it here.</p>
+    {% endif %}
+  </section>
+</div>
+
+<section class="card">
+  <div class="card-head">
+    <h2>Recent activity</h2>
+    <div class="actions">
+      <a class="btn btn-outline" href="{{ url_for('main.export_csv') }}">Export CSV</a>
+      <a class="btn btn-outline" href="{{ url_for('main.ai_hub') }}">AI analysis</a>
+    </div>
+  </div>
+  {% if recent %}
+  <div class="table-wrap">
+  <table class="list">
+    <thead><tr><th>Company</th><th>Title</th><th>Status</th><th class="mob-hide">Applied</th><th class="mob-hide">Updated</th></tr></thead>
+    <tbody>
+      {% for j in recent %}
+      <tr data-href="{{ url_for('main.job_detail', job_id=j.id) }}">
+        <td>{{ j.company }}</td>
+        <td>{{ j.title }}</td>
+        <td><span class="status s-{{ j.status | replace(' ', '') }}">{{ j.status }}</span></td>
+        <td class="mob-hide">{{ j.date_applied or '—' }}</td>
+        <td class="mob-hide">{{ j.updated_at | local_date }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="muted">No jobs yet. <a href="{{ url_for('main.job_new') }}">Add the first one</a> — including the ones User has already applied to.</p>
+  {% endif %}
+</section>
+
+{% if latest_insight %}
+<section class="card">
+  <h2>Latest AI summary <span class="muted small">({{ latest_insight.created_at | local_date }})</span></h2>
+  <p>{{ latest_insight.summary }}</p>
+  <a href="{{ url_for('main.ai_hub') }}">See full analysis →</a>
+</section>
+{% endif %}
+
+<style>
+.routine-status-widget .routine-status-grid { display: grid; gap: .75rem; margin-top: .5rem; }
+.routine-status-item {
+  display: flex; align-items: center; gap: .75rem;
+  padding: .6rem .8rem; border-radius: 8px;
+  border: 1px solid var(--border, #2a3244);
+}
+.routine-status-item.pending { border-left: 3px solid #ff9800; }
+.routine-status-item.stale  { border-left: 3px solid #7b8cde; }
+.routine-status-num {
+  font-size: 1.8rem; font-weight: 700; color: #ff9800;
+  min-width: 2.5rem; text-align: center;
+}
+.stale-num { color: #7b8cde; }
+.routine-status-item > div { flex: 1; display: flex; flex-direction: column; gap: .1rem; }
+@media (min-width: 700px) {
+  .routine-status-widget .routine-status-grid { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+}
+</style>
+{% endblock %}

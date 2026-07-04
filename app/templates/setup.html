@@ -1,0 +1,337 @@
+{% extends "base.html" %}
+{% block title %}Claude Pro Setup · JobSquire{% endblock %}
+{% block content %}
+<div class="card-head">
+  <h1>Claude Pro Setup</h1>
+  <span class="chip">Automate your job search with Claude</span>
+</div>
+<p class="muted">
+  This page walks you through connecting Claude to your Job Squire instance and setting up five automated
+  daily routines. Once configured, Claude will handle your morning briefing, score new job leads,
+  build application kits, draft follow-up emails, and review your weekly strategy automatically.
+  You just review and act.
+</p>
+
+<!-- -----------------------------------------------------------------------
+     STEP 1: Connect the MCP Connector
+     ----------------------------------------------------------------------- -->
+<section class="card setup-step" id="step-connector">
+  <div class="setup-step-header">
+    <span class="setup-step-num">Step 1</span>
+    <h2>Connect Claude to your Job Squire instance</h2>
+  </div>
+
+  <p>
+    Claude needs a direct connection to your Job Squire instance to read your pipeline and write results
+    back. This uses the "custom connector" feature in Claude Pro. You only need to do this once.
+  </p>
+
+  {% if mcp_configured %}
+  <div class="setup-status ok">
+    <strong>Connector URL is configured.</strong>
+    Your Job Squire instance is accessible at <code>{{ public_mcp_url }}/mcp</code>.
+  </div>
+  {% else %}
+  <div class="setup-status warn">
+    <strong>Connector URL not set.</strong>
+    The <code>PUBLIC_MCP_URL</code> environment variable is not configured on the server.
+    Ask your admin to set it and restart Job Squire.
+    Once set, come back here and the instructions below will include your URL.
+  </div>
+  {% endif %}
+
+  <h3>How to add the connector in Claude Pro</h3>
+  <ol class="setup-list">
+    <li>Open <a href="https://claude.ai" target="_blank" rel="noopener noreferrer">claude.ai</a> and sign in to your Pro account.</li>
+    <li>In the left sidebar, click your profile name, then <strong>Settings</strong>.</li>
+    <li>Click <strong>Connectors</strong> in the settings menu.</li>
+    <li>Click <strong>Add custom connector</strong>.</li>
+    <li>
+      In the <strong>Connector URL</strong> field, enter:
+      <div class="copy-block">
+        <code id="connector-url-text">{{ public_mcp_url ~ '/mcp' if public_mcp_url else '(set PUBLIC_MCP_URL on the server first)' }}</code>
+        {% if public_mcp_url %}
+        <button class="btn btn-sm copy-btn" data-target="connector-url-text">Copy</button>
+        {% endif %}
+      </div>
+    </li>
+    <li>Give it a name. We suggest: <strong>{{ connector }}</strong></li>
+    <li>
+      Click <strong>Connect</strong>. A login page will appear — enter your Job Squire instance
+      username and password (the same ones you use to log in here).
+    </li>
+    <li>Click <strong>Authorize</strong>. Claude is now connected.</li>
+  </ol>
+
+  <div class="setup-note">
+    <strong>Important:</strong> The connector name you choose in step 6 must match the
+    <strong>Connector name</strong> setting on the
+    <a href="{{ url_for('main.settings') }}">Settings page</a>. If you use a different name,
+    update it there so the routine prompts reference it correctly.
+  </div>
+
+  <div style="margin-top:1rem">
+    {% set test_prompt = 'Test my "' ~ connector ~ '" connector by calling list_jobs() and telling me how many jobs are in my Job Squire instance and what statuses they are in.' %}
+    <button class="btn btn-outline open-in-claude-btn"
+            data-prompt="{{ test_prompt | e }}">
+      Test the connection now in Claude ↗
+    </button>
+    <span class="muted small" style="margin-left:.5rem">Opens Claude. If it returns your job counts, the connector is working.</span>
+  </div>
+</section>
+
+<!-- -----------------------------------------------------------------------
+     STEP 2: Set Up Your 5 Daily Routines
+     ----------------------------------------------------------------------- -->
+<section class="card setup-step" id="step-routines">
+  <div class="setup-step-header">
+    <span class="setup-step-num">Step 2</span>
+    <h2>Set up your 5 daily routines</h2>
+  </div>
+
+  <p>
+    Claude Pro includes 5 scheduled task slots. Use them for the routines below. Each card has
+    a ready-to-use prompt and step-by-step setup instructions. The routine does all the work
+    and writes results back to your Job Squire instance automatically.
+  </p>
+
+  <div class="setup-how-to">
+    <details>
+      <summary><strong>How to create a scheduled routine in Claude Pro</strong></summary>
+      <ol class="setup-list" style="margin-top:.75rem">
+        <li>Open <a href="https://claude.ai" target="_blank" rel="noopener noreferrer">claude.ai</a>.</li>
+        <li>In the left sidebar, look for the clock or calendar icon labeled <strong>Scheduled</strong> or a similar label. (If you don't see it, make sure you are on a Pro plan.)</li>
+        <li>Click <strong>New scheduled task</strong> (or the + button).</li>
+        <li>Paste the prompt from one of the routine cards below into the message box.</li>
+        <li>Set the schedule (daily, specific days, specific time).</li>
+        <li>Give the routine a descriptive name so you can tell them apart.</li>
+        <li>Click <strong>Save</strong>. Claude will run it on your schedule from now on.</li>
+      </ol>
+      <p class="muted small">You can also click "Open in Claude" on any card to run the routine right now and test it before scheduling.</p>
+    </details>
+  </div>
+
+  <div class="routine-grid">
+    {% for r in routines %}
+    <div class="routine-card" id="routine-{{ r.slot }}">
+      <div class="routine-card-head">
+        <span class="routine-icon">{{ r.icon }}</span>
+        <div>
+          <strong>Slot {{ r.slot }} — {{ r.title }}</strong>
+          <span class="muted small routine-time">Suggested: {{ r.suggested_time }}</span>
+        </div>
+      </div>
+      <p class="routine-desc">{{ r.description }}</p>
+
+      <div class="routine-prompt-section">
+        <div class="routine-prompt-label">
+          <span class="lbl-inline">Prompt</span>
+          <button class="btn btn-sm copy-btn" data-target="routine-prompt-{{ r.slot }}">Copy</button>
+        </div>
+        <textarea id="routine-prompt-{{ r.slot }}" class="routine-prompt-text select-on-click"
+                  rows="5" readonly>{{ r.prompt }}</textarea>
+      </div>
+
+      <div class="routine-actions">
+        {# open-in-claude-btn opens Claude in a new tab with the prompt pre-filled
+           AND copies the full prompt to clipboard as a fallback for long prompts. #}
+        <button class="btn btn-outline open-in-claude-btn"
+                data-prompt-id="routine-prompt-{{ r.slot }}"
+                data-prompt="{{ r.prompt | e }}">
+          Open in Claude ↗
+        </button>
+        <span class="routine-open-status muted small" id="open-status-{{ r.slot }}"></span>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+
+<!-- -----------------------------------------------------------------------
+     STEP 3: Quick-Apply Bookmarklet
+     ----------------------------------------------------------------------- -->
+<section class="card setup-step" id="step-bookmarklet">
+  <div class="setup-step-header">
+    <span class="setup-step-num">Step 3</span>
+    <h2>Quick-apply bookmarklet</h2>
+  </div>
+
+  <p>
+    Drag the button below to your browser's bookmarks bar. When you find a job posting on
+    Indeed, LinkedIn, ZipRecruiter, or any other site, click the bookmark to instantly open
+    your Job Squire instance with the title, company, and URL already filled in.
+  </p>
+
+  {#
+     The bookmarklet JS:
+       1. Tries to extract job title and company from common job-board DOM patterns.
+       2. Falls back to the page title.
+       3. Opens /jobs/new on THIS Job Squire instance with GET params pre-filled.
+     The Job Squire URL is embedded server-side so the bookmarklet always points here.
+  #}
+  {% set app_origin = request.host_url.rstrip('/') %}
+  {% set bm_js %}javascript:(function(){
+    var title='',company='',loc='',src='bookmarklet';
+    /* ---- Indeed ---- */
+    var jt=document.querySelector('[data-testid="jobsearch-JobInfoHeader-title"],.jobsearch-JobInfoHeader-title,h1.jobTitle');
+    if(jt)title=jt.innerText.trim();
+    var co=document.querySelector('[data-testid="inlineHeader-companyName"] a,[data-testid="inlineHeader-companyName"],div.jobsearch-InlineCompanyRating-companyHeader');
+    if(co)company=co.innerText.split('\n')[0].trim();
+    /* ---- LinkedIn ---- */
+    if(!title){var e=document.querySelector('.job-details-jobs-unified-top-card__job-title h1,.jobs-unified-top-card__job-title h2');if(e)title=e.innerText.trim();}
+    if(!company){var e=document.querySelector('.job-details-jobs-unified-top-card__company-name a,.jobs-unified-top-card__company-name a');if(e)company=e.innerText.trim();}
+    /* ---- ZipRecruiter ---- */
+    if(!title){var e=document.querySelector('h1.job_title,h1[class*="title"]');if(e)title=e.innerText.trim();}
+    if(!company){var e=document.querySelector('a[class*="hiring_company_text"],span[class*="company"]');if(e)company=e.innerText.trim();}
+    /* ---- Generic fallback from page title ---- */
+    if(!title&&!company){
+      var t=document.title.replace(/\s*[\|·\-–]\s*/g,'|').split('|');
+      if(t.length>=2){title=t[0].trim();company=t[1].trim();}else{title=document.title.trim();}
+    }
+    var loc_el=document.querySelector('[data-testid="job-location"],.jobsearch-JobInfoHeader-subtitle span,.jobs-unified-top-card__bullet');
+    if(loc_el)loc=loc_el.innerText.trim();
+    var p=new URLSearchParams({title:title,company:company,location:loc,url:window.location.href,source:src});
+    window.open('{{ app_origin }}/jobs/new?'+p.toString(),'_blank');
+  })();{% endset %}
+
+  <div class="bm-drag-area">
+    <a class="btn btn-primary bm-link"
+       href="{{ bm_js | replace('\n', ' ') | replace('  ', ' ') }}"
+       onclick="return false;"
+       title="Drag this to your bookmarks bar">
+      + Add to JobSquire
+    </a>
+    <span class="muted small" style="margin-left:.75rem">← Drag this to your bookmarks bar</span>
+  </div>
+
+  <div class="setup-note" style="margin-top:1rem">
+    <strong>How to use:</strong> Browse to any job posting, then click the bookmark.
+    Your Job Squire instance opens in a new tab with the form pre-filled. Review the details,
+    adjust the status if needed, and click Save.
+  </div>
+
+  <h3 style="margin-top:1.25rem">Works best on</h3>
+  <ul class="setup-list">
+    <li>Indeed — extracts title and company automatically</li>
+    <li>LinkedIn Jobs — extracts title and company automatically</li>
+    <li>ZipRecruiter — extracts title and company automatically</li>
+    <li>Any other site — falls back to the page title; you can edit before saving</li>
+  </ul>
+</section>
+
+<!-- -----------------------------------------------------------------------
+     STEP 4: Per-Job Actions
+     ----------------------------------------------------------------------- -->
+<section class="card setup-step" id="step-perjob">
+  <div class="setup-step-header">
+    <span class="setup-step-num">Step 4</span>
+    <h2>Per-job Claude actions</h2>
+  </div>
+  <p>
+    Beyond the daily routines, each job record in your Job Squire instance has direct "Open in Claude"
+    buttons for one-off actions: building an interview prep guide, drafting a follow-up email,
+    or getting an immediate fit score on a specific posting. Look for these buttons on each
+    job's detail page.
+  </p>
+  <p class="muted small">
+    These buttons only appear when your connector URL is configured and the AI mode is set to
+    <strong>mcp</strong> on the <a href="{{ url_for('main.settings') }}">Settings page</a>.
+  </p>
+  <div class="setup-perjob-list">
+    <div class="perjob-item">
+      <strong>Build Application Kit</strong>
+      <span class="muted">Tailored resume bullets, cover letter, application email, and follow-up emails for one job.</span>
+    </div>
+    <div class="perjob-item">
+      <strong>Prep for Interview</strong>
+      <span class="muted">Likely questions, STAR story mappings from your experience, and things to research.</span>
+    </div>
+    <div class="perjob-item">
+      <strong>Draft Follow-Up Email</strong>
+      <span class="muted">A ready-to-send follow-up email appropriate to where you are in the process.</span>
+    </div>
+    <div class="perjob-item">
+      <strong>Score This Job</strong>
+      <span class="muted">An immediate 1-10 fit score with reasoning, saved back to the job record.</span>
+    </div>
+  </div>
+</section>
+
+<style>
+.setup-step { margin-bottom: 2rem; }
+.setup-step-header { display: flex; align-items: baseline; gap: .75rem; margin-bottom: .75rem; }
+.setup-step-num {
+  background: var(--accent, #6c4beb); color: #fff;
+  padding: .2rem .6rem; border-radius: 4px; font-size: .8rem; font-weight: 700;
+  white-space: nowrap;
+}
+.setup-step h2 { margin: 0; }
+.setup-list { padding-left: 1.5rem; }
+.setup-list li { margin-bottom: .5rem; }
+.copy-block {
+  display: flex; align-items: center; gap: .5rem;
+  background: var(--bg-subtle, #1e2530); padding: .5rem .75rem;
+  border-radius: 6px; margin: .4rem 0; font-family: monospace; font-size: .9rem;
+}
+.copy-block code { flex: 1; word-break: break-all; }
+.setup-note {
+  background: var(--bg-subtle, #1e2530); border-left: 3px solid var(--accent, #6c4beb);
+  padding: .6rem .9rem; border-radius: 0 6px 6px 0; margin-top: 1rem; font-size: .9rem;
+}
+.setup-status {
+  padding: .6rem .9rem; border-radius: 6px; margin: .75rem 0; font-size: .9rem;
+}
+.setup-status.ok { background: #1a3a1a; border-left: 3px solid #4caf50; }
+.setup-status.warn { background: #3a2a10; border-left: 3px solid #ff9800; }
+.setup-how-to { margin-bottom: 1.25rem; }
+.setup-how-to summary { cursor: pointer; color: var(--accent, #6c4beb); }
+
+.routine-grid { display: grid; gap: 1.25rem; }
+.routine-card {
+  border: 1px solid var(--border, #2a3244);
+  border-radius: 8px; padding: 1.25rem; background: var(--bg-subtle, #1e2530);
+}
+.routine-card-head {
+  display: flex; align-items: flex-start; gap: .75rem; margin-bottom: .6rem;
+}
+.routine-icon { font-size: 1.6rem; line-height: 1; }
+.routine-time { display: block; }
+.routine-desc { font-size: .95rem; color: var(--text-muted, #8899aa); margin-bottom: .75rem; }
+.routine-prompt-section { margin-bottom: .75rem; }
+.routine-prompt-label {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: .3rem;
+}
+.routine-prompt-text {
+  width: 100%; font-family: monospace; font-size: .82rem;
+  background: var(--bg, #0f1419); border: 1px solid var(--border, #2a3244);
+  border-radius: 6px; padding: .5rem .6rem; color: var(--text, #e0e0e0);
+  resize: vertical;
+}
+.routine-actions { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: .5rem; }
+.btn-sm { padding: .25rem .6rem; font-size: .8rem; }
+
+.setup-perjob-list { display: grid; gap: .75rem; margin-top: .5rem; }
+
+/* Bookmarklet drag area */
+.bm-drag-area {
+  display: flex; align-items: center; flex-wrap: wrap;
+  gap: .5rem; margin: 1rem 0;
+  padding: 1rem; border: 2px dashed var(--accent, #6c4beb);
+  border-radius: 8px; background: var(--bg-subtle, #1e2530);
+}
+.bm-link {
+  cursor: grab; user-select: none; white-space: nowrap;
+  font-size: 1rem;
+}
+.bm-link:active { cursor: grabbing; }
+.perjob-item { display: flex; flex-direction: column; gap: .15rem; padding: .6rem .8rem;
+               border: 1px solid var(--border, #2a3244); border-radius: 6px; }
+.perjob-item strong { font-size: .95rem; }
+
+@media (min-width: 800px) {
+  .routine-grid { grid-template-columns: 1fr 1fr; }
+  .setup-perjob-list { grid-template-columns: 1fr 1fr; }
+}
+</style>
+{% endblock %}

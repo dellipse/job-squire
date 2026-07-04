@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit' if mode=='edit' else 'Log' }} submission · JobSquire{% endblock %}
+{% block content %}
+<h1>{{ 'Edit submission' if mode=='edit' else 'Log a submission' }}</h1>
+<p class="muted">Record that a recruiter or agency put User forward for a specific role. Link a tracked job if there is one; otherwise just type the company and role.</p>
+
+<form method="post" class="card form" novalidate
+      action="{{ url_for('main.submission_edit', sub_id=submission.id) if mode=='edit' else url_for('main.submission_new') }}">
+  {{ form.hidden_tag() }}
+  <div class="form-grid">
+    <div class="field">{{ form.contact_id.label }} {{ form.contact_id() }}</div>
+    <div class="field">{{ form.status.label }} {{ form.status() }}</div>
+    <div class="field">{{ form.company.label }} {{ form.company() }}</div>
+    <div class="field">{{ form.role_title.label }} {{ form.role_title() }}</div>
+    <div class="field field-wide">
+      {{ form.job_id.label }}
+      <div class="job-picker">
+        <input type="hidden" name="job_id" id="job_id" value="{{ form.job_id.data or '' }}">
+        <input class="job-picker-search" type="text" autocomplete="off" spellcheck="false"
+               placeholder="Type company or title to filter…">
+        <ul class="job-picker-list" role="listbox" hidden>
+          {% for val, label in form.job_id.choices %}{% if val %}
+          <li role="option" data-value="{{ val }}">
+            {% set parts = label.split(' — ', 1) %}
+            <span class="jpc-company">{{ parts[0] }}</span>
+            <span class="jpc-meta">{{ parts[1] if parts|length > 1 else '' }}</span>
+          </li>
+          {% endif %}{% endfor %}
+        </ul>
+        <div class="job-picker-selected" hidden>
+          <span class="jpc-selected-text"></span>
+          <button type="button" class="job-picker-clear-btn" aria-label="Clear selection">&times;</button>
+        </div>
+      </div>
+    </div>
+    <div class="field">{{ form.submitted_date.label }} {{ form.submitted_date() }}</div>
+    <div class="field">{{ form.follow_up_date.label }} {{ form.follow_up_date() }}</div>
+    <div class="field field-wide">{{ form.notes.label }} {{ form.notes(rows=4) }}</div>
+  </div>
+  {% for field in form %}
+    {% if field.errors %}{% for e in field.errors %}<p class="err">{{ field.label.text }}: {{ e }}</p>{% endfor %}{% endif %}
+  {% endfor %}
+  <div class="actions">
+    {{ form.submit(class="btn btn-primary") }}
+    <a class="btn btn-outline" href="{{ url_for('main.contacts_list') }}">Cancel</a>
+  </div>
+</form>
+{% endblock %}

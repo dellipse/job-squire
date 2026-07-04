@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}User guide · JobSquire{% endblock %}
+{% block content %}
+<div class="card-head">
+  <h1>User guide</h1>
+  <div class="actions">
+    <a class="btn btn-outline" href="{{ url_for('main.dashboard') }}">Back to dashboard</a>
+  </div>
+</div>
+
+{% if guide_html %}
+<article class="card markdown-body">
+  {{ guide_html | safe }}
+</article>
+{% else %}
+<p class="muted">The user guide could not be loaded. It should be deployed alongside the app as <code>docs/Job_Squire_User_Guide.md</code>.</p>
+{% endif %}
+{% endblock %}

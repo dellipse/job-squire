@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block title %}Triage Batch · JobSquire{% endblock %}
+{% block content %}
+<h1>Triage Batch</h1>
+<p class="muted small">
+  Scores unscored "Saved" jobs in batches of 20. Pick a provider, run a batch, review the scores, then continue.
+</p>
+
+{% if run_id %}
+{# ── Live run view — polls for log output, then reveals results ── #}
+<div id="triage-run-root"
+     data-poll-url="{{ poll_url }}"
+     data-job-url-base="/jobs/"
+     data-next-action="{{ url_for('main.triage_batch') }}">
+
+  {# Live log box — always visible while running #}
+  <section class="card" style="margin-bottom:1.25rem">
+    <div class="card-head">
+      <h2>
+        <span id="tr-spinner" class="ts-spinner" aria-hidden="true"></span>
+        <span id="tr-heading-text">Running batch&hellip;</span>
+      </h2>
+      <span id="tr-run-summary" class="muted small">Starting&hellip;</span>
+    </div>
+    <div id="tr-log-box" class="task-log-box" aria-live="polite" aria-label="Task log"></div>
+  </section>
+
+  {# Results table — hidden, populated + revealed by JS when done #}
+  <section class="card" id="tr-results-card" style="display:none;margin-bottom:1.25rem">
+    <div class="card-head">
+      <h2>Batch results</h2>
+      <span id="tr-result-meta" class="muted small"></span>
+    </div>
+    <table class="table" style="margin-top:.5rem">
+      <thead>
+        <tr>
+          <th>Score</th>
+          <th>Title</th>
+          <th>Company</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="tr-result-body"></tbody>
+    </table>
+  </section>
+
+  {# Next batch form — hidden, offset updated + revealed by JS if jobs remain #}
+  <section class="card" id="tr-next-card" style="display:none">
+    <div class="card-head">
+      <h2>Next batch</h2>
+      <span id="tr-remaining-label" class="muted small"></span>
+    </div>
+    <form method="post" action="{{ url_for('main.triage_batch') }}" class="form" style="margin-top:.75rem">
+      {{ confirm_form.hidden_tag() }}
+      <input type="hidden" name="offset" id="tr-next-offset" value="0">
+      <div class="form-grid" style="grid-template-columns:1fr auto;align-items:flex-end;gap:1rem">
+        <div class="field">
+          <label>Provider</label>
+          <select name="provider_id">
+            <option value="">Ranked chain (use task settings)</option>
+            {% for p in providers %}
+            <option value="{{ p.id }}">
+              {{ p.display_name }}{% if p.triage_model %} &mdash; {{ p.triage_model }}{% elif p.model %} &mdash; {{ p.model }}{% endif %}
+            </option>
+            {% endfor %}
+          </select>
+          <span class="muted small">Choose a specific provider to override task settings for this batch.</span>
+        </div>
+        <div class="field">
+          <button type="submit" class="btn btn-primary">Run next 20 &rarr;</button>
+        </div>
+      </div>
+    </form>
+  </section>
+
+  {# All done card — hidden, revealed by JS when no jobs remain #}
+  <div class="card" id="tr-all-done-card" style="display:none;text-align:center;padding:1.5rem">
+    <p style="font-size:1.1rem;margin:0">All done &mdash; no more unscored jobs.</p>
+    <a class="btn btn-outline" href="{{ url_for('main.jobs_list', status='Saved') }}" style="margin-top:.75rem">View Saved jobs</a>
+  </div>
+
+</div>
+
+{% elif total_remaining == 0 %}
+{# ── All caught up ── #}
+<div class="card" style="text-align:center;padding:2rem">
+  <p style="font-size:1.25rem">All caught up &mdash; no unscored Saved jobs.</p>
+  <a class="btn btn-outline" href="{{ url_for('main.jobs_list', status='Saved') }}">View Saved jobs</a>
+</div>
+
+{% else %}
+{# ── Initial form ── #}
+<section class="card">
+  <div class="card-head">
+    <h2>Run batch</h2>
+    <span class="muted small">{{ total_remaining }} unscored job{{ 's' if total_remaining != 1 }} remaining</span>
+  </div>
+  <form method="post" action="{{ url_for('main.triage_batch') }}" class="form" style="margin-top:.75rem">
+    {{ confirm_form.hidden_tag() }}
+    <input type="hidden" name="offset" value="0">
+    <div class="form-grid" style="grid-template-columns:1fr auto;align-items:flex-end;gap:1rem">
+      <div class="field">
+        <label>Provider</label>
+        <select name="provider_id">
+          <option value="">Ranked chain (use task settings)</option>
+          {% for p in providers %}
+          <option value="{{ p.id }}">
+            {{ p.display_name }}{% if p.triage_model %} &mdash; {{ p.triage_model }}{% elif p.model %} &mdash; {{ p.model }}{% endif %}
+          </option>
+          {% endfor %}
+        </select>
+        <span class="muted small">Choose a specific provider to override task settings for this batch.</span>
+      </div>
+      <div class="field">
+        <button type="submit" class="btn btn-primary">Run next 20 &rarr;</button>
+      </div>
+    </div>
+  </form>
+</section>
+{% endif %}
+
+<p style="margin-top:1.5rem">
+  <a href="{{ url_for('main.dashboard') }}">&larr; Back to Dashboard</a>
+</p>
+{% endblock %}

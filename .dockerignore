@@ -1,0 +1,11 @@
+.git
+.gitignore
+.env
+*.pyc
+__pycache__/
+data/
+*.sqlite
+*.db
+.DS_Store
+README.md
+deploy/

@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit' if mode=='edit' else 'Add' }} job · JobSquire{% endblock %}
+{% block content %}
+<h1>{{ 'Edit job' if mode=='edit' else 'Add job' }}</h1>
+
+<form method="post" class="card form" novalidate
+      action="{{ url_for('main.job_edit', job_id=job.id) if mode=='edit' else url_for('main.job_new') }}">
+  {{ form.hidden_tag() }}
+  <div class="form-grid">
+    <div class="field">{{ form.company.label }} {{ form.company() }}</div>
+    <div class="field">{{ form.title.label }} {{ form.title() }}</div>
+    <div class="field">{{ form.location.label }} {{ form.location() }}</div>
+    <div class="field">{{ form.work_mode.label }} {{ form.work_mode() }}</div>
+    <div class="field">{{ form.status.label }} {{ form.status() }}</div>
+    <div class="field">{{ form.source.label }} {{ form.source() }}</div>
+    <div class="field field-wide">{{ form.url.label }} {{ form.url() }}</div>
+    <div class="field">{{ form.salary.label }} {{ form.salary() }}</div>
+    <div class="field">{{ form.date_applied.label }} {{ form.date_applied() }}</div>
+    <div class="field">{{ form.follow_up_date.label }} {{ form.follow_up_date() }}</div>
+    <div class="field">{{ form.contact_name.label }} {{ form.contact_name() }}</div>
+    <div class="field">{{ form.contact_email.label }} {{ form.contact_email() }}</div>
+    <div class="field field-wide">{{ form.notes.label }} {{ form.notes(rows=4) }}</div>
+  </div>
+  {% for field in form %}
+    {% if field.errors %}{% for e in field.errors %}<p class="err">{{ field.label.text }}: {{ e }}</p>{% endfor %}{% endif %}
+  {% endfor %}
+  <div class="actions">
+    {{ form.submit(class="btn btn-primary") }}
+    <a class="btn btn-outline" href="{{ url_for('main.job_detail', job_id=job.id) if mode=='edit' else url_for('main.jobs_list') }}">Cancel</a>
+  </div>
+</form>
+{% endblock %}

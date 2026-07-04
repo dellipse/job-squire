@@ -1,0 +1,68 @@
+<!--
+  Copyright (C) 2026 D. Brandmeyer
+  This program is free software: you can redistribute it and/or modify
+  it under the terms of the GNU Affero General Public License as
+  published by the Free Software Foundation, either version 3 of the
+  License, or (at your option) any later version.
+  This program is distributed in the hope that it will be useful,
+  but WITHOUT ANY WARRANTY; without even the implied warranty of
+  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+  GNU Affero General Public License for more details.
+  You should have received a copy of the GNU Affero General Public License
+  along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+-->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0f1419">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>{% block title %}JobSquire{% endblock %}</title>
+  <script src="{{ url_for('static', filename='theme-init.js') }}"></script>
+  <link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon.png') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+{% if current_user.is_authenticated %}
+<header class="topbar">
+  <a class="brand" href="{{ url_for('main.dashboard') }}">
+    <img src="{{ url_for('static', filename='JobSquire-Logo-DarkTheme-transparent-500.png') }}" alt="JobSquire" class="brand-logo theme-dark">
+    <img src="{{ url_for('static', filename='JobSquire-Logo-LightTheme-transparent-500.png') }}" alt="JobSquire" class="brand-logo theme-light">
+  </a>
+  <nav id="main-nav">
+    <a href="{{ url_for('main.dashboard') }}">Dashboard</a>
+    <a href="{{ url_for('main.jobs_list') }}">Jobs</a>
+    <a href="{{ url_for('main.timeline') }}">Timeline</a>
+    <a href="{{ url_for('main.contacts_list') }}">Recruiters</a>
+    <a href="{{ url_for('main.kit_hub') }}">Application kit</a>
+    <a href="{{ url_for('main.ai_hub') }}">AI analysis</a>
+    {% if current_user.is_admin %}<a href="{{ url_for('main.settings') }}">Settings</a>{% endif %}
+    <a href="{{ url_for('main.user_guide') }}">Guide</a>
+  </nav>
+  <div class="user">
+    <a class="who" href="{{ url_for('auth.account') }}">{{ current_user.display_name or current_user.username }}{% if current_user.is_admin %} <span class="badge admin">admin</span>{% endif %}</a>
+    <button id="theme-toggle" class="theme-toggle" aria-label="Toggle theme">&#9681;</button>
+    <a class="signout" href="{{ url_for('auth.logout') }}">Sign out</a>
+  </div>
+  <button class="nav-toggle" id="nav-toggle" aria-label="Open menu" aria-expanded="false">&#9776;</button>
+</header>
+{% endif %}
+
+<main class="container {% block container_class %}{% endblock %}">
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      {% for category, message in messages %}
+        <div class="flash flash-{{ category }}">{{ message }}</div>
+      {% endfor %}
+    {% endif %}
+  {% endwith %}
+  {% block content %}{% endblock %}
+</main>
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+<footer class="app-footer">
+  <span class="muted small">JobSquire &nbsp;&middot;&nbsp; {{ build_version }} &nbsp;&middot;&nbsp; &copy; {{ build_year }} &nbsp;&middot;&nbsp; <a class="muted small" href="https://github.com/dellipse/job-squire" target="_blank" rel="noopener">Source</a></span>
+</footer>
+</body>
+</html>
