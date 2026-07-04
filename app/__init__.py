@@ -326,16 +326,19 @@ def _run_migrations():
         db.session.execute(text(
             "UPDATE ai_config SET api_enabled=1 WHERE mode='api' AND api_enabled=0"
         ))
-        db.session.execute(text(
-            "UPDATE ai_config SET mcp_enabled=1 WHERE mode='mcp' AND mcp_enabled=0"
-        ))
         # claude_buttons_enabled: only bootstrap for old MCP deployments that have NOT
         # yet had mcp_enabled set (mcp_enabled=0 is the sentinel that this is the first
         # boot after the migration added this column).  Once mcp_enabled=1, the user owns
         # claude_buttons_enabled independently — never reset it on restart.
+        # IMPORTANT: this must run BEFORE the mcp_enabled flip below, which would
+        # otherwise clear the mcp_enabled=0 sentinel in the same transaction and
+        # leave this bootstrap permanently dead.
         db.session.execute(text(
             "UPDATE ai_config SET claude_buttons_enabled=1"
             " WHERE mode='mcp' AND mcp_enabled=0 AND claude_buttons_enabled=0"
+        ))
+        db.session.execute(text(
+            "UPDATE ai_config SET mcp_enabled=1 WHERE mode='mcp' AND mcp_enabled=0"
         ))
         db.session.commit()
     except Exception as e:  # noqa: BLE001

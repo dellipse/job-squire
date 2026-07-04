@@ -1,0 +1,38 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run tests with coverage
+        # The test suite is self-contained: tests/conftest.py sets SECRET_KEY,
+        # a temp DATA_DIR, and seed passwords itself, so no secrets are needed.
+        run: >
+          pytest
+          --cov=app.crypto --cov=app.auth --cov=app
+          --cov-report=term-missing
+          --cov-fail-under=0
+        # NOTE: --cov-fail-under is 0 for this first test pass, which covers the
+        # crypto, auth, and migration layers. Raise the floor as coverage of the
+        # remaining modules (mcp_server, providers, search, ai) is added.

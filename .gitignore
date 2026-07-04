@@ -4,6 +4,10 @@ data/
 __pycache__/
 *.pyc
 .venv/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
 CLAUDE.md
 AGENTS.md
 .DS_Store
