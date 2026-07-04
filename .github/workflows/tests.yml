@@ -25,14 +25,23 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
 
-      - name: Run tests with coverage
+      - name: Run tests under coverage
         # The test suite is self-contained: tests/conftest.py sets SECRET_KEY,
         # a temp DATA_DIR, and seed passwords itself, so no secrets are needed.
+        run: coverage run --source=app -m pytest -q
+
+      - name: Coverage report
+        run: coverage report --show-missing
+
+      - name: Enforce overall coverage floor
+        # Ratchet: raise this as coverage of the remaining modules (ai, main,
+        # worker, notify, websearch) is added. Measured 35% at this pass.
+        run: coverage report --fail-under=33
+
+      - name: Enforce critical-module coverage floor
+        # The security- and correctness-critical surfaces carry a higher bar:
+        # crypto + auth are fully covered; mcp_server (the public OAuth server),
+        # providers, and search sit well above this floor. Measured 61%.
         run: >
-          pytest
-          --cov=app.crypto --cov=app.auth --cov=app
-          --cov-report=term-missing
-          --cov-fail-under=0
-        # NOTE: --cov-fail-under is 0 for this first test pass, which covers the
-        # crypto, auth, and migration layers. Raise the floor as coverage of the
-        # remaining modules (mcp_server, providers, search, ai) is added.
+          coverage report --fail-under=58
+          --include="app/crypto.py,app/auth.py,app/mcp_server.py,app/providers.py,app/search.py"
