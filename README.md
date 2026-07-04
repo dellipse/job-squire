@@ -10,7 +10,7 @@
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL%203.0-blue.svg)](LICENSE.md)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/)
-[![Docker](https://img.shields.io/badge/docker-ghcr.io%2Fdellipse%2Fjob--Job Squire-blue)](https://github.com/dellipse/job-squire/pkgs/container/job-squire)
+[![Docker](https://img.shields.io/badge/docker-ghcr.io%2Fdellipse%2Fjob--squire-blue)](https://github.com/dellipse/job-squire/pkgs/container/job-squire)
 
 A self-hosted, two-user job-search assistant built with Flask + SQLite, packaged as a single Docker image run as three containers. It both **finds** new jobs automatically and **tracks** applications from first contact to offer. Claude integrates three ways: manual copy/paste, a direct Anthropic API call, or a live MCP connector.
 

@@ -9,6 +9,7 @@ re-reading all the source first.
 | File | What it covers |
 |---|---|
 | [architecture.md](architecture.md) | System design: the three containers, request flow, data model, security model, how the pieces fit together. |
+| [API-Reference.md](API-Reference.md) | The REST ingest endpoint (`POST /api/ingest`) and the full MCP tool reference: every tool's signature, parameters, and example calls. |
 | [code-reference.md](code-reference.md) | Module-by-module guide to the Python source: every file in `app/`, the models, the routes, and the key functions. Start here to change behavior. |
 | [configuration.md](configuration.md) | Every environment variable and every in-app setting (search providers, SMTP, AI settings, automated features, MCP). |
 | [deployment.md](deployment.md) | Deployment runbook: first-time setup, pulling from ghcr.io, updating, and rollback steps. |
@@ -21,6 +22,9 @@ re-reading all the source first.
 The top-level [`../README.md`](../README.md) is the quick-start and feature overview. The end-user
 guide for the job seeker is [`Job_Squire_User_Guide.md`](Job_Squire_User_Guide.md), which serves
 as the index for the full wiki in [`wiki/`](wiki/).
+
+**This `docs/` folder (plus [`wiki/`](wiki/)) is the single canonical documentation set.** There is
+no separate GitHub Wiki in use — everything lives in this repo so it stays versioned with the code.
 
 ## One-paragraph summary
 

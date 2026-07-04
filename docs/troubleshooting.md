@@ -103,11 +103,20 @@ shows duplicates that were deduped.
 
 ## AI modes
 
+### Do I need an Anthropic API key?
+No. API mode works with any configured AI provider — add a free one (Google Gemini, Groq,
+OpenRouter, Ollama, and others) under Settings → AI → AI Providers. An Anthropic key is optional
+and can be added as a final fallback. Free tiers from Gemini and Groq are sufficient for typical
+job-search volumes. See [Setting Up AI](wiki/10-ai-setup.md) for provider strategies.
+
 ### "Analyze now" fails
-The Job Squire tries your configured AI providers in rank order. Check the provider cards under
-Settings → AI → AI Providers: verify the API key is correct, the provider is enabled, and the
-model string is valid. The error is flashed in the UI. If you are using Anthropic directly (no ranked
-providers), check the Anthropic API key on the AI tab and the model string (default `claude-sonnet-4-6`).
+The Job Squire tries your configured AI providers in rank order: if a provider returns a rate-limit
+(429), server error (503/529), or times out, it moves immediately to the next one in the ranked
+chain. Check the provider cards under Settings → AI → AI Providers: verify the API key is correct,
+the provider is enabled, and the model string is valid — the error message names which provider was
+last tried. If you are using Anthropic directly (no ranked providers), check the Anthropic API key
+on the AI tab and the model string (default `claude-sonnet-4-6`). The specific error class is shown
+in the flashed UI message.
 
 ### MCP connector won't connect in Claude
 `curl https://mcp-squire.<domain>/health` must return `{"ok": true}` first. The connector URL is
