@@ -157,8 +157,16 @@ jobs:
           exit-code: "0"
 
       - name: Upload scan results to code scanning
+        # Advisory only — must never block the release. Code scanning also
+        # requires the repo to be public (or GitHub Advanced Security on a
+        # private repo), which job-squire isn't yet, so this step currently
+        # fails with "Code scanning is not enabled for this repository" on
+        # every run. continue-on-error keeps that from taking down the whole
+        # pipeline; drop it (or leave it, it's harmless) once the repo goes
+        # public and code scanning turns on.
         uses: github/codeql-action/upload-sarif@v4
         if: always()
+        continue-on-error: true
         with:
           sarif_file: trivy-results.sarif
 
