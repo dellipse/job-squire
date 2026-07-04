@@ -45,6 +45,17 @@ TIMEOUT = 20
 # minutes, not milliseconds. Fast-failing lets search.py put the provider in
 # cooldown so the next scheduled run skips it instead of blocking here.
 RETRY_CODES = {429, 502, 504}
+
+# Adzuna's API is scoped per-country by URL path segment (e.g. /v1/api/jobs/gb/).
+# This is the full set it supports as of this writing — see developer.adzuna.com.
+# cfg["country"] outside this set is a valid ISO code for other purposes
+# (location-validation strictness, Google Jobs' broader "gl" param) but Adzuna
+# itself can't be called with it, so search_provider() checks against this set
+# before making a request rather than letting every run fail against Adzuna.
+ADZUNA_COUNTRIES = {
+    "at", "au", "br", "ca", "de", "fr", "gb", "in",
+    "it", "mx", "nl", "pl", "ru", "sg", "us", "za",
+}
 RETRIES = 3  # total attempts (was effectively 1 retry; now retries twice)
 BACKOFF = 2  # seconds, doubled each attempt (stays well under a minute)
 # Pause between consecutive API calls to stay under providers' per-minute limits.
@@ -208,6 +219,7 @@ def _iso_date(value):
 
 # --------------------------------------------------------------------------
 def search_adzuna(creds, title, cfg):
+    country = (cfg.get("country") or "us").lower()
     params = {
         "app_id": creds.get("app_id", ""),
         "app_key": creds.get("app_key", ""),
@@ -220,7 +232,7 @@ def search_adzuna(creds, title, cfg):
     }
     if cfg.get("min_salary"):
         params["salary_min"] = cfg["min_salary"]
-    r = _request("GET", "https://api.adzuna.com/v1/api/jobs/us/search/1",
+    r = _request("GET", f"https://api.adzuna.com/v1/api/jobs/{country}/search/1",
                  params=params)
     out = []
     for j in r.json().get("results", []):
@@ -408,7 +420,7 @@ def search_googlejobs(creds, title, cfg):
         "engine": "google_jobs",
         "q": f"{title}{date_phrase}",
         "location": location,
-        "gl": "us",
+        "gl": (cfg.get("country") or "us").lower(),
         "hl": "en",
         "lrad": radius_km,
         "api_key": api_key,
@@ -566,6 +578,13 @@ def search_provider(provider, creds, titles, cfg):
             return [], (f"{provider}: missing credential(s): {', '.join(missing)}. "
                         "Re-enter on the Connections page (if they were saved before, "
                         "SECRET_KEY may have changed, which clears saved keys).")
+        if provider == "adzuna":
+            country = (cfg.get("country") or "us").lower()
+            if country not in ADZUNA_COUNTRIES:
+                supported = ", ".join(sorted(c.upper() for c in ADZUNA_COUNTRIES))
+                return [], (f"adzuna: country '{country.upper()}' is not one of the "
+                            f"countries Adzuna's API supports ({supported}). Disable "
+                            "Adzuna or change the Country in Search Settings.")
         if provider == "themuse":
             return search_themuse(creds, titles, cfg), None
         fn = {

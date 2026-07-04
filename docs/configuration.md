@@ -101,14 +101,27 @@ Set in the compose `build.args`. Changing `PUID`/`PGID` requires a rebuild **and
 ## In-app settings (Settings page, encrypted in DB)
 
 The Settings page is tabbed: **Search**, **Sources**, **Email**, **AI**, **Candidate Profile**,
-**Application Kit**, and **History**.
+**Application Kit**, **History**, and **Backup**.
 
 ### Search targets — `SearchConfig`
-Job titles (one per line), location, radius (miles), minimum salary (blank = no filter), max
-posting age (days), results per query, and an enabled toggle. Starts blank on a fresh install.
-The location must be `"City, ST"` with a valid US state code (e.g. `Provo, UT`) — ZIP codes
-and street addresses are rejected, because the job APIs need a parseable city/state and the
-scheduler derives its timezone from it.
+Job titles (one per line), country, location, radius (miles), minimum salary (blank = no
+filter), max posting age (days), results per query, and an enabled toggle. Starts blank on a
+fresh install.
+
+**Country** is an ISO 3166-1 alpha-2 code, default `US`. It controls how strictly location is
+validated and which country parameter Adzuna/Google Jobs are called with:
+
+- **`US`** (default): location must be `"City, ST"` with a valid US state code (e.g. `Provo,
+  UT`) — ZIP codes and street addresses are rejected, because the job APIs need a parseable
+  city/state and the scheduler derives its timezone from it.
+- **Anything else**: location just needs to be non-empty free text (e.g. `Manchester`,
+  `Manchester, UK`). Adzuna is called against the configured country's endpoint if it's one of
+  the countries Adzuna's API supports (AT, AU, BR, CA, DE, FR, GB, IN, IT, MX, NL, PL, RU, SG,
+  US, ZA) — otherwise that source is skipped with an explanation in Settings → History rather
+  than failing every run. Google Jobs (SerpApi) accepts a broader set of countries via the same
+  field. USAJOBS is US federal jobs only and ignores this setting entirely.
+  `timezones.py`'s location → timezone lookup only covers US states, so set `SCHEDULE_TZ`
+  explicitly for a non-US install — without it, scheduled search times are computed in UTC.
 
 ### Application kit — `KitConfig` (Application Kit tab)
 `fit_salary_floor` (default `$60,000`): the kit's fit-assessment step flags any posting whose top

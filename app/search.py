@@ -220,6 +220,7 @@ def _run_search_locked(trigger="manual"):
 
     cfg = {
         "location": cfg_row.location or "",
+        "country": cfg_row.country or "US",
         "radius_miles": cfg_row.radius_miles or 40,
         "min_salary": cfg_row.min_salary,
         "max_age_days": cfg_row.max_age_days or 14,

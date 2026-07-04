@@ -25,6 +25,26 @@ footer as `<VERSION>-<build-sha>`.
   tested restore procedure and post-restore verification checklist. Replaces
   the untested "just tar the data folder" note in `.env.example`/
   `deployment.md`, which could produce an inconsistent snapshot under WAL mode.
+- Self-service password change at `/account` (linked from the username in the
+  header) for both the admin and user accounts. Requires the current password;
+  rate-limited like login. Previously the only way to rotate a password was
+  editing env vars and restarting with `RESET_UIDS_AND_PWDS_ON_START`.
+- One-click backup download: Settings → Backup builds the same WAL-safe
+  archive `scripts/backup.sh` produces (DB snapshot + `uploads/` +
+  `candidate_profile.md` + `oauth_tokens.json`, optionally `.env`) and streams
+  it straight from the browser — no shell/`docker exec` access needed just to
+  grab a backup. Restore is still a CLI step (`scripts/restore.sh`): a safe
+  restore has to stop all three containers before the data directory is
+  replaced, which this app has no way to do to itself.
+- International location support: Search Settings has a new Country field
+  (ISO 3166-1 alpha-2, default `US`). Outside the US, the "City, ST" location
+  format is no longer required — any non-empty location works. Adzuna and
+  Google Jobs now use the configured country instead of a hardcoded `us`;
+  Adzuna requests are skipped with a clear message if the configured country
+  isn't one it supports (AT, AU, BR, CA, DE, FR, GB, IN, IT, MX, NL, PL, RU,
+  SG, US, ZA). USAJOBS remains US-federal-only regardless of this setting.
+  Non-US operators should also set `SCHEDULE_TZ` explicitly — `timezones.py`'s
+  location-based lookup only covers US states and otherwise falls back to UTC.
 
 ### Fixed
 

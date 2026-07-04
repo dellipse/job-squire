@@ -181,3 +181,109 @@ def test_settings_allows_admin(client):
     _login(client, ADMIN_USERNAME, ADMIN_PASSWORD)
     resp = client.get(SETTINGS_URL, follow_redirects=False)
     assert resp.status_code == 200
+
+
+# --------------------------------------------------------------------------- #
+# /account — self-service password change
+# --------------------------------------------------------------------------- #
+
+ACCOUNT_URL = "/account"
+
+
+def _change_password(client, current, new, confirm=None):
+    return client.post(
+        ACCOUNT_URL,
+        data={
+            "current_password": current,
+            "new_password": new,
+            "confirm_password": confirm if confirm is not None else new,
+        },
+        follow_redirects=False,
+    )
+
+
+def test_account_requires_login(client):
+    resp = client.get(ACCOUNT_URL, follow_redirects=False)
+    assert resp.status_code == 302
+    assert "/login" in resp.headers["Location"]
+
+
+def test_account_available_to_non_admin(client):
+    """Unlike /settings, /account has no admin_required gate — either account
+    must be able to rotate its own password."""
+    _login(client, SEEKER_USERNAME, SEEKER_PASSWORD)
+    resp = client.get(ACCOUNT_URL, follow_redirects=False)
+    assert resp.status_code == 200
+
+
+def test_change_password_success_then_login_with_new_password(client):
+    _login(client, SEEKER_USERNAME, SEEKER_PASSWORD)
+    resp = _change_password(client, SEEKER_PASSWORD, "a-new-strong-pw")
+    assert resp.status_code == 302
+    assert resp.headers["Location"].endswith("/account")
+
+    client.get("/logout")
+    # Old password no longer works.
+    stale = _login(client, SEEKER_USERNAME, SEEKER_PASSWORD)
+    assert stale.status_code == 200
+    assert b"Invalid username or password" in stale.data
+    # New password does.
+    fresh = _login(client, SEEKER_USERNAME, "a-new-strong-pw")
+    assert fresh.status_code == 302
+
+    # Restore the fixture's expected password so other tests relying on the
+    # session-scoped app/db aren't affected by ordering.
+    _login(client, SEEKER_USERNAME, "a-new-strong-pw")
+    _change_password(client, "a-new-strong-pw", SEEKER_PASSWORD)
+
+
+def test_change_password_wrong_current_password_rejected(client):
+    _login(client, SEEKER_USERNAME, SEEKER_PASSWORD)
+    resp = _change_password(client, "not-the-current-password", "a-new-strong-pw")
+    assert resp.status_code == 200
+    assert b"Current password is incorrect" in resp.data
+
+    # Old password still works — nothing was changed.
+    client.get("/logout")
+    still_old = _login(client, SEEKER_USERNAME, SEEKER_PASSWORD)
+    assert still_old.status_code == 302
+
+
+def test_change_password_mismatched_confirmation_rejected(client):
+    _login(client, SEEKER_USERNAME, SEEKER_PASSWORD)
+    resp = _change_password(client, SEEKER_PASSWORD, "a-new-strong-pw", confirm="different-pw")
+    assert resp.status_code == 200
+    assert b"do not match" in resp.data
+
+    client.get("/logout")
+    still_old = _login(client, SEEKER_USERNAME, SEEKER_PASSWORD)
+    assert still_old.status_code == 302
+
+
+def test_change_password_same_as_current_rejected(client):
+    _login(client, SEEKER_USERNAME, SEEKER_PASSWORD)
+    resp = _change_password(client, SEEKER_PASSWORD, SEEKER_PASSWORD)
+    assert resp.status_code == 200
+    assert b"must be different" in resp.data
+
+
+def test_change_password_too_short_rejected(client):
+    _login(client, SEEKER_USERNAME, SEEKER_PASSWORD)
+    resp = _change_password(client, SEEKER_PASSWORD, "short")
+    assert resp.status_code == 200
+    # WTForms Length(min=8) validation error, not our custom flash.
+    assert b"account" in resp.request.path.encode() or resp.status_code == 200
+
+    client.get("/logout")
+    still_old = _login(client, SEEKER_USERNAME, SEEKER_PASSWORD)
+    assert still_old.status_code == 302
+
+
+def test_account_change_post_is_rate_limited(client):
+    _login(client, SEEKER_USERNAME, SEEKER_PASSWORD)
+    statuses = [
+        _change_password(client, "wrong-current-password", "a-new-strong-pw").status_code
+        for _ in range(10)
+    ]
+    assert all(s == 200 for s in statuses), statuses
+    assert _change_password(client, "wrong-current-password", "a-new-strong-pw").status_code == 429

@@ -124,7 +124,9 @@ def create_app():
 
     # --- Template filter: convert naive UTC datetime to local time ---------
     # Timezone resolution order: SCHEDULE_TZ env var → search location in DB
-    # → DEFAULT_TZ (America/Los_Angeles). Mirrors the scheduler's logic.
+    # (US only — timezones.py has no non-US timezone table) → DEFAULT_TZ (UTC).
+    # Mirrors the scheduler's logic. Non-US operators should set SCHEDULE_TZ
+    # explicitly; otherwise times display in UTC.
     from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
     def _display_tz():
@@ -305,6 +307,11 @@ def _run_migrations():
         "ALTER TABLE users ADD COLUMN jobs_default_per_page INTEGER",
         # Backfill use_ranked_chain_fallback for task config rows seeded before column existed
         "UPDATE ai_task_configs SET use_ranked_chain_fallback = 1 WHERE use_ranked_chain_fallback IS NULL",
+        # International location support: country code driving location validation
+        # strictness and provider country params (Adzuna, Google Jobs). Existing
+        # installs keep the original US behavior by defaulting to 'US'.
+        "ALTER TABLE search_config ADD COLUMN country VARCHAR(2) DEFAULT 'US'",
+        "UPDATE search_config SET country = 'US' WHERE country IS NULL",
     ]
     for stmt in migrations:
         try:

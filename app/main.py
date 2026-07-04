@@ -44,6 +44,7 @@ from sqlalchemy import func, text
 from werkzeug.utils import secure_filename
 
 from . import ai
+from .backup import build_backup_archive
 from .crypto import decrypt, dump_encrypted_json, encrypt, load_encrypted_json
 
 log = logging.getLogger(__name__)
@@ -1309,6 +1310,36 @@ def export_csv():
         out,
         mimetype="text/csv",
         headers={"Content-Disposition": f"attachment; filename=job-squire-{stamp}.csv"},
+    )
+
+
+# --------------------------------------------------------------------------
+# Full backup download (DB snapshot + attachments). See app/backup.py for why
+# restore is a CLI-only operation (scripts/restore.sh), not a route here.
+# --------------------------------------------------------------------------
+@main_bp.route("/settings/backup/download")
+@login_required
+@admin_required
+def backup_download():
+    include_env = request.args.get("include_env", "1") != "0"
+    try:
+        filename, data = build_backup_archive(
+            current_app.config["DATA_DIR"],
+            current_app.config["UPLOAD_DIR"],
+            include_env=include_env,
+        )
+    except FileNotFoundError:
+        flash("Nothing to back up yet — no database found.", "danger")
+        return redirect(url_for("main.settings", _anchor="tab-backup"))
+    except Exception:
+        log.exception("Backup archive build failed")
+        flash("Backup failed — check the server logs for details.", "danger")
+        return redirect(url_for("main.settings", _anchor="tab-backup"))
+
+    return Response(
+        data,
+        mimetype="application/gzip",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
 
 
@@ -2866,17 +2897,29 @@ def settings():
 def settings_search():
     cfg = _singleton(SearchConfig)
     location = request.form.get("location", "").strip()
-    # Providers expect "City, ST" (a valid US state code). Reject anything else
-    # so a ZIP or address doesn't silently return empty results, and so the
-    # scheduler can derive the right timezone from it.
-    if not parse_state(location):
-        flash("Location must be \"City, ST\" with a valid US state code, "
-              "e.g. \"Boise, ID\". ZIP codes and street addresses are not "
-              "supported by the job sources; use the radius to widen the area.",
-              "danger")
+    country = (request.form.get("country") or "US").strip().upper()
+    if len(country) != 2 or not country.isalpha():
+        flash("Country must be a 2-letter code (ISO 3166-1 alpha-2), "
+              "e.g. \"US\", \"GB\", \"DE\".", "danger")
+        return redirect(url_for("main.settings"))
+    if country == "US":
+        # Providers expect "City, ST" (a valid US state code). Reject anything else
+        # so a ZIP or address doesn't silently return empty results, and so the
+        # scheduler can derive the right timezone from it. This strictness is
+        # US-only: outside the US, timezones.py has no state table to key off of
+        # anyway (see SCHEDULE_TZ), so it's just a plain non-empty location.
+        if not parse_state(location):
+            flash("Location must be \"City, ST\" with a valid US state code, "
+                  "e.g. \"Boise, ID\". ZIP codes and street addresses are not "
+                  "supported by the job sources; use the radius to widen the area.",
+                  "danger")
+            return redirect(url_for("main.settings"))
+    elif not location:
+        flash("Location is required, e.g. \"Manchester\" or \"Manchester, UK\".", "danger")
         return redirect(url_for("main.settings"))
     cfg.titles = request.form.get("titles", "").strip()
     cfg.location = location
+    cfg.country = country
     cfg.radius_miles = _int(request.form.get("radius_miles"), 40)
     cfg.min_salary = _int(request.form.get("min_salary"), None, allow_none=True)
     cfg.max_age_days = _int(request.form.get("max_age_days"), 14)

@@ -17,6 +17,7 @@
   <button data-tab="tab-documents">Candidate Profile</button>
   <button data-tab="tab-kit">Application Kit</button>
   <button data-tab="tab-history">History</button>
+  <button data-tab="tab-backup">Backup</button>
 </nav>
 
 {# ── Search ──────────────────────────────────────────────── #}
@@ -31,12 +32,25 @@
           <textarea name="titles" rows="6">{{ cfg.titles }}</textarea>
         </div>
         <div class="field">
-          <label>Location <span class="muted">(City, ST)</span></label>
-          <input type="text" name="location" value="{{ cfg.location }}"
+          <label>Country <span class="muted">(ISO 2-letter code)</span></label>
+          <input type="text" id="search-country" name="country" value="{{ cfg.country or 'US' }}"
+                 maxlength="2" style="text-transform:uppercase" placeholder="US"
+                 pattern="[A-Za-z]{2}" title="2-letter country code, e.g. US, GB, DE" required>
+          <span class="muted small">
+            Outside the US, "City, ST" isn't required — any location text works.
+            Adzuna only covers AT, AU, BR, CA, DE, FR, GB, IN, IT, MX, NL, PL, RU,
+            SG, US, ZA; USAJOBS is US federal jobs only regardless of this setting.
+            Non-US installs should also set <code>SCHEDULE_TZ</code> in the
+            environment — without it, scheduled search times are computed in UTC.
+          </span>
+        </div>
+        <div class="field">
+          <label id="search-location-label">Location <span class="muted">(City, ST)</span></label>
+          <input type="text" id="search-location" name="location" value="{{ cfg.location }}"
                  placeholder="City, ST" required
                  pattern="^.+,\s*[A-Za-z]{2}(\s+\d{5})?$"
                  title="Use City, ST (two-letter state), e.g. City, ST">
-          <span class="muted small">City and two-letter state. ZIP codes and addresses
+          <span class="muted small" id="search-location-hint">City and two-letter state. ZIP codes and addresses
             aren't supported; use Radius to widen the area.</span>
         </div>
         <div class="field"><label>Radius (miles)</label><input type="text" name="radius_miles" value="{{ cfg.radius_miles }}"></div>
@@ -1434,6 +1448,50 @@ openclaw mcp doctor {{ connector }} --probe{% endset %}
     {% else %}
     <p class="muted">No runs yet. Add a source, then "Run search now".</p>
     {% endif %}
+  </section>
+</div>
+
+{# ── Backup ──────────────────────────────────────────────── #}
+<div id="tab-backup" class="tab-panel">
+  <section class="card">
+    <h2>Download a backup</h2>
+    <p class="muted">
+      Builds a WAL-safe snapshot of the database plus every uploaded attachment
+      and candidate document, packaged as a single <code>.tgz</code> — the same
+      format <code>scripts/backup.sh</code> produces. Safe to run anytime; it
+      does not interrupt search or the app.
+    </p>
+    <form method="get" action="{{ url_for('main.backup_download') }}">
+      <div class="field">
+        <label>
+          <input type="checkbox" name="include_env" value="1" checked>
+          Include <code>.env</code> (recommended — required to decrypt
+          provider keys, SMTP password, and the Anthropic key on restore)
+        </label>
+        <span class="muted small">
+          This file contains <code>SECRET_KEY</code>. Store the downloaded
+          archive as securely as you would that key — anyone with the file
+          can decrypt every stored credential.
+        </span>
+      </div>
+      <div class="actions">
+        <button class="btn btn-primary" type="submit">Download backup</button>
+      </div>
+    </form>
+  </section>
+  <section class="card">
+    <h2>Restoring</h2>
+    <p class="muted">
+      Restore is a command-line step, not a button here. Job Squire runs as
+      three containers sharing one data directory; a safe restore has to stop
+      all three before the data directory is replaced, which this web app has
+      no way to do to itself. Run, from the host:
+    </p>
+    <div class="copy-block"><code>./scripts/restore.sh /path/to/job-squire-backup-&lt;timestamp&gt;.tgz</code></div>
+    <p class="muted small">
+      See <code>docs/backup-restore.md</code> for the full procedure and a
+      post-restore verification checklist.
+    </p>
   </section>
 </div>
 

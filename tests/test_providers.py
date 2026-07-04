@@ -246,6 +246,77 @@ def test_unknown_provider_returns_error(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# International location support: cfg["country"] drives Adzuna's URL path and
+# Google Jobs' "gl" param; an Adzuna-unsupported country is rejected up front
+# (no HTTP call) rather than left to fail against the API on every run.
+# ---------------------------------------------------------------------------
+
+def test_cfg_without_country_defaults_to_us(monkeypatch):
+    """Backward compatibility: existing cfg dicts (no 'country' key) behave as US."""
+    captured = {}
+
+    def fake_request(method, url, **kwargs):
+        captured["url"] = url
+        return FakeResp(json_data={"results": []})
+    monkeypatch.setattr(providers, "_request", fake_request)
+
+    results, err = providers.search_provider(
+        "adzuna", {"app_id": "a", "app_key": "b"}, ["engineer"], CFG)
+
+    assert err is None
+    assert captured["url"] == "https://api.adzuna.com/v1/api/jobs/us/search/1"
+
+
+@pytest.mark.parametrize("country,path", [
+    ("GB", "gb"), ("gb", "gb"), ("DE", "de"), ("US", "us"),
+])
+def test_adzuna_uses_configured_country_in_url(monkeypatch, country, path):
+    captured = {}
+
+    def fake_request(method, url, **kwargs):
+        captured["url"] = url
+        return FakeResp(json_data={"results": []})
+    monkeypatch.setattr(providers, "_request", fake_request)
+
+    cfg = dict(CFG, country=country)
+    results, err = providers.search_provider(
+        "adzuna", {"app_id": "a", "app_key": "b"}, ["engineer"], cfg)
+
+    assert err is None
+    assert captured["url"] == f"https://api.adzuna.com/v1/api/jobs/{path}/search/1"
+
+
+def test_adzuna_rejects_unsupported_country_without_http_call(monkeypatch):
+    def explode(*a, **k):
+        raise AssertionError("no HTTP call should be made for an unsupported country")
+    monkeypatch.setattr(providers, "_request", explode)
+
+    cfg = dict(CFG, country="JP")  # Japan is not in ADZUNA_COUNTRIES
+    results, err = providers.search_provider(
+        "adzuna", {"app_id": "a", "app_key": "b"}, ["engineer"], cfg)
+
+    assert results == []
+    assert "JP" in err
+    assert "not one of the countries" in err
+
+
+def test_googlejobs_gl_param_follows_configured_country(monkeypatch):
+    captured = {}
+
+    def fake_request(method, url, **kwargs):
+        captured["params"] = kwargs.get("params", {})
+        return FakeResp(json_data={"jobs_results": [], "serpapi_pagination": {}})
+    monkeypatch.setattr(providers, "_request", fake_request)
+
+    cfg = dict(CFG, country="DE")
+    results, err = providers.search_provider(
+        "googlejobs", {"api_key": "k"}, ["engineer"], cfg)
+
+    assert err is None
+    assert captured["params"]["gl"] == "de"
+
+
+# ---------------------------------------------------------------------------
 # 3. HTTP errors are surfaced (503 is the cooldown trigger in search.py)
 # ---------------------------------------------------------------------------
 

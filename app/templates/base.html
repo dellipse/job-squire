@@ -42,7 +42,7 @@
     <a href="{{ url_for('main.user_guide') }}">Guide</a>
   </nav>
   <div class="user">
-    <span class="who">{{ current_user.display_name or current_user.username }}{% if current_user.is_admin %} <span class="badge admin">admin</span>{% endif %}</span>
+    <a class="who" href="{{ url_for('auth.account') }}">{{ current_user.display_name or current_user.username }}{% if current_user.is_admin %} <span class="badge admin">admin</span>{% endif %}</a>
     <button id="theme-toggle" class="theme-toggle" aria-label="Toggle theme">&#9681;</button>
     <a class="signout" href="{{ url_for('auth.logout') }}">Sign out</a>
   </div>

@@ -574,6 +574,35 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   // -----------------------------------------------------------------------
+  // Search settings: the "City, ST" pattern only applies to a US location.
+  // Loosen it client-side to match the server-side rule in settings_search()
+  // so international operators aren't blocked by browser validation before
+  // the request even reaches the server.
+  // -----------------------------------------------------------------------
+  var searchCountry = document.getElementById('search-country');
+  var searchLocation = document.getElementById('search-location');
+  var searchLocationHint = document.getElementById('search-location-hint');
+  if (searchCountry && searchLocation) {
+    var US_PATTERN = searchLocation.getAttribute('pattern');
+    var US_PLACEHOLDER = searchLocation.getAttribute('placeholder');
+    var US_HINT = searchLocationHint ? searchLocationHint.textContent : '';
+    var INTL_HINT = 'Any location text works outside the US, e.g. "Manchester, UK".';
+    function syncLocationConstraint() {
+      var isUS = (searchCountry.value || '').trim().toUpperCase() === 'US';
+      if (isUS) {
+        searchLocation.setAttribute('pattern', US_PATTERN);
+        searchLocation.setAttribute('placeholder', US_PLACEHOLDER);
+      } else {
+        searchLocation.removeAttribute('pattern');
+        searchLocation.setAttribute('placeholder', 'City or region');
+      }
+      if (searchLocationHint) searchLocationHint.textContent = isUS ? US_HINT : INTL_HINT;
+    }
+    searchCountry.addEventListener('input', syncLocationConstraint);
+    syncLocationConstraint();
+  }
+
+  // -----------------------------------------------------------------------
   // Add Provider form: show thinking_mode field only for Anthropic
   // -----------------------------------------------------------------------
   var newProviderType = document.getElementById('new-provider-type');

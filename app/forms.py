@@ -39,6 +39,18 @@ class LoginForm(FlaskForm):
     submit = SubmitField("Sign in")
 
 
+class ChangePasswordForm(FlaskForm):
+    """Self-service password rotation — current user only, current password required."""
+    current_password = PasswordField("Current password", validators=[DataRequired()])
+    new_password = PasswordField(
+        "New password", validators=[DataRequired(), Length(min=8, max=128)]
+    )
+    confirm_password = PasswordField(
+        "Confirm new password", validators=[DataRequired(), Length(min=8, max=128)]
+    )
+    submit = SubmitField("Change password")
+
+
 class JobForm(FlaskForm):
     company = StringField("Company", validators=[DataRequired(), Length(max=160)])
     title = StringField("Job title", validators=[DataRequired(), Length(max=160)])

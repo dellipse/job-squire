@@ -28,6 +28,15 @@ end up with a `.db` file paired with a `.db-wal` from a different moment. Two wa
 Either is fine. Hot backup is what you want for a scheduled/unattended job (e.g. cron); cold backup
 is fine for a one-off before an upgrade.
 
+## Option 0 — In-app download (easiest, no host/shell access needed)
+
+Settings → Backup → **Download backup**, signed in as the admin account. Builds the exact same
+archive as `scripts/backup.sh` (Online Backup API snapshot + integrity check + `uploads/` +
+`candidate_profile.md` + `oauth_tokens.json`, with an option to include or leave out `.env`) and
+streams it straight to your browser — nothing to install, no SSH or `docker exec` needed. Restore
+still requires the CLI (see [Restoring](#restoring) below): a safe restore has to stop all three
+containers before the data directory is replaced, and the web app has no way to do that to itself.
+
 ## Option 1 — Hot backup (recommended, no downtime)
 
 ```

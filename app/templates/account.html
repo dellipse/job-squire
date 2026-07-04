@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}My account · JobSquire{% endblock %}
+{% block content %}
+<div class="card-head">
+  <h1>My account</h1>
+</div>
+
+<section class="card">
+  <h2>Signed in as</h2>
+  <p class="muted">
+    {{ current_user.display_name or current_user.username }}
+    ({{ current_user.username }}){% if current_user.is_admin %} &mdash; admin{% endif %}
+  </p>
+</section>
+
+<section class="card">
+  <h2>Change password</h2>
+  <p class="muted">
+    Requires your current password. Username and role changes are set via
+    environment variables by whoever operates this instance.
+  </p>
+  <form method="post" action="{{ url_for('auth.account') }}" novalidate>
+    {{ form.hidden_tag() }}
+    <div class="field">
+      <label>{{ form.current_password.label.text }}</label>
+      {{ form.current_password(autocomplete="current-password") }}
+    </div>
+    <div class="field">
+      <label>{{ form.new_password.label.text }} <span class="muted">(min. 8 characters)</span></label>
+      {{ form.new_password(autocomplete="new-password") }}
+    </div>
+    <div class="field">
+      <label>{{ form.confirm_password.label.text }}</label>
+      {{ form.confirm_password(autocomplete="new-password") }}
+    </div>
+    <div class="actions">
+      {{ form.submit(class="btn btn-primary") }}
+    </div>
+  </form>
+</section>
+{% endblock %}

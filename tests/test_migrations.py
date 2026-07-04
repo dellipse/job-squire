@@ -41,6 +41,7 @@ MIGRATED_COLUMNS = {
     "search_runs": ["last_triage_at"],
     "users": ["jobs_default_sort", "jobs_default_status", "jobs_default_per_page"],
     "ai_provider_configs": ["use_for_triage", "use_for_analysis", "thinking_mode"],
+    "search_config": ["country"],
 }
 
 
@@ -83,6 +84,7 @@ def test_upgrade_adds_missing_columns(mdb):
         ("search_runs", "last_triage_at"),
         ("smtp_config", "admin_email"),
         ("ai_provider_configs", "use_for_triage"),
+        ("search_config", "country"),
     ]
     for table, col in old_schema_drops:
         db.session.execute(text(f"ALTER TABLE {table} DROP COLUMN {col}"))
@@ -178,3 +180,22 @@ def test_legacy_mcp_mode_backfill(mdb):
     ).fetchone()
     assert row[0] == 1, "mode='mcp' should backfill mcp_enabled=1"
     assert row[1] == 1, "mode='mcp' first boot should enable the Claude buttons"
+
+
+def test_search_config_country_backfills_to_us(mdb):
+    """Existing installs (pre-country-column) default to 'US', preserving current
+    behavior — strict City/ST validation and the Adzuna /us/ endpoint."""
+    db.session.execute(text(
+        "ALTER TABLE search_config DROP COLUMN country"
+    ))
+    db.session.execute(text(
+        "INSERT INTO search_config (id, location) VALUES (1, 'Boise, ID')"
+    ))
+    db.session.commit()
+
+    _run_migrations()
+
+    row = db.session.execute(
+        text("SELECT country FROM search_config WHERE id=1")
+    ).fetchone()
+    assert row[0] == "US"

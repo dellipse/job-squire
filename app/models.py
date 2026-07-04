@@ -261,6 +261,11 @@ class SearchConfig(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     titles = db.Column(db.Text, default="")        # one query per line
     location = db.Column(db.String(160), default="")
+    # ISO 3166-1 alpha-2 country code. "US" keeps the original strict "City, ST"
+    # validation and US-state timezone lookup; any other value only requires a
+    # non-empty location string. See app/timezones.py and app/providers.py
+    # (ADZUNA_COUNTRIES) for where this actually changes provider behavior.
+    country = db.Column(db.String(2), default="US")
     radius_miles = db.Column(db.Integer, default=40)
     min_salary = db.Column(db.Integer, nullable=True)
     max_age_days = db.Column(db.Integer, default=14)
