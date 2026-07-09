@@ -9,6 +9,7 @@ Both Docker and Podman run the same container images and both work with Job Squi
 | Situation | Use |
 |---|---|
 | New to containers, running on Mac or Windows | **Docker** |
+| On Apple Silicon and want the fastest, lightest option | **OrbStack** — a drop-in Docker replacement; see the macOS section below |
 | Using Debian, Ubuntu, or a generic VPS | **Docker** — easiest to install and most widely documented |
 | Using Fedora, RHEL, CentOS Stream, or Rocky Linux | **Podman** — it's installed by default and better integrated |
 | Privacy or security is a priority | **Podman** — no root daemon means a smaller attack surface |
@@ -93,9 +94,17 @@ colima start
 
 [Colima](https://github.com/abiosoft/colima) provides a Docker-compatible socket without requiring Docker Desktop or any privileged daemon. It starts a small Linux VM when you run `colima start` and exposes the standard Docker socket — transparent to any tool that uses `docker`.
 
-Which to choose? Both work identically for Job Squire. Podman is the simpler option if you're starting fresh. Colima is a natural fit if your other tools already expect a Docker socket.
+**OrbStack (fastest Docker Desktop alternative on Apple Silicon):**
 
-The `install.sh` script detects Homebrew and walks through either option automatically.
+```bash
+brew install --cask orbstack
+```
+
+Launch OrbStack once from Applications after installing so it sets up the `docker` and `docker compose` command-line tools. [OrbStack](https://orbstack.dev) is a drop-in Docker replacement built for macOS: it exposes the standard Docker socket, starts in seconds, and uses far less memory than Docker Desktop. Requires macOS 14 or later. Free for personal use; a paid license is required for commercial use in larger organizations. Direct download: https://orbstack.dev/download.
+
+Which to choose? All three work identically for Job Squire. Podman is the simpler option if you're starting fresh and want rootless and daemonless. Colima is a natural fit if your other tools already expect a Docker socket. OrbStack is the fastest and lightest, with a polished menu-bar app, and is the easiest path if you'd rather not manage a VM by hand.
+
+The `install.sh` script detects Homebrew and walks through any of these options automatically.
 
 ---
 
@@ -112,3 +121,4 @@ On Windows, Docker Desktop is the simplest choice. Podman Desktop is also availa
 
 - Docker security overview: https://docs.docker.com/engine/security/
 - Podman rootless containers: https://github.com/containers/podman/blob/main/docs/tutorials/rootless_tutorial.md
+- OrbStack documentation: https://docs.orbstack.dev/

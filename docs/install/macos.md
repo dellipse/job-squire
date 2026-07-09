@@ -9,7 +9,7 @@ Both Intel and Apple Silicon (M-series) Macs are supported.
 > curl -fsSL https://raw.githubusercontent.com/dellipse/job-squire/main/install.sh -o install.sh
 > bash install.sh
 > ```
-> Requires Homebrew. If neither Docker nor Podman is installed, the script offers to install Podman (via `brew install podman` + `podman machine`) or Docker via Colima — showing you the exact commands before running anything. To undo a completed install, run `bash uninstall.sh` from the same directory.
+> Requires Homebrew. If neither Docker nor Podman is installed, the script offers to install Podman (via `brew install podman` + `podman machine`), Docker via Colima, or OrbStack — showing you the exact commands before running anything. To undo a completed install, run `bash uninstall.sh` from the same directory.
 >
 > Follow the steps below if you prefer to set things up manually, or need more control over the configuration.
 
@@ -17,7 +17,7 @@ Both Intel and Apple Silicon (M-series) Macs are supported.
 
 ## Option A: Docker or Podman
 
-### 1. Install Docker Desktop or Podman
+### 1. Install a container runtime
 
 **Docker Desktop** is the most straightforward option:
 
@@ -35,7 +35,15 @@ podman machine start
 
 Or download Podman Desktop from https://podman-desktop.io/.
 
-> Docker Desktop requires a license for commercial use in larger organizations. Podman is always free.
+**OrbStack** is a fast, lightweight Docker Desktop alternative built for macOS. It is a drop-in replacement: the standard `docker` and `docker compose` commands work unchanged, so nothing else in this guide needs to change. It starts in seconds and uses far less memory than Docker Desktop, which makes it a strong fit on Apple Silicon.
+
+```bash
+brew install --cask orbstack
+```
+
+Then launch OrbStack once from Applications so it installs the `docker` and `docker compose` command-line tools. Or download it directly from https://orbstack.dev/download. Requires macOS 14 or later.
+
+> Docker Desktop requires a license for commercial use in larger organizations. OrbStack is free for personal use and requires a paid license for commercial use in larger organizations. Podman is always free.
 
 ### 2. Clone the repository
 

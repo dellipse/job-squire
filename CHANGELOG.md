@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows the `VERSION` file at the repo root, displayed in the app
 footer as `<VERSION>-<build-sha>`.
 
+## [Unreleased]
+
+### Added
+
+- macOS install: OrbStack is now a supported container runtime alongside Podman
+  and Colima. `install.sh` offers it as a third option (installs via
+  `brew install --cask orbstack`, launches the app, and waits for the Docker
+  engine), `uninstall.sh` tears it down, and it is documented in
+  `docs/install/macos.md` and `docs/install/docker-vs-podman.md`.
+
 ## [0.5.0] - 2026-07-05
 
 Initial public release: a self-hosted, two-user job-search assistant with

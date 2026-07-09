@@ -82,6 +82,7 @@ COMPOSE_CMD=""
 INSTALLED_RUNTIME=false
 ADDED_TO_DOCKER_GROUP=false
 INSTALLED_COLIMA=false
+INSTALLED_ORBSTACK=false
 PODMAN_MACHINE_INIT=false
 ENABLED_PODMAN_SOCKET=false
 ENABLED_LINGERING=false
@@ -140,6 +141,7 @@ echo
 echo "Changes recorded by install.sh:"
 [[ "$INSTALLED_RUNTIME"     == "true" ]] && echo "  - Installed $RUNTIME" || true
 [[ "$INSTALLED_COLIMA"      == "true" ]] && echo "  - Installed Colima (macOS Docker runtime)" || true
+[[ "$INSTALLED_ORBSTACK"    == "true" ]] && echo "  - Installed OrbStack (macOS Docker runtime)" || true
 [[ "$PODMAN_MACHINE_INIT"   == "true" ]] && echo "  - Initialized podman machine (macOS)" || true
 [[ "$ADDED_TO_DOCKER_GROUP" == "true" ]] && echo "  - Added $USER to docker group" || true
 [[ "$ENABLED_PODMAN_SOCKET" == "true" ]] && echo "  - Enabled podman.socket" || true
@@ -249,6 +251,18 @@ if [[ "$OS_FAMILY" == "macos" ]]; then
         fi
     fi
 
+    if [[ "$INSTALLED_ORBSTACK" == "true" ]]; then
+        section "Step 4c: OrbStack (macOS Docker runtime)"
+        echo "install.sh installed and started OrbStack as the Docker runtime."
+        if confirm "Quit OrbStack now? (the app itself is removed in the next step)"; then
+            osascript -e 'quit app "OrbStack"' 2>/dev/null \
+                && ok "OrbStack quit." \
+                || warn "Could not quit OrbStack — quit it from the menu bar before removing."
+        else
+            info "OrbStack left running."
+        fi
+    fi
+
 fi
 
 # ── Step 5: Linux Podman cleanup ─────────────────────────────────────────────
@@ -319,6 +333,8 @@ if [[ "$INSTALLED_RUNTIME" == "true" && -n "$RUNTIME" ]]; then
                     brew uninstall podman 2>/dev/null && _uninstall_ok=true || true
                 elif [[ "$INSTALLED_COLIMA" == "true" ]]; then
                     brew uninstall colima docker docker-compose 2>/dev/null && _uninstall_ok=true || true
+                elif [[ "$INSTALLED_ORBSTACK" == "true" ]]; then
+                    brew uninstall --cask orbstack 2>/dev/null && _uninstall_ok=true || true
                 fi
                 ;;
             rhel)

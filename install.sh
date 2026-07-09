@@ -19,7 +19,7 @@
 #
 # Supports:
 #   Linux  — Docker or Podman; auto-installs via dnf/apt/pacman if neither is present
-#   macOS  — Podman or Colima (Docker CE); installed via Homebrew (no Desktop apps needed)
+#   macOS  — Podman, Colima (Docker CE), or OrbStack; installed via Homebrew (no Desktop apps needed)
 #
 # To undo everything this script does, run: bash uninstall.sh
 
@@ -82,6 +82,7 @@ INSTALL_DIR=""
 INSTALLED_RUNTIME=false
 ADDED_TO_DOCKER_GROUP=false
 INSTALLED_COLIMA=false         # macOS only: installed Colima for Docker
+INSTALLED_ORBSTACK=false       # macOS only: installed OrbStack for Docker
 PODMAN_MACHINE_INIT=false      # macOS only: ran podman machine init/start
 ENABLED_PODMAN_SOCKET=false    # Linux only
 ENABLED_LINGERING=false        # Linux only
@@ -104,6 +105,7 @@ COMPOSE_CMD=${COMPOSE_CMD:-}
 INSTALLED_RUNTIME=${INSTALLED_RUNTIME}
 ADDED_TO_DOCKER_GROUP=${ADDED_TO_DOCKER_GROUP}
 INSTALLED_COLIMA=${INSTALLED_COLIMA}
+INSTALLED_ORBSTACK=${INSTALLED_ORBSTACK}
 PODMAN_MACHINE_INIT=${PODMAN_MACHINE_INIT}
 ENABLED_PODMAN_SOCKET=${ENABLED_PODMAN_SOCKET}
 ENABLED_LINGERING=${ENABLED_LINGERING}
@@ -505,6 +507,46 @@ install_docker_macos_colima() {
     write_state
 }
 
+install_docker_macos_orbstack() {
+    echo
+    echo "Docker will be provided by OrbStack — a fast, lightweight Docker Desktop"
+    echo "alternative built for macOS. It is a drop-in replacement: the standard"
+    echo "'docker' and 'docker compose' commands work unchanged. Requires macOS 14+."
+    echo
+    echo "The following commands will run:"
+    echo
+    echo "  brew install --cask orbstack"
+    echo "  open -a OrbStack        # launches OrbStack so it installs the docker CLI"
+    echo
+    echo "OrbStack is free for personal use; commercial use in larger organizations"
+    echo "requires a paid license."
+    echo
+    confirm "Proceed?" \
+        || die "Cancelled."
+    echo
+    info "Running: brew install --cask orbstack"
+    brew install --cask orbstack \
+        || die "brew install --cask orbstack failed."
+    info "Launching OrbStack to set up the docker CLI and start the engine..."
+    open -a OrbStack \
+        || die "Could not launch OrbStack. Open it once from Applications, then re-run this script."
+
+    # Wait for the Docker socket to come up (OrbStack starts in a few seconds).
+    info "Waiting for the Docker engine to become ready..."
+    local _tries=0
+    until docker info &>/dev/null; do
+        _tries=$((_tries + 1))
+        if [[ $_tries -ge 60 ]]; then
+            die "Docker engine did not become ready. Open OrbStack from Applications, wait for it to finish starting, then re-run this script."
+        fi
+        sleep 2
+    done
+    ok "OrbStack started. Docker is available."
+    INSTALLED_RUNTIME=true
+    INSTALLED_ORBSTACK=true
+    write_state
+}
+
 # ── Banner ────────────────────────────────────────────────────────────────────
 echo
 echo -e "${BOLD}  Job Squire — self-hosted AI job-hunt Job Squire${RESET}"
@@ -557,13 +599,19 @@ else
                 echo "  2) Docker via Colima — lightweight CLI alternative to Docker Desktop"
                 echo "     Installs via brew; uses a small Linux VM (Colima)"
                 echo
-                echo "  Either option is fully supported. No Desktop application required."
+                echo "  3) Docker via OrbStack — fastest, lightest Docker Desktop alternative"
+                echo "     Installs via brew cask; native app, best fit on Apple Silicon (macOS 14+)"
+                echo
+                echo "  All three are fully supported. No Desktop application required for 1 or 2."
                 echo "  Not sure? See docs/install/docker-vs-podman.md"
                 echo
                 ask rt_choice "Which would you like to install?" "1"
                 echo
                 if [[ "$rt_choice" == "2" ]]; then
                     install_docker_macos_colima
+                    RUNTIME=docker
+                elif [[ "$rt_choice" == "3" ]]; then
+                    install_docker_macos_orbstack
                     RUNTIME=docker
                 else
                     install_podman_macos
@@ -579,9 +627,10 @@ else
                 echo "  /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
                 echo
                 echo "Or install a runtime manually without Homebrew:"
-                echo "  Podman:  https://podman.io/docs/installation#macos"
-                echo "           podman machine init && podman machine start"
-                echo "  Colima:  https://github.com/abiosoft/colima"
+                echo "  Podman:    https://podman.io/docs/installation#macos"
+                echo "             podman machine init && podman machine start"
+                echo "  Colima:    https://github.com/abiosoft/colima"
+                echo "  OrbStack:  https://orbstack.dev/download  (launch it once after installing)"
                 echo
                 exit 1
             fi
