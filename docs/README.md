@@ -15,6 +15,7 @@ re-reading all the source first.
 | [deployment.md](deployment.md) | Deployment runbook: first-time setup, pulling from ghcr.io, updating, and rollback steps. |
 | [backup-restore.md](backup-restore.md) | WAL-safe backup and restore runbook: `scripts/backup.sh`/`scripts/restore.sh`, why a plain `tar` of the data folder isn't safe, and a post-restore verification checklist. |
 | [multi-instance.md](multi-instance.md) | Running more than one independent instance on the same host (e.g. one per job seeker): directory layout, port configuration, SWAG setup, and per-instance MCP connectors. |
+| [adopt-single-container.md](adopt-single-container.md) | Runbook for moving an existing three-container install onto the single-container image (`docker-compose.single.yml`) with data and secrets intact, via `scripts/adopt-single-container.sh`. Manual today; superseded once the `job-squire` CLI's own adopt command lands. |
 | [mcp-connector.md](mcp-connector.md) | The MCP server: its 23 tools (17 core + 6 routine-support), the OAuth auth flow, and how to connect it in Claude or another MCP-capable agent. |
 | [mcp-setup-guide.md](mcp-setup-guide.md) | Developer-focused MCP setup guide: all three connection methods (Claude Pro OAuth, Hermes Agent, OpenClaw), full tool listing, and ready-to-use config blocks. |
 | [Setup-Guide.md](Setup-Guide.md) | Step-by-step in-app configuration: search targets, job sources, SMTP, candidate profile, AI, and MCP connector. |
