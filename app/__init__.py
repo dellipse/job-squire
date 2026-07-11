@@ -18,7 +18,7 @@ from datetime import timedelta, timezone as _utc
 from flask import Flask, current_app
 from sqlalchemy import text
 
-from .deploy import apply_proxy_trust, resolve_deploy_flags
+from .deploy import apply_proxy_trust, enforce_startup_guard, resolve_deploy_flags
 from .extensions import csrf, db, limiter, login_manager
 
 log = logging.getLogger(__name__)
@@ -35,6 +35,11 @@ def create_app():
     app = Flask(__name__)
 
     deploy_flags = resolve_deploy_flags()
+    # Fatal misconfigurations (network mode without HTTPS/TRUST_PROXY) exit
+    # the process here, before anything else runs. Non-fatal ones (local
+    # mode with a non-loopback PUBLIC_URL) are returned for the in-app
+    # banner set up below, once app.config exists.
+    deploy_warnings = enforce_startup_guard(deploy_flags)
 
     # --- Core config -------------------------------------------------------
     secret = os.environ.get("SECRET_KEY")
@@ -100,6 +105,12 @@ def create_app():
         SESSION_COOKIE_SECURE=deploy_flags["secure_cookie"],
         DEPLOY_MODE=deploy_flags["mode"],
         TRUST_PROXY=deploy_flags["trust_proxy"],
+        # Startup safety guard warnings (see app/deploy.py) -- rendered as a
+        # persistent banner by _inject_deploy_warnings() below. Fixed set at
+        # boot time since it's derived from env vars, which don't change
+        # without a restart; it "clears itself" in the sense that the next
+        # boot after the operator fixes the underlying var won't repopulate it.
+        DEPLOY_WARNINGS=deploy_warnings,
         PERMANENT_SESSION_LIFETIME=timedelta(days=int(os.environ.get("SESSION_DAYS", "7"))),
         WTF_CSRF_TIME_LIMIT=csrf_time_limit,
     )
@@ -194,6 +205,16 @@ def create_app():
             return local.strftime("%-m/%-d/%Y")
         except ValueError:
             return local.strftime("%m/%d/%Y")
+
+    # --- Startup safety guard banner ----------------------------------------
+    # Extends the existing warning-banner pattern (worker heartbeat staleness
+    # on Dashboard/Settings) to a site-wide, persistent banner rather than a
+    # new mechanism -- injected into every authenticated page's template
+    # context so a misconfiguration is visible no matter where the operator
+    # lands, not just on one settings tab.
+    @app.context_processor
+    def _inject_deploy_warnings():
+        return {"deploy_warnings": app.config.get("DEPLOY_WARNINGS") or []}
 
     # --- Security headers --------------------------------------------------
     @app.after_request

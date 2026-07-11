@@ -51,6 +51,11 @@
 {% endif %}
 
 <main class="container {% block container_class %}{% endblock %}">
+  {% if current_user.is_authenticated and deploy_warnings %}
+    {% for warning in deploy_warnings %}
+      <div class="flash flash-warning">Deployment configuration warning: {{ warning }}</div>
+    {% endfor %}
+  {% endif %}
   {% with messages = get_flashed_messages(with_categories=true) %}
     {% if messages %}
       {% for category, message in messages %}
