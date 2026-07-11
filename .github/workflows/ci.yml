@@ -117,6 +117,9 @@ jobs:
       - name: Set short SHA
         run: echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
 
+      - name: Set up QEMU (emulation for the non-native arch under buildx)
+        uses: docker/setup-qemu-action@v4
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
@@ -135,6 +138,29 @@ jobs:
           tags: |
             type=sha,prefix=sha-
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+      # Validates that both platforms actually build (musllinux wheels must
+      # resolve for arm64, not just the runner's native amd64) before we
+      # spend time on the scan/push steps below. push:false and no `load`
+      # here is deliberate: buildx's docker exporter can't `--load` a
+      # multi-platform result into the local daemon at all (there's no
+      # single image to load — only a manifest list), so this step builds
+      # to the GHA cache only and discards the result. The scan step right
+      # after this one separately builds+loads a single native-arch image
+      # for Trivy, which needs one concrete image to scan; a manifest list
+      # isn't a valid scan target and CVE data doesn't meaningfully vary by
+      # CPU arch for the same package versions, so scanning both platforms
+      # here would double this job's runtime for no real coverage gain.
+      - name: Validate multi-platform build (cache-only, no push)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: false
+          build-args: |
+            BUILD_VERSION=${{ env.APP_VERSION }}-${{ env.SHORT_SHA }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Build image (local only — not pushed until it clears the scan)
         uses: docker/build-push-action@v7
@@ -178,6 +204,7 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
+          platforms: linux/amd64,linux/arm64
           push: true
           provenance: true
           sbom: true
@@ -188,6 +215,13 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # steps.push.outputs.digest is the image *index* (manifest list)
+      # digest when platforms is multi-valued, not a single-platform
+      # digest — build-push-action pushes each per-platform image, then
+      # the index, and reports the index's digest. cosign sign/attest
+      # below sign that index digest directly, and cosign's default
+      # behavior is to sign the top-level manifest of a multi-arch image,
+      # so no --platform/--recursive flag is needed to cover both arches.
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
