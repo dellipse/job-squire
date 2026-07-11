@@ -17,8 +17,11 @@ Auth:      Two methods, both use Authorization: Bearer <token>:
            1. OAuth 2.0 Authorization Code + PKCE — required by Claude's connector
               handshake.  The user signs in on the /authorize page; Claude stores
               the resulting Bearer token and sends it on every MCP call.
-           2. Static API key — set MCP_API_KEY env var and pass it as a Bearer
-              token.  Intended for scripts and non-Claude tools.
+           2. Static API key — generated on the Settings page (AI Analysis > Claude
+              tab), stored Fernet-encrypted in AIConfig.mcp_api_key_enc.  Intended
+              for scripts and non-Claude tools that can't do OAuth's browser
+              redirect.  Loopback-only by default; see app/mcp_auth.py for the
+              full token spec and the network-reachability rule.
 
 Run:  python -m app.mcp_server      (listens on 0.0.0.0:9000)
 """
@@ -60,6 +63,7 @@ from . import create_app
 from .ai import apply_analysis, build_export_dict
 from .crypto import dump_encrypted_json, load_encrypted_json
 from .extensions import db
+from .mcp_auth import verify_static_token
 from .models import AIConfig, AIInsight, CandidateAsset, Contact, Interview, Job, JobNote, Submission
 
 flask_app = create_app()
@@ -1135,20 +1139,21 @@ async def asgi_app(scope, receive, send):
     # MCP endpoint — accept OAuth Bearer token OR static API key
     bearer = _extract_bearer(scope)
 
-    # Static API key auth: key stored encrypted in AIConfig.mcp_api_key_enc.
+    # Static API key auth — see app/mcp_auth.py for the full spec (shape,
+    # constant-time compare, TTL, and the loopback-only reachability rule).
     # Intended for scripts and non-Claude tools that can't do OAuth.
-    _api_key = ""
     with flask_app.app_context():
-        from .crypto import decrypt as _dec
+        from datetime import datetime as _dt, timezone as _tz
         cfg = db.session.get(AIConfig, 1)
-        if cfg and cfg.mcp_api_key_enc:
-            try:
-                _api_key = _dec(flask_app.config["SECRET_KEY"], cfg.mcp_api_key_enc)
-            except Exception:
-                pass
-    if bearer and _api_key and secrets.compare_digest(bearer, _api_key):
-        await _inner(_scope_for_inner(scope, "/mcp"), receive, send)
-        return
+        if cfg and verify_static_token(
+            bearer, cfg.mcp_api_key_enc, flask_app.config["SECRET_KEY"],
+            flask_app.config.get("DEPLOY_MODE"), cfg.mcp_api_key_allow_network,
+            expires_at=cfg.mcp_api_key_expires_at,
+        ):
+            cfg.mcp_api_key_last_used_at = _dt.now(_tz.utc)
+            db.session.commit()
+            await _inner(_scope_for_inner(scope, "/mcp"), receive, send)
+            return
 
     # OAuth Bearer token (issued by /oauth/token above).
     # Reload from disk on every check so that revocations made by the main-app

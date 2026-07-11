@@ -46,6 +46,7 @@ from werkzeug.utils import secure_filename
 from . import ai
 from .backup import build_backup_archive
 from .crypto import decrypt, dump_encrypted_json, encrypt, load_encrypted_json
+from .mcp_auth import expires_at_from_ttl_hours, generate_token, is_network_reachable
 
 log = logging.getLogger(__name__)
 from .extensions import csrf, db
@@ -2369,25 +2370,50 @@ def settings_ai():
 
 
 # --------------------------------------------------------------------------
-# MCP API key management
+# MCP API key management — see app/mcp_auth.py for the token spec (shape,
+# storage, comparison, and the loopback-only reachability rule).
 # --------------------------------------------------------------------------
 @main_bp.route("/settings/mcp-api-key", methods=["POST"])
 @login_required
 @admin_required
 def settings_mcp_api_key():
-    import secrets as _secrets
+    from datetime import datetime, timezone
     secret = current_app.config["SECRET_KEY"]
     cfg = _singleton(AIConfig)
     action = request.form.get("action", "generate")
+
     if action == "revoke":
         cfg.mcp_api_key_enc = ""
+        cfg.mcp_api_key_created_at = None
+        cfg.mcp_api_key_last_used_at = None
+        cfg.mcp_api_key_expires_at = None
         db.session.commit()
         flash("MCP API key revoked.", "success")
+
+    elif action == "set_network_override":
+        # Explicit, independent opt-in required to let the static token be
+        # used at all on a network-reachable instance -- generating or
+        # rotating a key never turns this on implicitly.
+        cfg.mcp_api_key_allow_network = bool(request.form.get("allow_network"))
+        db.session.commit()
+        flash(
+            "Static key allowed on this network-reachable instance."
+            if cfg.mcp_api_key_allow_network else
+            "Static key restricted to loopback-only use again.",
+            "success",
+        )
+
     else:
-        key = _secrets.token_urlsafe(48)
+        key = generate_token()
+        now = datetime.now(timezone.utc)
         cfg.mcp_api_key_enc = encrypt(secret, key)
+        cfg.mcp_api_key_created_at = now
+        cfg.mcp_api_key_last_used_at = None
+        cfg.mcp_api_key_expires_at = expires_at_from_ttl_hours(
+            request.form.get("ttl_hours"), now=now)
         db.session.commit()
         flash(f"New MCP API key generated: {key}", "success")
+
     return redirect(url_for("main.settings") + "#tab-claude")
 
 
@@ -2875,6 +2901,11 @@ def settings():
         mcp_configured=bool(mcp_base_url),
         public_mcp_url=mcp_base_url,
         mcp_api_key_set=bool(ai_cfg.mcp_api_key_enc),
+        mcp_api_key_created_at=ai_cfg.mcp_api_key_created_at,
+        mcp_api_key_last_used_at=ai_cfg.mcp_api_key_last_used_at,
+        mcp_api_key_expires_at=ai_cfg.mcp_api_key_expires_at,
+        mcp_api_key_allow_network=bool(ai_cfg.mcp_api_key_allow_network),
+        mcp_network_reachable=is_network_reachable(current_app.config.get("DEPLOY_MODE")),
         connector=cname,
         routines=routines,
         bookmarklet_js=bookmarklet_js,

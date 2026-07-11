@@ -32,6 +32,8 @@ MIGRATED_COLUMNS = {
         "auto_followup_enabled", "auto_weekly_review_enabled",
         "rejection_alert_threshold", "mcp_api_key_enc", "fallback_to_anthropic",
         "api_enabled", "mcp_enabled", "claude_buttons_enabled",
+        "mcp_api_key_created_at", "mcp_api_key_last_used_at",
+        "mcp_api_key_expires_at", "mcp_api_key_allow_network",
     ],
     "jobs": [
         "kit_output", "kit_generated_at", "ai_fit_score", "ai_fit_reason",

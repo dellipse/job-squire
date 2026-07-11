@@ -346,6 +346,11 @@ def _run_migrations():
         # installs keep the original US behavior by defaulting to 'US'.
         "ALTER TABLE search_config ADD COLUMN country VARCHAR(2) DEFAULT 'US'",
         "UPDATE search_config SET country = 'US' WHERE country IS NULL",
+        # Static MCP token lifecycle metadata (see app/mcp_auth.py).
+        "ALTER TABLE ai_config ADD COLUMN mcp_api_key_created_at DATETIME",
+        "ALTER TABLE ai_config ADD COLUMN mcp_api_key_last_used_at DATETIME",
+        "ALTER TABLE ai_config ADD COLUMN mcp_api_key_expires_at DATETIME",
+        "ALTER TABLE ai_config ADD COLUMN mcp_api_key_allow_network BOOLEAN DEFAULT 0",
     ]
     for stmt in migrations:
         try:

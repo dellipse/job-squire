@@ -318,6 +318,15 @@ class AIConfig(db.Model):
     model = db.Column(db.String(80), default=lambda: os.environ.get("CLAUDE_DEFAULT_MODEL", "claude-sonnet-4-6"))
     mcp_token_enc = db.Column(db.Text, default="")       # legacy, unused
     mcp_api_key_enc = db.Column(db.Text, default="")     # encrypted static API key for non-Claude MCP tools
+    # Lifecycle metadata for the static key above -- see app/mcp_auth.py.
+    # created_at/last_used_at are informational (shown in Settings);
+    # expires_at is the optional TTL enforced on every auth check;
+    # allow_network is the explicit opt-in required to use the key at all
+    # on a network-reachable (DEPLOY_MODE=network) instance.
+    mcp_api_key_created_at = db.Column(db.DateTime, nullable=True)
+    mcp_api_key_last_used_at = db.Column(db.DateTime, nullable=True)
+    mcp_api_key_expires_at = db.Column(db.DateTime, nullable=True)
+    mcp_api_key_allow_network = db.Column(db.Boolean, default=False)
     connector_name = db.Column(db.String(120), default="job-squire")
     thinking_mode = db.Column(db.String(20), default="disabled")  # disabled | low | medium | high (Anthropic only)
     # Legacy per-feature toggles (superseded by AITaskConfig.enabled; kept for migration)

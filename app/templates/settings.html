@@ -920,28 +920,75 @@ openclaw mcp doctor {{ connector }} --probe{% endset %}
     <p class="muted small">
       Any tool that sends <code>Authorization: Bearer &lt;key&gt;</code> can call the MCP endpoint
       without OAuth. This includes <code>jobsquire-cli</code>, curl, custom scripts, or any agent
-      harness that supports HTTP MCP transport.
+      harness that supports HTTP MCP transport. Loopback-only by default -- see below if this
+      instance is network-reachable.
     </p>
     {% if mcp_api_key_set %}
     <div class="mode-info-box" style="margin-bottom:.75rem">
-      A static API key is active. Generate a new one to rotate it, or revoke to disable bearer-token access.
+      A static API key is active.
+      {% if mcp_api_key_created_at %}Created {{ mcp_api_key_created_at | local_dt }}.{% endif %}
+      {% if mcp_api_key_last_used_at %}Last used {{ mcp_api_key_last_used_at | local_dt }}.
+      {% else %}Never used yet.{% endif %}
+      {% if mcp_api_key_expires_at %}Expires {{ mcp_api_key_expires_at | local_dt }}.
+      {% else %}No expiry set.{% endif %}
+      Generate a new one to rotate it (this immediately invalidates the current key), or revoke
+      to disable bearer-token access.
     </div>
     {% else %}
     <div class="mode-info-box" style="margin-bottom:.75rem">
-      No static API key is set. Generate one to enable bearer-token access for scripts and non-OAuth tools.
+      No static API key is set. Generate one to enable bearer-token access for scripts and
+      non-OAuth tools.
     </div>
     {% endif %}
-    <div style="display:flex;gap:.5rem;flex-wrap:wrap">
-      <button class="btn btn-sm btn-primary" type="submit" form="mcp-api-key-generate-form">
-        {{ 'Rotate key' if mcp_api_key_set else 'Generate key' }}
-      </button>
-      {% if mcp_api_key_set %}
-      <button class="btn btn-sm btn-danger" type="submit" form="mcp-api-key-revoke-form">Revoke key</button>
+    {% if mcp_network_reachable %}
+    <div class="mode-info-box {{ 'mode-info-warning' if not mcp_api_key_allow_network }}" style="margin-bottom:.75rem">
+      This instance is network-reachable (<code>DEPLOY_MODE=network</code>).
+      {% if mcp_api_key_allow_network %}
+      The static key is explicitly allowed here -- treat it with the same care as a password
+      that works from anywhere.
+      {% else %}
+      The static key is <strong>restricted to loopback-only use</strong> and will be rejected
+      even if generated. OAuth is the primary flow and is unaffected. Explicitly opt in below
+      only if you understand the tradeoff.
       {% endif %}
     </div>
+    {% endif %}
+    <form method="post" action="{{ url_for('main.settings_mcp_api_key') }}"
+          style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
+      {{ confirm_form.hidden_tag() }}
+      <input type="hidden" name="action" value="generate">
+      <label class="muted small" for="mcp-ttl-hours">Expire after (hours, optional)</label>
+      <input type="number" id="mcp-ttl-hours" name="ttl_hours" min="1" step="1"
+             placeholder="never" style="width:6rem">
+      <button class="btn btn-sm btn-primary" type="submit">
+        {{ 'Rotate key' if mcp_api_key_set else 'Generate key' }}
+      </button>
+    </form>
+    {% if mcp_api_key_set %}
+    <form method="post" action="{{ url_for('main.settings_mcp_api_key') }}"
+          style="display:inline;margin-top:.5rem">
+      {{ confirm_form.hidden_tag() }}
+      <input type="hidden" name="action" value="revoke">
+      <button class="btn btn-sm btn-danger" type="submit">Revoke key</button>
+    </form>
+    {% endif %}
     <p class="muted small" style="margin-top:.5rem">
       The key is shown once in the flash message when generated. Copy it immediately.
     </p>
+
+    {% if mcp_network_reachable %}
+    <form method="post" action="{{ url_for('main.settings_mcp_api_key') }}"
+          style="margin-top:.75rem;display:flex;gap:.5rem;align-items:center">
+      {{ confirm_form.hidden_tag() }}
+      <input type="hidden" name="action" value="set_network_override">
+      <label class="muted small">
+        <input type="checkbox" name="allow_network" value="1"
+               {% if mcp_api_key_allow_network %}checked{% endif %}>
+        Allow the static key on this network-reachable instance
+      </label>
+      <button class="btn btn-sm btn-outline" type="submit">Save</button>
+    </form>
+    {% endif %}
 
     <div class="mode-info-box" style="margin-top:1rem">
       <strong>Machine ingest (optional):</strong> A separate token-protected endpoint at
@@ -951,18 +998,6 @@ openclaw mcp doctor {{ connector }} --probe{% endset %}
       Send <code>{"jobs":[...]}</code> with header <code>X-API-Key: &lt;key&gt;</code>.
     </div>
   </section>
-
-  {# Hidden forms for MCP key management #}
-  <form id="mcp-api-key-generate-form" method="post"
-        action="{{ url_for('main.settings_mcp_api_key') }}" style="display:none">
-    {{ confirm_form.hidden_tag() }}
-    <input type="hidden" name="action" value="generate">
-  </form>
-  <form id="mcp-api-key-revoke-form" method="post"
-        action="{{ url_for('main.settings_mcp_api_key') }}" style="display:none">
-    {{ confirm_form.hidden_tag() }}
-    <input type="hidden" name="action" value="revoke">
-  </form>
 
   {# ── Card: Daily Routines ── #}
   <section class="card">

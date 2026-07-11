@@ -61,7 +61,7 @@ def mcp(app):
     return m
 
 
-def _set_static_key(m, plaintext):
+def _set_static_key(m, plaintext, *, allow_network=False, expires_at=None):
     """Set (or clear) AIConfig.mcp_api_key_enc for the static-key auth path."""
     from app.crypto import encrypt
     from app.extensions import db
@@ -73,7 +73,17 @@ def _set_static_key(m, plaintext):
             db.session.add(cfg)
         secret = m.flask_app.config["SECRET_KEY"]
         cfg.mcp_api_key_enc = encrypt(secret, plaintext) if plaintext else ""
+        cfg.mcp_api_key_allow_network = allow_network
+        cfg.mcp_api_key_expires_at = expires_at
+        cfg.mcp_api_key_last_used_at = None
         db.session.commit()
+
+
+def _static_key_last_used_at(m):
+    from app.extensions import db
+    from app.models import AIConfig
+    with m.flask_app.app_context():
+        return db.session.get(AIConfig, 1).mcp_api_key_last_used_at
 
 
 def _call(m, method, path, *, headers=None, body=b"", query_string=b"",
@@ -388,6 +398,102 @@ def test_wrong_static_key_rejected(mcp, monkeypatch):
     assert status == 401
     assert json.loads(out)["error"] == "unauthorized"
     assert hits["count"] == 0
+
+
+def test_static_key_updates_last_used_at(mcp, monkeypatch):
+    inner, hits = _sentinel_inner()
+    monkeypatch.setattr(mcp, "_inner", inner)
+    _set_static_key(mcp, "s3cr3t-static-key")
+    assert _static_key_last_used_at(mcp) is None
+
+    status, _, _ = _call(mcp, "POST", "/mcp",
+                         headers=[(b"authorization", b"Bearer s3cr3t-static-key")])
+
+    assert status == 200
+    assert _static_key_last_used_at(mcp) is not None
+
+
+def test_static_key_rejected_on_network_reachable_by_default(mcp, monkeypatch):
+    """A network-reachable instance (DEPLOY_MODE=network) refuses the static
+    key unless the operator has explicitly opted in — the key alone is not
+    enough. Rejection looks identical to a wrong key: 401, no info leak."""
+    inner, hits = _sentinel_inner()
+    monkeypatch.setattr(mcp, "_inner", inner)
+    monkeypatch.setitem(mcp.flask_app.config, "DEPLOY_MODE", "network")
+    _set_static_key(mcp, "s3cr3t-static-key", allow_network=False)
+
+    status, _, out = _call(mcp, "POST", "/mcp",
+                           headers=[(b"authorization", b"Bearer s3cr3t-static-key")])
+
+    assert status == 401
+    assert json.loads(out)["error"] == "unauthorized"
+    assert hits["count"] == 0
+
+
+def test_static_key_accepted_on_network_reachable_when_explicitly_allowed(mcp, monkeypatch):
+    inner, hits = _sentinel_inner()
+    monkeypatch.setattr(mcp, "_inner", inner)
+    monkeypatch.setitem(mcp.flask_app.config, "DEPLOY_MODE", "network")
+    _set_static_key(mcp, "s3cr3t-static-key", allow_network=True)
+
+    status, _, _ = _call(mcp, "POST", "/mcp",
+                         headers=[(b"authorization", b"Bearer s3cr3t-static-key")])
+
+    assert status == 200
+    assert hits["count"] == 1
+
+
+def test_static_key_rejected_when_expired(mcp, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    inner, hits = _sentinel_inner()
+    monkeypatch.setattr(mcp, "_inner", inner)
+    _set_static_key(mcp, "s3cr3t-static-key",
+                     expires_at=datetime.now(timezone.utc) - timedelta(hours=1))
+
+    status, _, out = _call(mcp, "POST", "/mcp",
+                           headers=[(b"authorization", b"Bearer s3cr3t-static-key")])
+
+    assert status == 401
+    assert json.loads(out)["error"] == "unauthorized"
+    assert hits["count"] == 0
+
+
+def test_static_key_accepted_when_not_yet_expired(mcp, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    inner, hits = _sentinel_inner()
+    monkeypatch.setattr(mcp, "_inner", inner)
+    _set_static_key(mcp, "s3cr3t-static-key",
+                     expires_at=datetime.now(timezone.utc) + timedelta(hours=1))
+
+    status, _, _ = _call(mcp, "POST", "/mcp",
+                         headers=[(b"authorization", b"Bearer s3cr3t-static-key")])
+
+    assert status == 200
+    assert hits["count"] == 1
+
+
+def test_rotation_invalidates_old_static_key(mcp, monkeypatch):
+    """Rotating (generating a new key) is exactly overwriting the single
+    mcp_api_key_enc value — there is no multi-token list, so the previous
+    value stops working the moment the new one is stored."""
+    inner, hits = _sentinel_inner()
+    monkeypatch.setattr(mcp, "_inner", inner)
+    _set_static_key(mcp, "old-key")
+
+    before, _, _ = _call(mcp, "POST", "/mcp",
+                         headers=[(b"authorization", b"Bearer old-key")])
+    assert before == 200
+
+    _set_static_key(mcp, "new-key")  # rotate
+
+    old_status, _, out = _call(mcp, "POST", "/mcp",
+                               headers=[(b"authorization", b"Bearer old-key")])
+    assert old_status == 401
+    assert json.loads(out)["error"] == "unauthorized"
+
+    new_status, _, _ = _call(mcp, "POST", "/mcp",
+                             headers=[(b"authorization", b"Bearer new-key")])
+    assert new_status == 200
 
 
 # ---------------------------------------------------------------------------
