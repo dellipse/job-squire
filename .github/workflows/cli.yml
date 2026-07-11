@@ -1,0 +1,122 @@
+name: CLI
+
+# job_squire_cli/ is its own installable package with its own pyproject.toml
+# (see docs/job-squire-cli.md), so it gets its own lint+test+SBOM pipeline
+# here rather than folding into ci.yml's app-focused jobs. Ruff itself still
+# runs on this package via ci.yml's root `ruff check .` -- ruff resolves
+# job_squire_cli/pyproject.toml's [tool.ruff] table for files under that
+# directory even when invoked from the repo root, so linting isn't
+# duplicated here.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "job_squire_cli/**"
+      - "scripts/stamp_cli_version.py"
+      - ".github/workflows/cli.yml"
+  pull_request:
+    paths:
+      - "job_squire_cli/**"
+      - "scripts/stamp_cli_version.py"
+      - ".github/workflows/cli.yml"
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install job-squire-cli with the query extra, plus dev tools
+        run: |
+          pip install -e "./job_squire_cli[query]"
+          pip install pytest==9.1.1 pytest-cov==7.1.0 ruff==0.15.20 pip-audit==2.10.1
+
+      - name: Ruff check
+        run: ruff check job_squire_cli
+
+      - name: Run tests
+        run: cd job_squire_cli && pytest -q
+
+      - name: Audit installed dependencies for known CVEs
+        run: pip-audit --skip-editable
+
+  # Deployment-only install: prove the [query] extra is truly optional --
+  # the ops commands and the console entry points must work without rich
+  # or mcp anywhere on the machine.
+  test-without-query-extra:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install job-squire-cli without the query extra
+        run: pip install -e ./job_squire_cli
+
+      - name: Both entry points resolve and the deployment group works
+        run: |
+          job-squire --help
+          jobsquire --version
+          ! job-squire create 2>&1 | grep -qi traceback
+
+      - name: The query group fails with an actionable message, not a traceback
+        run: |
+          output="$(job-squire query health 2>&1 || true)"
+          echo "$output"
+          echo "$output" | grep -qi "\[query\] extra"
+          ! echo "$output" | grep -qi traceback
+
+  sbom:
+    needs: [test, test-without-query-extra]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Stamp CLI version from VERSION + short SHA
+        run: python scripts/stamp_cli_version.py
+
+      - name: Install job-squire-cli + SBOM generator
+        run: |
+          pip install -e "./job_squire_cli[query]"
+          pip install cyclonedx-bom
+
+      - name: Generate SBOM
+        run: cd job_squire_cli && python scripts/generate_sbom.py
+
+      - name: Commit SBOM if changed
+        run: |
+          if git diff --quiet -- job_squire_cli/sbom/job-squire-cli.cdx.json; then
+            echo "SBOM unchanged."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add job_squire_cli/sbom/job-squire-cli.cdx.json
+          git commit -m "CHORE: Update CLI SBOM (${GITHUB_SHA::7}) [skip ci]"
+          git push origin HEAD:main
