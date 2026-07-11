@@ -8,6 +8,21 @@ footer as `<VERSION>-<build-sha>`.
 
 ## [Unreleased]
 
+### Added
+
+- `job_squire_cli/ops/runtime.py`: container runtime detection and per-OS
+  install with consent (Prompt C3 of `docs/PROMPTS-deployment-cli.md`).
+  Detects a working `docker`, `podman`, `orbstack`, or `colima` and reuses
+  it, installing nothing. When none is present, proposes the per-OS
+  default only with explicit consent: Podman rootless on Linux (package
+  manager chosen from `/etc/os-release`), Podman machine on macOS (OrbStack
+  as an opt-in fallback with its commercial-use threshold shown at that
+  point), and Podman on WSL2 on Windows (Docker Desktop as the fallback,
+  gated on a WSL2 check that guides `wsl --install` plus a reboot when
+  missing). The chosen runtime is recorded to `runtime.json` alongside
+  `mcp.json`, ahead of Prompt C4 folding it into the per-instance registry.
+  See `docs/job-squire-cli.md` ("Container runtime detection and install").
+
 ## [0.6.0] - 2026-07-11
 
 First increment of the single-container / `DEPLOY_MODE` / `job-squire` CLI

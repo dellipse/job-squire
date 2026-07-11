@@ -16,6 +16,7 @@ job_squire_cli/
   job_squire_cli/
     cli.py            # top-level click group; wires ops + lazy query group
     ops/commands.py    # deployment/lifecycle command stubs (real behavior: C2-C11)
+    ops/runtime.py     # container runtime detection and per-OS install (Prompt C3)
     query/
       commands.py      # health, list, pipeline, contacts, job, contact, followups
       mcp_client.py     # self-contained MCP client (Streamable HTTP, no Hermes)
@@ -97,6 +98,57 @@ require Hermes to be installed. It talks Streamable HTTP directly to
 server itself depends on. Hermes (or any other MCP host) can still use the
 Job Squire MCP server by reading its published MCP documentation; that
 coupling runs one way, through docs, never through shared code.
+
+## Container runtime detection and install
+
+Prompt C3 adds `job_squire_cli/ops/runtime.py`, which `create` (Prompt C5)
+calls before it can bring an instance up. It follows
+`docs/PLAN-deployment-modes.md` Section 6 exactly:
+
+1. **Detect first.** `detect_working_runtime()` looks for `docker`,
+   `podman`, `orbstack` (checked via its `orbctl`/`orb` binary), and
+   `colima`, in that order, and confirms whichever is found on `PATH`
+   actually runs (`docker info` / `podman info` / `orbctl status` /
+   `colima status`). If one works, it is used and nothing is installed.
+2. **Install only with consent, and only the per-OS default.** When
+   nothing works, `ensure_runtime()` builds an `InstallPlan` for the
+   current platform and only runs it after the caller's `confirm`
+   callback returns true:
+   - **Linux** (`linux_install_plan`): Podman rootless, with the package
+     manager chosen by reading `/etc/os-release` (`dnf` on
+     Fedora/RHEL-likes, `apt-get` on Debian/Ubuntu-likes, `pacman` on
+     Arch). Docker is never auto-installed here — only used if detection
+     already found it. An unrecognized distribution raises
+     `RuntimeSelectionError` pointing at the manual install docs rather
+     than guessing a package manager.
+   - **macOS** (`macos_install_plan`): Podman machine, scripted end to
+     end (`brew install podman`, `podman machine init`, `podman machine
+     start`). OrbStack is only built when the caller explicitly passes
+     `prefer_orbstack=True`, and its commercial-use threshold
+     (`ORBSTACK_LICENSE_NOTICE`) is printed at exactly that point, never
+     before.
+   - **Windows** (`windows_install_plan`): Podman on WSL2, scripted the
+     same way. `check_wsl2()` is a shared prerequisite check for both
+     Podman and Docker Desktop (both run their Linux containers inside
+     WSL2) — a missing `wsl` binary or an unhealthy `wsl --status` raises
+     `RuntimeSelectionError` with `wsl --install` plus a reboot as the
+     guidance, before any install is attempted. Docker Desktop is only
+     built when the caller passes `prefer_docker_desktop=True`, with its
+     own threshold (`DOCKER_DESKTOP_LICENSE_NOTICE`) shown at that point.
+3. **Recording the choice.** `record_runtime_choice()` /
+   `load_runtime_choice()` persist `{"runtime", "source", "recorded_at"}`
+   to `runtime.json` in the same per-user config directory `mcp.json`
+   lives in (see above) — never a secret, just which runtime was detected
+   or installed and when. This is an interim, machine-wide cache; Prompt
+   C4 formalizes the same information into the `runtime` field of each
+   instance's registry entry, one per instance rather than one per
+   machine.
+
+Every subprocess call and `PATH` lookup in this module is injected
+(`run`/`which` parameters), so `tests/test_runtime.py` exercises every
+branch — detect-and-reuse, each OS's install plan, the WSL2 guard, consent
+gating, and the recording round-trip — without ever touching a real
+container runtime or a real `PATH`.
 
 ## Versioning
 
