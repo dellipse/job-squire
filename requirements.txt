@@ -11,6 +11,6 @@ APScheduler==3.11.3
 cryptography==49.0.0
 Markdown==3.10.2
 mcp==1.28.1
-uvicorn==0.50.0
+uvicorn==0.51.0
 python-docx==1.2.0
 beautifulsoup4==4.15.0
