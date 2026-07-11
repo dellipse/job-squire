@@ -1,0 +1,8 @@
+#!/usr/bin/with-contenv bash
+# shellcheck shell=bash
+# Ensures DATA_DIR exists and is owned by the abc account before web, worker,
+# or mcp touch the shared SQLite database there. Runs after init-adduser so
+# abc's PUID/PGID mapping is already applied.
+
+mkdir -p "${DATA_DIR:-/data}"
+lsiown abc:abc "${DATA_DIR:-/data}"

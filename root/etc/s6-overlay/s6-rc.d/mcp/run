@@ -1,0 +1,8 @@
+#!/usr/bin/with-contenv bash
+# shellcheck shell=bash
+# Claude's connector endpoint on MCP_PORT (default 9000). Waits for web
+# (dependencies.d/web) for the same reason the worker does.
+
+cd /app || exit 1
+export HOME=/config
+exec s6-setuidgid abc python3 -m app.mcp_server

@@ -1,15 +1,44 @@
-FROM python:3.14-slim
+# Single container running all three Job Squire processes (web, worker, mcp)
+# under s6-overlay as PID 1, on the LinuxServer Alpine base. See
+# docs/PLAN-deployment-modes.md Section 2 for the design and Section 8 for
+# the migration notes. This base has no "latest"; the tag below is pinned to
+# a specific dated release on the Alpine 3.23 line.
+FROM ghcr.io/linuxserver/baseimage-alpine:3.23-9ba43c66-ls19
+
+# We are a downstream image, not a LinuxServer first-party one, so their init
+# must not overwrite the branding file we ship below.
+ENV LSIO_FIRST_PARTY=false
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
-    DATA_DIR=/data
+    DATA_DIR=/data \
+    PATH="/opt/venv/bin:${PATH}"
+
+# LinuxServer PUID/PGID/UMASK convention: the base's init-adduser reassigns
+# the existing "abc" account to these IDs at container start (overridable via
+# `-e PUID=... -e PGID=...`), rather than us creating our own user at build
+# time. Preserve the previous image's build-arg defaults of 1000.
+ARG PUID=1000
+ARG PGID=1000
+ENV PUID=${PUID}
+ENV PGID=${PGID}
 
 WORKDIR /app
 
-# Install dependencies first for better layer caching.
+# This base ships Python 3.12 (not 3.14 like the previous python:3.14-slim
+# base); the app runs on 3.12 unchanged and it has the widest musllinux wheel
+# coverage. Installed into a venv so pip doesn't fight Alpine's PEP 668
+# externally-managed system Python.
+RUN apk add --no-cache python3 py3-pip && \
+    python3 -m venv /opt/venv
+
+# Install dependencies first for better layer caching. requirements.txt pins
+# pydantic/pydantic-core explicitly (transitive via mcp) so this resolution
+# is deterministic; the full lockfile has been verified to resolve to binary
+# musllinux wheels only, with no source builds, on this base.
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
 
 # App code.
 COPY wsgi.py .
@@ -18,34 +47,30 @@ COPY app ./app
 COPY docs/Job_Squire_User_Guide.md ./docs/
 COPY docs/wiki ./docs/wiki
 
-# Non-root user. Override at build time with --build-arg PUID=… --build-arg PGID=…
-# or set PUID/PGID in data/.env so docker-compose picks them up automatically.
 # BUILD_VERSION default below should track the semantic version in ./VERSION;
 # CI overrides it with "<VERSION>-<short sha>" on every publish (see
 # .github/workflows/docker-publish.yml).
 ARG BUILD_VERSION=0.1.0-dev
 ENV BUILD_VERSION=${BUILD_VERSION}
 
-ARG PUID=1000
-ARG PGID=1000
-RUN groupadd -g ${PGID} appuser \
-    && useradd -u ${PUID} -g ${PGID} --create-home appuser \
-    && mkdir -p /data \
-    && chown -R ${PUID}:${PGID} /app /data
-USER appuser
+# /app is one of the base's well-known dirs; its own init-adduser already
+# re-chowns it to abc on every boot, and the copied source is world-readable,
+# so no explicit chown is needed here.
+
+# s6 service definitions (web, worker, mcp longruns; init-data-dir oneshot;
+# the "user" bundle wiring that starts them; and our branding banner).
+COPY root/ /
+
+RUN find /etc/s6-overlay/s6-rc.d -type f \( -name run -o -name up \) -exec chmod +x {} + && \
+    chmod +x /etc/s6-overlay/s6-rc.d/web/health-check /etc/s6-overlay/scripts/healthcheck
 
 VOLUME ["/data"]
 EXPOSE 8000
+EXPOSE 9000
 
-# Baseline healthcheck for the default (web) role, so a wedged/crashed container
-# is detectable even outside docker-compose (e.g. `docker run` directly, or an
-# orchestrator that only reads image-level HEALTHCHECK). docker-compose.yml
-# already sets an equivalent check explicitly for clarity; the worker and MCP
-# services override this with their own compose-level healthcheck (the worker
-# has no HTTP endpoint, and MCP listens on a different port).
-HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
-
-# 2 workers is plenty for two users. Bind to all interfaces inside the container.
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "2", "--timeout", "60", \
-     "--access-logfile", "-", "--error-logfile", "-", "wsgi:app"]
+# Aggregated check for all three processes: web's /health, mcp's /health, and
+# the worker's heartbeat file (it has no HTTP endpoint of its own). Replaces
+# the three separate per-container healthchecks the legacy compose file
+# still uses for job-squire / job-squire-worker / job-squire-mcp.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=45s --retries=3 \
+    CMD ["/etc/s6-overlay/scripts/healthcheck"]

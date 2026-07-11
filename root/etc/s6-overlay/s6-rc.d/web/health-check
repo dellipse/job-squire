@@ -1,0 +1,5 @@
+#!/usr/bin/with-contenv bash
+# shellcheck shell=bash
+# Polled by s6-notifyoncheck (see ./run) until it succeeds, at which point
+# web is marked ready and worker/mcp, which depend on this service, unblock.
+python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)" >/dev/null 2>&1

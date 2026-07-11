@@ -1,0 +1,19 @@
+#!/usr/bin/with-contenv bash
+# shellcheck shell=bash
+# The primary service: owns first-boot DB init, migrations, and seeding via
+# create_app(). s6-notifyoncheck runs gunicorn directly (via -d, so gunicorn
+# is the supervised process and receives SIGTERM straight from s6 on
+# shutdown) while polling ./health-check in the background; worker and mcp
+# only start once that check succeeds.
+
+# s6-notifyoncheck itself must run as root (it stats this service's
+# supervise directory, which is root-owned) and stay at this service
+# directory as cwd (it locates its supervisor over a relative path). -d
+# hands top of the process tree to gunicorn -- the s6-setuidgid drop applies
+# to gunicorn only -- so SIGTERM on shutdown reaches gunicorn directly.
+export HOME=/config
+exec s6-notifyoncheck -d -w 1000 -n 60 \
+        -c /etc/s6-overlay/s6-rc.d/web/health-check \
+    s6-setuidgid abc \
+    gunicorn --chdir /app --bind 0.0.0.0:8000 --workers 2 --timeout 60 \
+        --access-logfile - --error-logfile - wsgi:app
