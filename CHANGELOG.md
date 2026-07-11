@@ -8,6 +8,18 @@ footer as `<VERSION>-<build-sha>`.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-11
+
+First increment of the single-container / `DEPLOY_MODE` / `job-squire` CLI
+deployment overhaul described in `docs/PLAN-deployment-modes.md`. This is a
+pre-release: the CLI's deployment/lifecycle commands (`create`, `start`,
+`update`, `backup`, ...) are structural placeholders that print "not
+implemented yet" — the command grammar is real and discoverable via
+`--help`, but real behavior lands incrementally in the prompts tracked in
+`docs/PROMPTS-deployment-cli.md`. The three-container Docker Compose install
+documented in `docs/install/` is unaffected and remains the supported path
+until that CLI is complete.
+
 ### Added
 
 - macOS install: OrbStack is now a supported container runtime alongside Podman
@@ -15,6 +27,55 @@ footer as `<VERSION>-<build-sha>`.
   `brew install --cask orbstack`, launches the app, and waits for the Docker
   engine), `uninstall.sh` tears it down, and it is documented in
   `docs/install/macos.md` and `docs/install/docker-vs-podman.md`.
+- Single-container image: the web, worker, and MCP processes now also run as
+  three s6-overlay longrun services inside one container on the LinuxServer
+  Alpine base, with startup ordering, `SIGTERM` forwarding for WAL-safe
+  shutdown, an aggregated healthcheck across all three services, and a new
+  `docker-compose.single.yml`. The existing three-container compose is
+  unchanged and stays supported during the migration.
+- Multi-architecture image build (`linux/amd64` and `linux/arm64`) via
+  `docker buildx`, with QEMU set up in CI.
+- `DEPLOY_MODE` (`local` or `network`, default `local`): a preset that fills
+  in granular, independently-overridable defaults — `TRUST_PROXY` (new) and
+  `SESSION_COOKIE_SECURE` (existing) — rather than being read directly by
+  application code. See `docs/PLAN-deployment-modes.md` Section 3.
+- Startup safety guard: the app validates its effective deploy configuration
+  at boot and refuses to start (or shows a persistent in-app banner, for
+  risky-but-runnable cases) on unsafe combinations such as network mode
+  without HTTPS/`TRUST_PROXY`, naming the offending variable and the fix in
+  the log, the console, and — once the CLI lifecycle lands — on the command
+  line.
+- Local MCP static token hardened: `jsq_mcp_`-prefixed, 256-bit, Fernet-
+  encrypted at rest, constant-time compared, loopback-only by default, with
+  rotation (invalidating the previous value) and revocation.
+- `adopt` helper and single-container migration path for turning an existing
+  three-container data directory into a single-container instance without
+  losing the `SECRET_KEY` or requiring a rewrite of existing env vars.
+- `job-squire` CLI (`job_squire_cli/`, distribution name `job-squire-cli`):
+  the old `jobsquire-cli` MCP query wrapper (`health`, `list`, `pipeline`,
+  `contacts`, `job`, `contact`, `followups` — `overdue` renamed to
+  `followups`, `stages`/`top` dropped) folds into this repo as one
+  installable, decoupled from the Hermes `~/.hermes/` sidecar in favor of a
+  self-contained MCP client. It gains a new deployment/lifecycle command
+  group (`create`, `start`, `stop`, `restart`, `status`, `list`, `update`,
+  `remove`, `configure`, `backup`, `restore`) namespaced apart from the
+  query group's own `list` via `job-squire query list`. `job-squire` is the
+  canonical entry point; `jobsquire` remains an alias. See
+  `docs/job-squire-cli.md`.
+- `bootstrap.sh` (macOS/Linux) and `bootstrap.ps1` (Windows): the one-line
+  install for the CLI (`curl -fsSL .../bootstrap.sh | sh`, or
+  `irm .../bootstrap.ps1 | iex`). Resolves the latest GitHub release by
+  default or a pin via `JOBSQUIRE_VERSION`, pins the resolved tag to an
+  immutable commit before installing, installs into an isolated per-user
+  environment, and hands off to `job-squire create`.
+
+### Changed
+
+- Versioning: the app's `<VERSION>-<sha>` (OCI image tag) and the CLI's
+  `<VERSION>+<sha>` (PEP 440 local version) are now explicitly documented as
+  one `VERSION` file rendered two ways for two targets with different
+  syntax rules, not two independent schemes — see `docs/job-squire-cli.md`
+  ("Versioning") and the root `CLAUDE.md`.
 
 ## [0.5.0] - 2026-07-05
 

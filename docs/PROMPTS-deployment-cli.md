@@ -33,7 +33,7 @@
 **Progress checklist:**
 
 - [x] Prompt C1: fold-in, package structure, command grammar, version unification
-- [ ] Prompt C2: bootstrap one-liner (install the CLI from GitHub)
+- [x] Prompt C2: bootstrap one-liner (install the CLI from GitHub)
 - [ ] Prompt C3: container runtime detection and install
 - [ ] Prompt C4: cross-platform instance registry
 - [ ] Prompt C5: instance lifecycle core (create, start, stop, status, remove)
