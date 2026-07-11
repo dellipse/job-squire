@@ -1,5 +1,11 @@
 # Deployment Runbook
 
+> **Heads up:** this doc predates the single-container image, `DEPLOY_MODE`, and the eventual
+> `job-squire` CLI. It's still accurate for the three-container topology described here, but see
+> [`PLAN-deployment-modes.md`](PLAN-deployment-modes.md) for what's landed and what's still
+> in flight, and [`adopt-single-container.md`](adopt-single-container.md) if you want to move an
+> existing install onto the single-container image now rather than waiting for the full rewrite.
+
 Target: a Linux host running Docker + LinuxServer **SWAG** reverse proxy. Commands assume you run
 as a sudo-capable non-root user. The examples below use `yourdomain.com` with a wildcard cert;
 substitute your own domain throughout.

@@ -1,5 +1,11 @@
 # Running Multiple Instances
 
+> **Heads up:** this doc predates the instance-registry and cookie-collision handling designed
+> into the eventual `job-squire` CLI. It's still accurate for manually running multiple
+> `docker compose -p <name>` instances as described here — see
+> [`PLAN-deployment-modes.md`](PLAN-deployment-modes.md) Section 4 for where per-instance
+> identity (name, cookie name, ports) is headed.
+
 You can run more than one independent JobSquire deployment on the same physical host — for example, one instance per job seeker. Each instance is fully isolated: its own database, uploads, credentials, URLs, and OAuth tokens. They share only the Docker image.
 
 ---

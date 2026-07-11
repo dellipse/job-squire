@@ -1,5 +1,10 @@
 # Setup Guide
 
+> **Heads up:** this guide predates the eventual `job-squire` CLI's one-line bootstrap and the
+> three deployment modes (local single, local multi-instance, network). It's still accurate for
+> `install.sh` today — see [`PLAN-deployment-modes.md`](PLAN-deployment-modes.md) for where setup
+> is headed, and this guide will be rewritten around that once the CLI lands.
+
 Step-by-step onboarding for a new deployment.
 
 > **Quickstart:** If you want a guided setup that handles the configuration for you, run the install script instead of following this guide manually:

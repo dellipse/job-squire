@@ -2,17 +2,71 @@
 
 ## Containers
 
-The project builds **one Docker image** and runs it as **three containers**, all sharing the same
-code and the same `Job Squire-data` volume (so they see the same SQLite database).
+The project builds **one Docker image** (`Dockerfile`, `ghcr.io/linuxserver/baseimage-alpine`
+base) that can run either as **one container** (`docker-compose.single.yml`, the current default)
+or as the original **three containers** (`docker-compose.yml`, kept as a fallback during
+migration — see below). Either way, the same application code runs the same three logical
+processes and shares the same `/data` bind mount, so they see the same SQLite database.
 
-| Container | Command | Port | Role |
+| Process | Command | Port | Role |
 |---|---|---|---|
-| `job-squire` | `gunicorn ... wsgi:app` (2 workers) | 8000 | The web app (UI + JSON ingest API). |
-| `job-squire-worker` | `python -m app.worker` | none | APScheduler process that runs the automated job search on a cron cadence. |
-| `job-squire-mcp` | `python -m app.mcp_server` | 9000 | Remote MCP server (Streamable HTTP) that Claude connects to as a custom connector. |
+| `web` | `gunicorn ... wsgi:app` (2 workers) | 8000 | The web app (UI + JSON ingest API). Owns first-boot DB init, migrations, and seeding. |
+| `worker` | `python -m app.worker` | none | APScheduler process that runs the automated job search on a cron cadence. Exactly one process so each scheduled slot fires once. |
+| `mcp` | `python -m app.mcp_server` | 9000 | Remote MCP server (Streamable HTTP) that Claude connects to as a custom connector. |
 
-All three run as the UID/GID set via `PUID`/`PGID` build args (default `1000`; override in `data/.env`)
-and join the SWAG Docker network named `swag`. SWAG terminates TLS and proxies:
+### Single-container topology (default)
+
+All three processes run inside **one container**, supervised by **s6-overlay as PID 1** on the
+LinuxServer Alpine base — not a shell script backgrounding three processes, because that wouldn't
+propagate `SIGTERM` correctly and would risk SQLite WAL corruption on every stop/update. `worker`
+and `mcp` are s6 longrun services that depend on `web` via s6's `notification-fd` mechanism
+(`s6-notifyoncheck` polls `web`'s `/health` in the background while `web` itself stays the
+directly-supervised process, so it receives `SIGTERM` straight from s6) — this reproduces the old
+compose `depends_on: service_healthy` ordering inside one container. A single aggregated
+`HEALTHCHECK` (`/etc/s6-overlay/scripts/healthcheck`) passes only when all three internal probes
+pass: `web`'s `/health` on 8000, `mcp`'s `/health` on `MCP_PORT`, and the worker's
+`.worker_heartbeat` freshness check (the worker has no HTTP endpoint of its own).
+
+The container runs as a non-root user (`abc`) via the LinuxServer `PUID`/`PGID`/`UMASK`
+convention — the base image itself must start as root so s6's init can apply that mapping and
+drop each service to `abc` itself, which is why `docker-compose.single.yml` deliberately does
+*not* set a compose `user:` directive (unlike the legacy compose file below).
+
+```
+                         ┌─────────────── SWAG (nginx, TLS) ───────────────┐
+   Browser  ──HTTPS──►   │ squire.*      → job-squire:8000               │
+   Claude   ──HTTPS──►   │ mcp-squire.*  → job-squire:9000                │
+                         └─────────────────────┬───────────────────────────┘
+                                               │  (all on Docker network "swag")
+                              ┌────────────────┴────────────────┐
+                              │        job-squire (1 container)  │
+                              │   s6-overlay (PID 1, root)        │
+                              │   ├─ web    (gunicorn, non-root)  │
+                              │   ├─ worker (APScheduler, ↳ web)  │
+                              │   └─ mcp    (uvicorn, ↳ web)      │
+                              └────────────────┬────────────────┘
+                                               │  bind mount
+                                   host data dir           → /data
+                                        /data/job-squire.db (SQLite, WAL)
+                                        /data/uploads/  /data/candidate_profile.md
+```
+
+### Legacy three-container topology (fallback)
+
+`docker-compose.yml` still runs the same image as three separate containers — `job-squire`,
+`job-squire-worker`, `job-squire-mcp` — each its own process, each with its own per-container
+healthcheck, kept for anyone who wants component-level isolation (restart or inspect one process
+without touching the others) during the migration to the single-container image. It is scheduled
+for removal once the single-container image is proven out (`PLAN-deployment-modes.md` Section 8).
+
+Because the image's own `ENTRYPOINT` is now s6-overlay's `/init` (which must start as root), each
+service in the legacy compose file carries an explicit `entrypoint: []` override so it bypasses
+`/init` and execs its process directly — otherwise the compose file's `user: "${PUID}:${PGID}"`
+directive (which the legacy topology still uses, unlike the single-container one) would try to
+run `/init` as a non-root user and fail.
+
+All three run as the UID/GID set via `PUID`/`PGID` build args (default `1000`; override in
+`data/.env`) and join the SWAG Docker network named `swag`. SWAG terminates TLS and proxies:
 
 - `squire.yourdomain.com` → `job-squire:8000`
 - `mcp-squire.yourdomain.com` → `job-squire-mcp:9000`
@@ -20,28 +74,18 @@ and join the SWAG Docker network named `swag`. SWAG terminates TLS and proxies:
 The worker has no inbound traffic. The MCP subdomain is served over **HTTP/1.1** (`http2 off`)
 because MCP uses unbuffered streaming/SSE, which trips nginx HTTP/2 framing.
 
-```
-                         ┌─────────────── SWAG (nginx, TLS) ───────────────┐
-   Browser  ──HTTPS──►   │ squire.*      → job-squire:8000 (gunicorn)    │
-   Claude   ──HTTPS──►   │ mcp-squire.*  → job-squire-mcp:9000 (uvicorn) │
-                         └─────────────────────┬───────────────────────────┘
-                                               │  (all on Docker network "swag")
-                  ┌────────────────────────────┼────────────────────────────┐
-                  │ job-squire       job-squire-worker     job-squire-mcp │
-                  │   (web)             (APScheduler)           (MCP)        │
-                  └────────────────────────────┬────────────────────────────┘
-                                               │  shared
-                                   host data dir (bind mount) → /data
-                                        /data/job-squire.db (SQLite, WAL)
-                                        /data/uploads/  /data/candidate_profile.md
-```
+If you're moving an existing three-container install onto the single-container image, see
+[`adopt-single-container.md`](adopt-single-container.md).
 
 ## Request lifecycle (web)
 
 1. `wsgi.py` calls `create_app()` (the factory in `app/__init__.py`).
-2. The factory loads config from env, wraps the app in `ProxyFix` (trusts one hop of
-   `X-Forwarded-*` from SWAG), initializes extensions, registers the `auth` and `main`
-   blueprints, and adds security headers (including a strict CSP) via an `after_request` hook.
+2. The factory resolves `DEPLOY_MODE` into the granular `trust_proxy`/`secure_cookie` flags
+   (`app/deploy.py`), runs the startup safety guard against them, loads the rest of config from
+   env, conditionally wraps the app in `ProxyFix` (trusts one hop of `X-Forwarded-*` — only when
+   `trust_proxy` resolved true, never unconditionally), initializes extensions, registers the
+   `auth` and `main` blueprints, and adds security headers (including a strict CSP) via an
+   `after_request` hook. See [`configuration.md`](configuration.md#web--security) for the guard.
 3. On startup it runs `_init_database()` under a cross-process file lock: enables SQLite WAL,
    `create_all()`, applies additive `_run_migrations()` (columns `create_all()` can't add to
    existing tables), then seeds the two users and a blank singleton `SearchConfig`. It also
@@ -121,18 +165,23 @@ The legacy `AIConfig.mode` column (`manual`/`api`/`mcp`) is retained for backwar
 
 - Login required for all UI; passwords hashed (Werkzeug).
 - CSRF on every form (Flask-WTF); the `/api/ingest` endpoint is CSRF-exempt but token-gated.
-- Session cookies: HttpOnly, SameSite=Lax, Secure (configurable).
+- Session cookies: HttpOnly, SameSite=Lax, Secure (mode-aware default, see
+  [`configuration.md`](configuration.md#web--security) — always overridable explicitly).
 - Login rate limiting (Flask-Limiter, in-memory).
 - Strict security headers incl. `Content-Security-Policy: ... script-src 'self'` — this is why
   **all** JavaScript is in `app/static/app.js` and there are no inline handlers.
-- Stored secrets (provider API keys, SMTP password, Anthropic key, legacy MCP token) are
+- Stored secrets (provider API keys, SMTP password, Anthropic key, static MCP token) are
   **encrypted at rest** with Fernet, keyed off a hash of `SECRET_KEY` (`app/crypto.py`). Rotating
   `SECRET_KEY` invalidates stored secrets.
-- MCP auth: **OAuth 2.0 Authorization Code flow with PKCE** (required by Claude's connector
-  handshake). The user signs in with their Job Squire credentials on a login page the MCP server
-  serves; Claude stores the resulting 30-day Bearer token and sends it on every call. The legacy
-  token-in-path approach (`/mcp/<token>`) is kept as a fallback for any existing API-mode callers.
-  Served only over HTTPS, with DNS-rebinding protection (host allowlist) on.
+- MCP auth: **OAuth 2.0 Authorization Code flow with PKCE** is the default everywhere (required
+  by Claude's connector handshake). The user signs in with their Job Squire credentials on a
+  login page the MCP server serves; Claude stores the resulting 30-day Bearer token and sends it
+  on every call. Served only over HTTPS, with DNS-rebinding protection (host allowlist) on. A
+  static Bearer token (`app/mcp_auth.py`, prefixed `jsq_mcp_`, constant-time compared, optional
+  TTL) is the sanctioned escape hatch for headless/non-browser clients that can't complete OAuth's
+  browser redirect (scripts, agent harnesses) — generated on the Settings page, loopback-only by
+  default, and rejected on a network-reachable (`DEPLOY_MODE=network`) instance unless the
+  operator explicitly opts in.
 - Runs non-root in the container.
 
 Not designed for public multi-tenant signup: there are exactly two seeded accounts and no

@@ -1,5 +1,10 @@
 # Backup and Restore
 
+> **Heads up:** this doc predates the eventual `job-squire` CLI's single encrypted
+> passphrase-protected archive (Argon2id + AES-256-GCM). `scripts/backup.sh`/`scripts/restore.sh`
+> below remain the supported path for now — see [`PLAN-deployment-modes.md`](PLAN-deployment-modes.md)
+> Section 7 for what's planned.
+
 All persistent state lives in one host directory (`DATA_HOST_DIR`, default `./job-squire/data`),
 bind-mounted into all three containers at `/data`:
 

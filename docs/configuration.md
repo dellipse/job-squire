@@ -39,14 +39,38 @@ If you only need one login, you can run the app with just the admin account. The
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `SESSION_COOKIE_SECURE` | `true` | Keep `true` behind HTTPS/SWAG. `false` only for plain-HTTP local testing. |
+| `DEPLOY_MODE` | `local` | `local` or `network`. A convenience preset over `TRUST_PROXY` and `SESSION_COOKIE_SECURE` below — the running app never branches on this string itself, only on the two flags it fills in when they're not set explicitly. `local` assumes this instance is reachable only via loopback with no reverse proxy in front; `network` assumes an external TLS-terminating reverse proxy sits in front of it. |
+| `TRUST_PROXY` | mode-dependent (`0` for `local`, `1` for `network`) | Trust one hop of `X-Forwarded-For/Proto/Host` from a reverse proxy (`werkzeug.middleware.proxy_fix.ProxyFix`), for correct client IPs (rate limiting) and request scheme. Leave unset to take `DEPLOY_MODE`'s default; an explicit value here always wins. Must stay `0` if nothing actually sits in front of the app on this network path — otherwise those headers can be spoofed by anything that reaches the app directly. |
+| `SESSION_COOKIE_SECURE` | mode-dependent (`false` for `local`, `true` for `network`) | Keep `true` behind HTTPS/SWAG. `false` only for plain-HTTP local testing. Leave unset to take `DEPLOY_MODE`'s default; an explicit value here always wins over the preset, so an existing install that already sets this keeps its current behavior regardless of `DEPLOY_MODE`. |
+| `SESSION_COOKIE_NAME` | derived from `INSTANCE_NAME` (e.g. `castelo_session`) | Not mode-dependent — the derivation is the same in either mode. Prevents instances that share a registrable domain from clobbering each other's sessions and CSRF tokens. Override for full manual control. |
 | `SESSION_DAYS` | `7` | Session lifetime. |
 | `CSRF_TIME_LIMIT` | `14400` | CSRF token lifetime in seconds (4h). Set `0` to disable expiry for very long-lived forms. |
-| `PUBLIC_URL` | — | Public base URL, used in notification emails. |
+| `PUBLIC_URL` | — | Public base URL, used in notification emails and consulted by the startup safety guard below. |
 | `DATA_DIR` | `/data` | Where the SQLite DB + uploads live (the volume mount). |
 | `MAX_UPLOAD_MB` | `10` | Attachment size limit. |
 | `DATABASE_URL` | sqlite in `DATA_DIR` | Override the DB URI if ever moving off SQLite. |
 | `ALLOW_INSECURE` | `false` | Dev only: allows a default secret/passwords. Never set in production. |
+
+#### Startup safety guard
+
+At boot, the app validates `DEPLOY_MODE`, `PUBLIC_URL`, and `TRUST_PROXY` together and turns two
+known-unsafe combinations into an early, explicit signal rather than a silent misconfiguration:
+
+- **Fatal — refuses to start, exits non-zero:** `DEPLOY_MODE=network` but `PUBLIC_URL` isn't an
+  `https://` URL, or `TRUST_PROXY` resolves off. Written to the log and printed as a
+  `FATAL:`-prefixed line on stderr (a stable shape a future `job-squire` CLI can catch and
+  re-surface, rather than a generic "container exited").
+- **Warning — starts, shows a persistent in-app banner:** `DEPLOY_MODE=local` but `PUBLIC_URL` is
+  set to a non-loopback host. This is a self-consistency check between two declared values, not a
+  live network probe — the app has no way to observe its own container's actual host-level
+  network exposure (Docker always binds `0.0.0.0` internally regardless of how the host publishes
+  that port). The banner clears on the next boot once the underlying variable is fixed.
+
+Every message names the offending variable, its value, why it's unsafe, and the fix. See
+`app/deploy.py` and [`PLAN-deployment-modes.md`](PLAN-deployment-modes.md) Section 3 for the full
+precedence rules and guard logic, and
+[`adopt-single-container.md`](adopt-single-container.md) if you're moving an existing install onto
+the single-container image and want to know exactly which of these to set.
 
 ### Scheduler (worker)
 
