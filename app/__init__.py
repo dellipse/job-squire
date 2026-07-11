@@ -17,8 +17,8 @@ from datetime import timedelta, timezone as _utc
 
 from flask import Flask, current_app
 from sqlalchemy import text
-from werkzeug.middleware.proxy_fix import ProxyFix
 
+from .deploy import apply_proxy_trust, resolve_deploy_flags
 from .extensions import csrf, db, limiter, login_manager
 
 log = logging.getLogger(__name__)
@@ -33,6 +33,8 @@ def _bool_env(name, default=False):
 
 def create_app():
     app = Flask(__name__)
+
+    deploy_flags = resolve_deploy_flags()
 
     # --- Core config -------------------------------------------------------
     secret = os.environ.get("SECRET_KEY")
@@ -93,15 +95,26 @@ def create_app():
         # over plain HTTP (e.g. TLS not yet configured in the proxy), the
         # browser will silently drop the Secure cookie, leaving the session
         # empty and causing "CSRF session token is missing" on form submit.
-        SESSION_COOKIE_SECURE=_bool_env("SESSION_COOKIE_SECURE", True),
+        # Defaults to DEPLOY_MODE's preset (see app/deploy.py) when unset;
+        # an explicit SESSION_COOKIE_SECURE always overrides the preset.
+        SESSION_COOKIE_SECURE=deploy_flags["secure_cookie"],
+        DEPLOY_MODE=deploy_flags["mode"],
+        TRUST_PROXY=deploy_flags["trust_proxy"],
         PERMANENT_SESSION_LIFETIME=timedelta(days=int(os.environ.get("SESSION_DAYS", "7"))),
         WTF_CSRF_TIME_LIMIT=csrf_time_limit,
     )
 
     log.info("Session cookie name: %s", app.config["SESSION_COOKIE_NAME"])
+    log.info(
+        "Deploy mode: %s (trust_proxy=%s, secure_cookie=%s)",
+        deploy_flags["mode"], deploy_flags["trust_proxy"], deploy_flags["secure_cookie"],
+    )
 
-    # Trust one hop of X-Forwarded-* headers from the reverse proxy.
-    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
+    # Trust one hop of X-Forwarded-* headers from the reverse proxy -- but
+    # only when the resolved deploy flags say a proxy is actually there.
+    # See app/deploy.py: applying this unconditionally on an untrusted
+    # network would let forwarded headers be spoofed.
+    apply_proxy_trust(app, deploy_flags["trust_proxy"])
 
     # --- Extensions --------------------------------------------------------
     db.init_app(app)
