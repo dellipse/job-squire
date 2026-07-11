@@ -1,0 +1,65 @@
+# Single-container topology: web, worker, and mcp all run inside one
+# container under s6-overlay. See docs/PLAN-deployment-modes.md Section 2.
+#
+# Unlike docker-compose.yml, this file does NOT set a "user:" directive --
+# the container must start as root so s6-overlay's init can apply
+# PUID/PGID/UMASK and drop each service to the non-root "abc" account
+# itself. Forcing a non-root user here would break that init.
+#
+# Prefer the three-container docker-compose.yml if you want each process
+# isolated in its own container (e.g. to restart or inspect one in
+# isolation). Both files load the same data/.env and the same /data
+# directory, and are not meant to run at the same time against that data.
+services:
+  job-squire:
+    build:
+      context: .
+      args:
+        PUID: "${PUID:-1000}"
+        PGID: "${PGID:-1000}"
+        BUILD_VERSION: ${BUILD_VERSION:-0.1.0-dev}
+    image: ghcr.io/dellipse/job-squire:latest
+    container_name: ${INSTANCE_NAME:-job-squire}
+    restart: unless-stopped
+    # PUID/PGID/UMASK are read by the base image's own init at container
+    # start (not baked in at build time), so they're passed through here
+    # rather than via a "user:" directive. env_file below also forwards
+    # them (and everything else in data/.env) into the running processes;
+    # this block guarantees they're set even if data/.env omits them.
+    environment:
+      PUID: "${PUID:-1000}"
+      PGID: "${PGID:-1000}"
+      UMASK: "${UMASK:-022}"
+    env_file:
+      - data/.env
+    volumes:
+      # Persistent data (SQLite DB + uploads) lives on the host for easy backup.
+      # Set DATA_HOST_DIR in data/.env; defaults to ./job-squire/data.
+      - ${DATA_HOST_DIR:-./job-squire/data}:/data
+    healthcheck:
+      # Same aggregated check baked into the image's own HEALTHCHECK (web
+      # /health, mcp /health, worker heartbeat freshness); declared
+      # explicitly here too for parity with docker-compose.yml's style.
+      test: ["CMD", "/etc/s6-overlay/scripts/healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
+    # Standalone / host-port mode: SWAG or another reverse proxy can reach
+    # the app at http://<host-ip>:${APP_HOST_PORT} and MCP at
+    # http://<host-ip>:${MCP_HOST_PORT}. Both bound to loopback, matching
+    # docker-compose.yml. Override the *_HOST_PORT vars if those ports are
+    # already in use.
+    ports:
+      - "127.0.0.1:${APP_HOST_PORT:-8080}:8000"
+      - "127.0.0.1:${MCP_HOST_PORT:-9000}:${MCP_PORT:-9000}"
+    # Shared network with SWAG or another nginx container: comment out the
+    # ports block above and uncomment this instead.
+    # networks:
+    #   - swag
+
+# Uncomment if using the shared-network option above.
+# Create the network once with: docker network create <network-name>
+# networks:
+#   swag:
+#     external: true

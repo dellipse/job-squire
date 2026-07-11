@@ -1,3 +1,15 @@
+# Three-container topology: web, worker, and mcp each run in their own
+# container. Kept as a fallback for anyone who wants component-level
+# isolation (restart or inspect one process independently of the others)
+# during the migration to the single-container image. Prefer
+# docker-compose.single.yml for new installs -- see
+# docs/PLAN-deployment-modes.md Section 2.
+#
+# The image's own ENTRYPOINT is now s6-overlay's /init (it drives the
+# single-container topology and must start as root), which is incompatible
+# with the "user:" directive below. Every service here overrides entrypoint
+# to bypass /init and exec its process directly, exactly as the pre-s6
+# image's default CMD did, so the forced non-root user keeps working.
 services:
   job-squire:
     build:
@@ -10,6 +22,9 @@ services:
     container_name: ${INSTANCE_NAME:-job-squire}
     restart: unless-stopped
     user: "${PUID:-1000}:${PGID:-1000}"
+    entrypoint: []
+    command: ["gunicorn", "--chdir", "/app", "--bind", "0.0.0.0:8000", "--workers", "2",
+              "--timeout", "60", "--access-logfile", "-", "--error-logfile", "-", "wsgi:app"]
     env_file:
       - data/.env
     volumes:
@@ -48,6 +63,7 @@ services:
     container_name: ${INSTANCE_NAME:-job-squire}-worker
     restart: unless-stopped
     user: "${PUID:-1000}:${PGID:-1000}"
+    entrypoint: []
     command: ["python", "-m", "app.worker"]
     env_file:
       - data/.env
@@ -85,6 +101,7 @@ services:
     container_name: ${INSTANCE_NAME:-job-squire}-mcp
     restart: unless-stopped
     user: "${PUID:-1000}:${PGID:-1000}"
+    entrypoint: []
     command: ["python", "-m", "app.mcp_server"]
     env_file:
       - data/.env
