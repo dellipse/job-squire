@@ -15,8 +15,14 @@ job_squire_cli/
   pyproject.toml
   job_squire_cli/
     cli.py            # top-level click group; wires ops + lazy query group
-    ops/commands.py    # deployment/lifecycle command stubs (real behavior: C2-C11)
+    ops/commands.py    # deployment/lifecycle click commands (C5); C6-C8 stubs remain
     ops/runtime.py     # container runtime detection and per-OS install (Prompt C3)
+    ops/registry.py    # cross-platform instance registry (Prompt C4)
+    ops/paths.py       # per-instance directory layout (Prompt C5)
+    ops/ports.py       # local-mode port pair allocation (Prompt C5)
+    ops/compose.py     # compose/env rendering + runtime-driven compose invocations (C5)
+    ops/secrets_copy.py  # Fernet-aware settings import between instances (Prompt C5)
+    ops/lifecycle.py   # create/start/stop/restart/status/list/remove orchestration (C5)
     query/
       commands.py      # health, list, pipeline, contacts, job, contact, followups
       mcp_client.py     # self-contained MCP client (Streamable HTTP, no Hermes)
@@ -149,6 +155,103 @@ Every subprocess call and `PATH` lookup in this module is injected
 branch — detect-and-reuse, each OS's install plan, the WSL2 guard, consent
 gating, and the recording round-trip — without ever touching a real
 container runtime or a real `PATH`.
+
+## Instance lifecycle core (Prompt C5)
+
+`create`, `start`, `stop`, `restart`, `status`, `list`, and `remove` are
+real as of Prompt C5, wired to `ops/lifecycle.py`; `update`, `configure`,
+`backup`, and `restore` remain structural stubs until C6-C8. Every real
+command follows the same shape as `ops/runtime.py`: `ops/commands.py` is a
+thin click adapter (prompting, printing, mapping exceptions to a clean
+`exit(1)`), and `ops/lifecycle.py` takes no click objects at all -- every
+function accepts its subprocess `run`, `PATH` `which`, `confirm`, and
+`sleep` callables as parameters, so it's directly unit-testable
+(`tests/test_lifecycle.py`) against a fully injected fake runtime, never a
+real `docker`/`podman`.
+
+**Per-instance layout** (`ops/paths.py`). Each instance is one
+self-contained directory, `~/job-squire/<name>/` by default
+(`JOB_SQUIRE_HOME` overrides the root):
+
+```
+<name>/
+  docker-compose.single.yml   # generated; image pinned, no build: block
+  .env                        # compose-level vars (PUID/PGID, host ports)
+  data/
+    .env                      # container env (SECRET_KEY, DEPLOY_MODE, ...)
+    job-squire.db             # created by the app on first boot
+    uploads/
+```
+
+This is deliberately the whole thing an operator needs for "direct runtime
+access remains available" (PLAN Section 7): `cd` into it and run
+`docker compose ...` or `podman compose ...` directly. It's also the exact
+directory registered as the instance's `data_dir`, since a future backup
+archive (Prompt C8) needs to capture `SECRET_KEY` along with the database.
+
+**Compose/env rendering** (`ops/compose.py`). The generated
+`docker-compose.single.yml` is *not* a copy of the repo's own file of the
+same name -- that one has a `build:` block for local development from a
+checkout, which a CLI-created instance (no checkout involved) must not
+have. `render_compose_yaml`/`render_compose_env`/`render_data_env` are
+hand-rolled f-string templates (no new YAML/dotenv dependency) covering
+the fixed, small shape both files need. `runtime_binary`/`compose_binary`
+translate the registry's `runtime` field (`docker`, `podman`, `orbstack`,
+`colima`) into the right CLI: OrbStack and Colima both provide the
+`docker` binary (PLAN Section 6), so only Podman gets its own branch.
+`inspect_state`/`container_logs`/`extract_fatal_lines` are what `status`
+and the startup-guard surfacing below read back.
+
+**Port allocation** (`ops/ports.py`). `allocate_port_pair` checks both the
+registry (no two instances get the same recorded port) and a real
+loopback socket bind (nothing squats on a port the registry doesn't know
+about), starting from `8080`/`9000`.
+
+**Session cookie collision, closed.** `render_data_env` sets
+`SESSION_COOKIE_NAME` explicitly to the registry's derived
+`<slug>_session` rather than relying on the app's own `INSTANCE_NAME`
+derivation (`app/__init__.py`): the app's derivation turns *both* hyphens
+and spaces into underscores, while the registry's slug allows hyphens, so
+for any instance name containing a hyphen the two derivations would
+otherwise silently disagree.
+
+**Importing settings from an existing instance** (`ops/secrets_copy.py`,
+`create --import-from`). PLAN Section 4's import prompt splits across the
+same two config layers the app itself uses: schedule hours/timezone are
+`data/.env` variables, read as plain text before the new instance's first
+boot; everything else (search targets, enabled providers, SMTP host/port,
+AI provider selection, interface preferences) lives in the database, read
+and written directly with the stdlib `sqlite3` module against a
+hand-maintained column allowlist (this package does not depend on
+Flask/SQLAlchemy/the app package at all). Secrets are excluded by default;
+`--copy-keys` decrypts each secret column with the *source* instance's
+`SECRET_KEY` and re-encrypts it with the destination's, using an
+HKDF-SHA256 -> Fernet derivation mirrored byte-for-byte from
+`app/crypto.py` (verified in `tests/test_secrets_copy.py` by loading the
+real `app/crypto.py` file directly, bypassing `app/__init__.py`'s
+Flask-only imports). The database copy runs *after* the new instance's
+first boot (so the app's own schema creation/seeding has already run),
+bracketed by a compose `stop`/`start` so it never races the app's own
+writes to the same SQLite file.
+
+**Surfacing the startup guard** (PLAN Section 7). When `app/deploy.py`'s
+startup safety guard refuses to boot (an unsafe `DEPLOY_MODE`/`PUBLIC_URL`/
+`TRUST_PROXY` combination), s6 brings the whole container down and it
+writes `FATAL: ...` lines to stderr before exiting. `create`/`start`/
+`restart` wait for the container to report healthy or exited
+(`lifecycle.wait_for_state`), and on an exited container, pull its logs
+and re-raise `StartupGuardFailure` with the exact `FATAL:` lines intact --
+the click layer reprints them verbatim instead of a generic "container
+exited" message. A collision or a validation error is checked *before* any
+of this (runtime detection, port allocation, or writing to disk), so a
+bad `create` invocation never has side effects to clean up.
+
+**Remove never destroys data silently.** `remove_instance` always asks
+(via an injected `confirm_delete` callable) before deleting an instance's
+data directory; if nothing asks (no `confirm_delete`, no explicit
+`keep_data`), the default is to keep the data -- PLAN Section 4's rule
+that removing an instance must never silently destroy someone's
+job-search history.
 
 ## Versioning
 

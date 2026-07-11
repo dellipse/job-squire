@@ -15,6 +15,11 @@
 These tests don't need the [query] extra installed and must keep passing
 without it -- if they ever import job_squire_cli.query.commands eagerly,
 the whole point of the lazy group is defeated.
+
+Prompt C5 made create/start/stop/restart/status/list/remove real (see
+ops/lifecycle.py and tests/test_lifecycle.py, tests/test_ops_commands.py
+for their behavior); update/configure/backup/restore remain C6-C8 stubs,
+so only that second set is exercised here as "not implemented yet".
 """
 import subprocess
 import sys
@@ -29,6 +34,8 @@ DEPLOYMENT_COMMANDS = [
     "update", "remove", "configure", "backup", "restore",
 ]
 
+STUB_COMMANDS = ["update", "configure", "backup", "restore"]
+
 
 def test_top_level_lists_deployment_commands_and_query_group():
     runner = click.testing.CliRunner()
@@ -39,7 +46,7 @@ def test_top_level_lists_deployment_commands_and_query_group():
     assert "query" in result.output
 
 
-@pytest.mark.parametrize("name", DEPLOYMENT_COMMANDS)
+@pytest.mark.parametrize("name", STUB_COMMANDS)
 def test_deployment_stub_exits_nonzero(name):
     runner = click.testing.CliRunner()
     result = runner.invoke(main, [name])
@@ -64,7 +71,7 @@ def test_lazy_import_in_subprocess_never_touches_query_stack():
         "import sys\n"
         "from click.testing import CliRunner\n"
         "from job_squire_cli.cli import main\n"
-        "result = CliRunner().invoke(main, ['status'])\n"
+        "result = CliRunner().invoke(main, ['update'])\n"
         "assert result.exit_code == 1, result.output\n"
         "assert 'rich' not in sys.modules, 'rich should not be imported for a deployment command'\n"
         "assert 'mcp' not in sys.modules, 'mcp should not be imported for a deployment command'\n"
@@ -80,7 +87,7 @@ def test_lazy_import_in_subprocess_never_touches_query_stack():
 
 def test_deployment_stub_accepts_arbitrary_args_and_flags():
     runner = click.testing.CliRunner()
-    result = runner.invoke(main, ["create", "some-instance", "--mode", "local", "--whatever"])
+    result = runner.invoke(main, ["update", "some-instance", "--mode", "local", "--whatever"])
     assert result.exit_code == 1
     assert "not implemented yet" in result.output
 

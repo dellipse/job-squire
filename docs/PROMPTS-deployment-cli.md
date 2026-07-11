@@ -36,7 +36,7 @@
 - [x] Prompt C2: bootstrap one-liner (install the CLI from GitHub)
 - [x] Prompt C3: container runtime detection and install
 - [x] Prompt C4: cross-platform instance registry
-- [ ] Prompt C5: instance lifecycle core (create, start, stop, status, remove)
+- [x] Prompt C5: instance lifecycle core (create, start, stop, status, remove)
 - [ ] Prompt C6: MCP authentication and token-config plumbing
 - [ ] Prompt C7: update, rollback, and adopt existing data
 - [ ] Prompt C8: passphrase-encrypted backup and restore
