@@ -40,6 +40,7 @@ from . import backup, compose, lifecycle, mcp_token, secrets_copy
 from . import dns as dns_ops
 from . import proxy as proxy_ops
 from . import tailscale as tailscale_ops
+from . import uninstall as uninstall_ops
 from .compose import DEFAULT_IMAGE
 from .registry import (
     Instance,
@@ -270,6 +271,72 @@ def remove(name, keep_data, assume_yes):
         _handle_lifecycle_error(exc)
     click.echo(f"Instance {result.name!r} removed.")
     click.echo(f"Data directory {'kept' if result.data_kept else 'deleted'}: {result.data_dir}")
+
+
+# ── uninstall ────────────────────────────────────────────────────────────
+# Removes every registered instance, then (opt-in) the container runtime
+# job-squire itself installed, then the CLI's own venv and PATH entry --
+# see ops/uninstall.py's module docstring for the full rationale. Not part
+# of the original C1-C12 grammar; added because getting job-squire *off* a
+# machine matters as much as getting it on, and the bootstrap scripts
+# already modify PATH and (via `create`) may have installed a runtime, so
+# the CLI should be able to fully reverse both, on request.
+
+
+@click.command(help="Uninstall job-squire: remove every registered instance, optionally the "
+                     "container runtime it installed, and the CLI itself.")
+@click.option("--keep-data/--delete-data", "keep_data", default=None,
+              help="Skip the per-instance prompt: force keep or delete every instance's data "
+                   "directory (database, uploads, SECRET_KEY).")
+@click.option("--remove-runtime/--keep-runtime", "remove_runtime", default=False, show_default=True,
+              help="Also uninstall the container runtime (Podman/OrbStack/Docker Desktop) -- but "
+                   "only if job-squire installed it itself; a runtime that was already working on "
+                   "this machine before job-squire is never touched.")
+@click.option("--yes", "assume_yes", is_flag=True, default=False,
+              help="Don't prompt; without --keep-data/--delete-data this keeps every instance's "
+                   "data (the safe default), and without --remove-runtime the runtime is never "
+                   "removed even if job-squire installed it.")
+def uninstall(keep_data, remove_runtime, assume_yes):
+    instances = list_instances()
+    if instances:
+        click.echo("This removes every registered instance: " + ", ".join(i.name for i in instances))
+    else:
+        click.echo("No instances are registered.")
+
+    confirm_delete = None if (keep_data is not None or assume_yes) else click.confirm
+    confirm_runtime = None if assume_yes else click.confirm
+
+    try:
+        result = uninstall_ops.uninstall_everything(
+            keep_data=keep_data, confirm_delete_data=confirm_delete,
+            remove_runtime=remove_runtime, confirm_runtime=confirm_runtime,
+        )
+    except lifecycle.LifecycleError as exc:
+        _handle_lifecycle_error(exc)
+    except uninstall_ops.UninstallError as exc:
+        _fail(str(exc))
+
+    for name in result.instances_removed:
+        click.echo(f"  {name}: data {'kept' if result.data_kept[name] else 'deleted'}")
+
+    if result.runtime_removed:
+        click.echo(f"Runtime removed: {result.runtime_removed}")
+    elif remove_runtime:
+        click.echo("Runtime not removed (job-squire didn't install it, or removal was declined).")
+    else:
+        click.echo("Runtime left in place (pass --remove-runtime to also uninstall it).")
+
+    if result.cli_removed:
+        click.echo(f"job-squire CLI removed from {result.cli_removed}")
+        if result.rc_files_updated:
+            click.echo("  PATH entry removed from: " + ", ".join(str(p) for p in result.rc_files_updated))
+        click.echo("Open a new terminal for the PATH change to take effect.")
+    else:
+        click.echo(
+            "job-squire's own files weren't removed automatically (this doesn't look like a "
+            "bootstrap.sh/.ps1 install). If you installed it with pip, remove it with:\n"
+            "    pip uninstall job-squire-cli"
+        )
 
 
 # ── adopt (Prompt C7) ────────────────────────────────────────────────────
@@ -896,7 +963,7 @@ def tailscale_status_cmd(name):
 def register_ops_commands(group: click.Group) -> None:
     """Attach the flat deployment/lifecycle verbs directly onto `group`."""
     for command in (
-        create, start, stop, restart, update, status, list_instances_cmd, remove, adopt, configure,
+        create, start, stop, restart, update, status, list_instances_cmd, remove, uninstall, adopt, configure,
         backup_cmd, restore_cmd, proxy_cmd,
     ):
         group.add_command(command)

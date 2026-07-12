@@ -8,6 +8,14 @@ footer as `<VERSION>-<build-sha>`.
 
 ## [Unreleased]
 
+### Added
+
+- `job-squire uninstall` — removes every registered instance, optionally the
+  container runtime job-squire itself installed (`--remove-runtime`, never a
+  runtime it only found already working), and the CLI's own venv and `PATH`
+  entry. `--keep-data`/`--delete-data` and `--yes` mirror `remove`'s existing,
+  safe-by-default flags. See `docs/job-squire-cli.md` ("Uninstalling").
+
 ## [0.7.0] - 2026-07-12
 
 Prompt C12 (`docs/PROMPTS-deployment-cli.md`), the last in the `job-squire` CLI's

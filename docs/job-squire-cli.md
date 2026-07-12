@@ -56,7 +56,7 @@ own subcommand:
 
 | Group | Invocation | Commands |
 |---|---|---|
-| Deployment/lifecycle | `job-squire <cmd>` (flat, top level) | `create`, `start`, `stop`, `restart`, `status`, `list`, `update`, `remove`, `adopt`, `configure`, `backup`, `restore`, `proxy` |
+| Deployment/lifecycle | `job-squire <cmd>` (flat, top level) | `create`, `start`, `stop`, `restart`, `status`, `list`, `update`, `remove`, `uninstall`, `adopt`, `configure`, `backup`, `restore`, `proxy` |
 | DNS/TLS | `job-squire dns <cmd>` | `duckdns`, `cloudflare` |
 | Query | `job-squire query <cmd>` | `health`, `list`, `pipeline`, `contacts`, `job`, `contact`, `followups` |
 
@@ -381,6 +381,58 @@ data directory; if nothing asks (no `confirm_delete`, no explicit
 `keep_data`), the default is to keep the data -- PLAN Section 4's rule
 that removing an instance must never silently destroy someone's
 job-search history.
+
+## Uninstalling (`ops/uninstall.py`)
+
+```
+job-squire uninstall                          # prompts per instance, and before touching anything else
+job-squire uninstall --keep-data              # force-keep every instance's data directory
+job-squire uninstall --delete-data            # force-delete every instance's data directory
+job-squire uninstall --remove-runtime         # also remove the container runtime, if job-squire installed it
+job-squire uninstall --yes                    # no prompts: keeps data, leaves the runtime alone
+```
+
+Not part of the original C1-C12 set (`docs/PROMPTS-deployment-cli.md`) --
+added afterward, since getting job-squire *off* a machine cleanly matters
+as much as getting it on. `bootstrap.sh`/`bootstrap.ps1` already put the
+CLI on `PATH` idempotently (a marker-commented line appended to
+`~/.zshrc`/`~/.bashrc`/`~/.profile` on macOS/Linux, the `HKCU\Environment`
+`Path` value on Windows, each guarded so re-running the bootstrap never
+duplicates the entry) -- `uninstall` is what reverses that, plus the two
+other things a full setup can leave behind:
+
+1. **Every registered instance**, via the exact same `remove_instance`
+   (one call per instance) `remove` itself uses -- the same keep-or-
+   delete-data prompt and the same safe keep-by-default fallback, so
+   uninstalling everything is never more destructive than removing one
+   instance at a time would be.
+2. **The container runtime** (Podman, OrbStack, or Docker Desktop) --
+   opt-in only, via `--remove-runtime`, and even then only if
+   `ops/runtime.py`'s `runtime.json` recorded `source: "installed"` (Prompt
+   C3). A runtime `ensure_runtime` found already working (`source:
+   "detected"`) is never touched, mirroring "never install over one that
+   already works" in reverse: never uninstall one job-squire didn't put
+   there. `runtime_uninstall_plan` is the literal reverse of each per-OS
+   `*_install_plan` in `ops/runtime.py` (`brew uninstall`, `dnf/apt-get/
+   pacman remove`, `winget uninstall`, stopping and removing a Podman
+   machine before uninstalling the package).
+3. **The CLI's own venv and `PATH` entry.** No install manifest is
+   written or needed: the venv location is read from `sys.prefix` of the
+   *running* interpreter, gated by `looks_like_bootstrap_venv` (the
+   directory must be named `cli`, its parent `job-squire` or
+   `.job-squire`, with a real `pyvenv.cfg` inside) so this only ever
+   proposes deleting a directory that actually matches what
+   `bootstrap.sh`/`bootstrap.ps1` create -- never a system Python or a
+   developer's `pip install -e` checkout. When it doesn't match,
+   `uninstall` leaves the CLI's files alone and prints `pip uninstall
+   job-squire-cli` instead of guessing.
+
+The CLI's own config directory (the instance registry, `mcp.json`,
+`runtime.json`) is always cleared as part of `uninstall` -- it's metadata
+about a CLI that is, by that point, either fully removed or about to be
+removed by hand, never "data" in the job-search sense (that's each
+instance's own `data_dir`, governed by `--keep-data`/`--delete-data`
+above).
 
 ## Reverse-proxy provisioning (Prompt C9)
 

@@ -104,6 +104,59 @@ def test_remove_reports_not_found_cleanly(runner):
     assert "No instance named 'ghost'" in result.output
 
 
+# ── uninstall ─────────────────────────────────────────────────────────────
+
+
+def test_uninstall_with_no_instances_and_no_bootstrap_venv(runner):
+    """Run for real (no mocking of ops/uninstall.py): an empty registry and
+    pytest's own interpreter, which never matches looks_like_bootstrap_venv,
+    so this exercises the real fallback path end to end -- nothing removed,
+    a clean pip-uninstall pointer printed instead of a traceback."""
+    result = runner.invoke(main, ["uninstall", "--yes"])
+    assert result.exit_code == 0
+    assert "Traceback" not in result.output
+    assert "No instances are registered" in result.output
+    assert "pip uninstall job-squire-cli" in result.output
+    assert "Runtime left in place" in result.output
+
+
+def test_uninstall_reports_each_removed_instance(runner, monkeypatch, tmp_path):
+    reg.add_instance(
+        name="castelo", mode="local", runtime="docker", data_dir=str(tmp_path),
+        public_url="http://localhost:8080", app_port=8080, mcp_port=9000,
+    )
+
+    def fake_uninstall_everything(**kwargs):
+        from job_squire_cli.ops import uninstall as un
+        return un.UninstallResult(
+            instances_removed=["castelo"], data_kept={"castelo": True},
+            runtime_removed=None, cli_removed=None, rc_files_updated=[],
+        )
+
+    from job_squire_cli.ops import commands as cmds
+    monkeypatch.setattr(cmds.uninstall_ops, "uninstall_everything", fake_uninstall_everything)
+
+    result = runner.invoke(main, ["uninstall", "--yes"])
+    assert result.exit_code == 0
+    assert "castelo: data kept" in result.output
+
+
+def test_uninstall_reports_runtime_removed_when_the_orchestration_says_so(runner, monkeypatch):
+    def fake_uninstall_everything(**kwargs):
+        from job_squire_cli.ops import uninstall as un
+        return un.UninstallResult(
+            instances_removed=[], data_kept={}, runtime_removed="podman",
+            cli_removed=None, rc_files_updated=[],
+        )
+
+    from job_squire_cli.ops import commands as cmds
+    monkeypatch.setattr(cmds.uninstall_ops, "uninstall_everything", fake_uninstall_everything)
+
+    result = runner.invoke(main, ["uninstall", "--yes", "--remove-runtime"])
+    assert result.exit_code == 0
+    assert "Runtime removed: podman" in result.output
+
+
 def test_create_surfaces_guard_failure_lines_on_stderr(runner, monkeypatch, tmp_path):
     """Wires a fake create_instance that raises StartupGuardFailure, to
     check the click layer's error rendering in isolation from the real

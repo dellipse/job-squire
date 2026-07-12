@@ -44,6 +44,14 @@
 - [x] Prompt C10: DNS and TLS (DuckDNS auto, Cloudflare semi, others documented)
 - [x] Prompt C11: Tailscale Serve for private remote access
 - [x] Prompt C12: docs supersession, user setup guide rewrite, full verification
+- [x] Prompt C13 (added after C1-C12 landed): `uninstall` -- see
+      `docs/job-squire-cli.md`'s "Uninstalling" section for the full design.
+      Reverses everything the bootstrap scripts and `create`/runtime-install
+      can leave behind (every instance, the runtime if job-squire installed
+      it, and the CLI's own venv/`PATH` entry), each opt-out on its own so
+      nothing is destroyed silently. `bootstrap.sh`/`bootstrap.ps1` already
+      handled putting the CLI on `PATH` idempotently as of C2; this closes
+      the matching gap on the way out.
 
 ---
 
