@@ -8,6 +8,8 @@ footer as `<VERSION>-<build-sha>`.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-12
+
 Prompt C12 (`docs/PROMPTS-deployment-cli.md`), the last in the `job-squire` CLI's
 deployment/lifecycle build-out: documentation supersession and the rewritten
 user setup guide, now that Prompts C1-C11 have landed the whole CLI
