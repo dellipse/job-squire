@@ -179,10 +179,15 @@ info "Installing job-squire-cli (${tag}) ..."
 ok "Installed to ${BIN_DIR}"
 
 # ── Put job-squire on PATH for future shells ─────────────────────────────
+# add_path_line intentionally does NOT require rcfile to already exist --
+# a fresh macOS account routinely has no ~/.zshrc at all (macOS doesn't
+# create one by default), and skipping the write there left job-squire off
+# PATH in every future terminal with no error and no clue why. `>>` creates
+# the file if it's missing, same as `touch` would, so this now always
+# lands the PATH line somewhere the shell in question actually reads.
 path_line="export PATH=\"${BIN_DIR}:\$PATH\"  # added by job-squire bootstrap"
 add_path_line() {
   rcfile="$1"
-  [ -f "$rcfile" ] || return 0
   grep -qF "$BIN_DIR" "$rcfile" 2>/dev/null && return 0
   printf '\n%s\n' "$path_line" >> "$rcfile"
   ok "Added ${BIN_DIR} to PATH in ${rcfile}"
@@ -192,8 +197,13 @@ case "$(basename "${SHELL:-}")" in
   zsh)  rcfile_for_shell="$HOME/.zshrc" ;;
   bash) rcfile_for_shell="$HOME/.bashrc" ;;
 esac
-[ -n "$rcfile_for_shell" ] && add_path_line "$rcfile_for_shell"
-add_path_line "$HOME/.profile"
+if [ -n "$rcfile_for_shell" ]; then
+  add_path_line "$rcfile_for_shell"
+else
+  # $SHELL wasn't zsh or bash (fish, dash, tcsh, ...) -- .profile is the
+  # nearest POSIX-sh-ish fallback most of those still pick up in some mode.
+  add_path_line "$HOME/.profile"
+fi
 PATH="$BIN_DIR:$PATH"
 export PATH
 

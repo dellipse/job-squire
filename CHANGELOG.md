@@ -8,6 +8,14 @@ footer as `<VERSION>-<build-sha>`.
 
 ## [Unreleased]
 
+### Fixed
+
+- `bootstrap.sh` silently failed to put `job-squire`/`jobsquire` on `PATH`
+  whenever the target rc file (`~/.zshrc`, `~/.bashrc`, or the `.profile`
+  fallback) didn't already exist — which is the default state on a fresh
+  macOS account, since macOS doesn't create `~/.zshrc` for you. `add_path_line`
+  now creates the file (`>>` does this on its own) instead of skipping it.
+
 ### Added
 
 - `job-squire uninstall` — removes every registered instance, optionally the
