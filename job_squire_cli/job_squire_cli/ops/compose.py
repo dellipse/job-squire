@@ -38,6 +38,7 @@ read the files it left behind.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from dataclasses import dataclass, field
@@ -257,6 +258,30 @@ def render_data_env(env: InstanceEnv) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _write_secret_file(path: Path, content: str) -> None:
+    """Write `content` to `path` with 0600 permissions in place from creation,
+    rather than write-then-chmod, so the file holding SECRET_KEY/
+    ADMIN_PASSWORD is never briefly readable at the umask-default mode
+    between the write and a follow-up chmod call. If `path` already exists
+    (e.g. a re-run of `create`/`adopt`), O_CREAT's mode argument is ignored
+    by POSIX for pre-existing files, so we chmod unconditionally afterward
+    too -- belt and suspenders, not a substitute for the O_CREAT mode on the
+    common (fresh file) path.
+    """
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        f = os.fdopen(fd, "w")
+    except BaseException:
+        os.close(fd)
+        raise
+    with f:
+        f.write(content)
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
 def write_compose_files(
     root: Path, *, container_name: str, image: str, loopback_only: bool,
     app_port: int | None, mcp_port: int | None, proxy_network: str | None = None,
@@ -302,11 +327,7 @@ def write_instance_files(root: Path, *, container_name: str, image: str, loopbac
         app_port=app_port, mcp_port=mcp_port,
     )
     data_env = paths.data_env_path(root)
-    data_env.write_text(render_data_env(env))
-    try:
-        data_env.chmod(0o600)  # holds SECRET_KEY and ADMIN_PASSWORD in plaintext
-    except OSError:
-        pass
+    _write_secret_file(data_env, render_data_env(env))  # holds SECRET_KEY and ADMIN_PASSWORD
 
 
 # ── Driving the runtime ──────────────────────────────────────────────────

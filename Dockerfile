@@ -38,8 +38,16 @@ WORKDIR /app
 # base); the app runs on 3.12 unchanged and it has the widest musllinux wheel
 # coverage. Installed into a venv so pip doesn't fight Alpine's PEP 668
 # externally-managed system Python.
+#
+# The venv's own bootstrapped pip lags behind Alpine's apk package and has
+# had several CVEs (path traversal / arbitrary file overwrite via malicious
+# wheel installs, e.g. CVE-2026-8643, CVE-2026-6357, CVE-2025-8869). pip
+# itself isn't invoked at runtime by the running app, but it stays present
+# in the shipped image, so upgrade it explicitly rather than leaving
+# whatever `ensurepip` bundled.
 RUN apk add --no-cache python3 py3-pip && \
-    python3 -m venv /opt/venv
+    python3 -m venv /opt/venv && \
+    /opt/venv/bin/pip install --no-cache-dir --upgrade pip
 
 # Install dependencies first for better layer caching. requirements.txt pins
 # pydantic/pydantic-core explicitly (transitive via mcp) so this resolution
