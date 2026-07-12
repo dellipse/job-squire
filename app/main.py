@@ -2299,15 +2299,11 @@ def ai_task_poll(run_id: str):
     if not _RUN_ID_RE.fullmatch(run_id or ""):
         return jsonify({"status": "not_found"}), 404
     data_dir = current_app.config["DATA_DIR"]
-    base_path = os.path.normpath(data_dir)
-    path = os.path.normpath(os.path.join(base_path, f"task_{run_id}.json"))
-    # Belt-and-suspenders on top of the regex check above: normalize and
-    # confirm the resulting path is still under DATA_DIR before it's used.
-    # The regex already makes traversal structurally impossible (run_id
-    # can't contain "/" or ".."), but this normalize-then-contain check is
-    # the exact sanitizer shape CodeQL's py/path-injection query looks for.
-    if not (path == base_path or path.startswith(base_path + os.sep)):
-        return jsonify({"status": "not_found"}), 404
+    # secure_filename() is this codebase's existing sanitizer for
+    # user-influenced filenames elsewhere (see the upload/kit routes above);
+    # used here too so the same recognized library call guards this sink,
+    # on top of the regex check above which already makes run_id safe.
+    path = os.path.join(data_dir, secure_filename(f"task_{run_id}.json"))
     if not os.path.exists(path):
         return jsonify({"status": "not_found"}), 404
     try:
