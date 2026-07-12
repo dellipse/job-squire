@@ -37,6 +37,7 @@ from urllib.parse import urlparse
 import click
 
 from . import backup, compose, lifecycle, mcp_token, secrets_copy
+from . import self_update
 from . import dns as dns_ops
 from . import proxy as proxy_ops
 from . import tailscale as tailscale_ops
@@ -199,27 +200,73 @@ def restart(name):
 # ── update / rollback (Prompt C7) ────────────────────────────────────────
 
 
-@click.command(help="Update an instance to a new image version, or roll back to its previous one.")
-@click.argument("name")
+def _run_self_update(skip: bool, cli_version: str | None) -> None:
+    """Bring the CLI itself up to date before any instance is touched
+    (see ops/self_update.py). A failed self-update is a warning, not a
+    fatal error -- an operator offline, or hitting a flaky GitHub API,
+    should still be able to move an already-pulled image onto a running
+    instance; --skip-self-update opts out of even trying."""
+    if skip:
+        return
+    try:
+        result = self_update.self_update(cli_version)
+    except self_update.SelfUpdateError as exc:
+        click.echo(f"Warning: could not update the job-squire CLI itself: {exc}", err=True)
+        return
+    if result.updated:
+        click.echo(f"job-squire CLI updated: {result.previous_version} -> {result.new_version} ({result.tag})")
+    else:
+        click.echo(f"job-squire CLI already up to date ({result.previous_version}, {result.tag}).")
+
+
+@click.command(help="Update the CLI itself, then an instance to a new image version "
+                     "(or roll back to its previous one).")
+@click.argument("name", required=False)
+@click.option("--all", "all_instances", is_flag=True, default=False,
+              help="Update every registered instance instead of one NAME.")
 @click.option("--version", default=None,
-              help="Image tag to move to (default: latest). Accepts a bare tag or a full image ref.")
+              help="Instance image tag to move to (default: latest). Accepts a bare tag or a full image ref.")
 @click.option("--rollback", "do_rollback", is_flag=True, default=False,
-              help="Move back to the image this instance was running before its last update, "
+              help="Move instance(s) back to the image they were running before their last update, "
                    "instead of moving forward. Cannot be combined with --version.")
-def update(name, version, do_rollback):
+@click.option("--skip-self-update", is_flag=True, default=False,
+              help="Don't update the job-squire CLI itself first -- only move instance(s).")
+@click.option("--cli-version", default=None,
+              help="Pin the CLI self-update to this released version instead of the latest (ignored "
+                   "with --skip-self-update).")
+def update(name, all_instances, version, do_rollback, skip_self_update, cli_version):
     if do_rollback and version is not None:
         _fail("Choose either --version or --rollback, not both.")
-    try:
-        if do_rollback:
-            result = lifecycle.rollback_instance(name)
-        else:
-            result = lifecycle.update_instance(name, version=version or "latest")
-    except lifecycle.LifecycleError as exc:
-        _handle_lifecycle_error(exc)
+    if all_instances and name:
+        _fail("Choose either an instance NAME or --all, not both.")
+
+    _run_self_update(skip_self_update, cli_version)
+
+    if not all_instances and not name:
+        return  # bare `job-squire update`: self-update only, no instance to move.
+
+    # Real instance existence is validated inside lifecycle.update_instance/
+    # rollback_instance itself (InstanceNotFoundError), same as before this
+    # command grew --all -- no separate registry lookup here for the
+    # single-NAME case, so a caller that's mocked lifecycle.update_instance
+    # directly (as the tests below do) doesn't need the registry populated.
+    target_names = [inst.name for inst in list_instances()] if all_instances else [name]
+    if all_instances and not target_names:
+        _fail("No instances are registered -- nothing to update.")
+
     verb = "rolled back" if do_rollback else "updated"
-    click.echo(f"Instance {name!r} {verb}: {result.previous_image} -> {result.new_image}")
-    if result.health is not None:
-        click.echo(f"  Health: {result.health.get('Health', {}).get('Status') or result.health.get('Status')}")
+    for target_name in target_names:
+        try:
+            if do_rollback:
+                result = lifecycle.rollback_instance(target_name)
+            else:
+                result = lifecycle.update_instance(target_name, version=version or "latest")
+        except lifecycle.LifecycleError as exc:
+            _handle_lifecycle_error(exc)
+        click.echo(f"Instance {target_name!r} {verb}: {result.previous_image} -> {result.new_image}")
+        if result.health is not None:
+            health_status = result.health.get("Health", {}).get("Status") or result.health.get("Status")
+            click.echo(f"  Health: {health_status}")
 
 
 # ── status / list ─────────────────────────────────────────────────────────

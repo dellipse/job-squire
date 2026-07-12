@@ -27,6 +27,7 @@ from job_squire_cli.ops import dns as dns_ops
 from job_squire_cli.ops import lifecycle as lc
 from job_squire_cli.ops import proxy as proxy_ops
 from job_squire_cli.ops import registry as reg
+from job_squire_cli.ops import self_update as su
 from job_squire_cli.ops import tailscale as tailscale_ops
 from job_squire_cli.query import config as query_config_module
 
@@ -39,6 +40,23 @@ def force_linux_config_dir(monkeypatch):
 @pytest.fixture(autouse=True)
 def tmp_registry(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+
+
+@pytest.fixture(autouse=True)
+def stub_self_update(monkeypatch):
+    """`update` now self-updates the CLI before touching any instance
+    (see ops/self_update.py) -- stub it out everywhere by default so the
+    rest of this file's `update` tests (about instance movement, not CLI
+    self-update) don't make a real GitHub API call. The dedicated
+    self-update behavior below overrides this per-test where it matters.
+    """
+    from job_squire_cli.ops import commands as cmds
+    monkeypatch.setattr(
+        cmds.self_update, "self_update",
+        lambda version=None: su.SelfUpdateResult(
+            updated=False, previous_version="0.7.0+abc123", new_version="0.7.0+abc123", tag="v0.7.0",
+        ),
+    )
 
 
 @pytest.fixture
@@ -241,6 +259,116 @@ def test_update_surfaces_lifecycle_error_cleanly(runner, monkeypatch):
     assert result.exit_code == 1
     assert "Failed to pull" in result.output
     assert "Traceback" not in result.output
+
+
+def test_update_with_all_flag_updates_every_instance(runner, monkeypatch, tmp_path):
+    reg.add_instance(
+        name="castelo", mode="local", runtime="docker", data_dir=str(tmp_path / "castelo"),
+        public_url="http://localhost:8080", app_port=8080, mcp_port=9000,
+    )
+    reg.add_instance(
+        name="segunda", mode="local", runtime="docker", data_dir=str(tmp_path / "segunda"),
+        public_url="http://localhost:8081", app_port=8081, mcp_port=9001,
+    )
+    calls = []
+
+    def fake_update_instance(name, *, version):
+        calls.append(name)
+        return lc.UpdateResult(instance=None, previous_image="old", new_image="new", health=None)
+
+    monkeypatch.setattr(lc, "update_instance", fake_update_instance)
+
+    result = runner.invoke(main, ["update", "--all"])
+    assert result.exit_code == 0
+    assert calls == ["castelo", "segunda"]
+    assert "'castelo'" in result.output and "'segunda'" in result.output
+
+
+def test_update_rejects_name_and_all_together(runner):
+    result = runner.invoke(main, ["update", "castelo", "--all"])
+    assert result.exit_code == 1
+    assert "not both" in result.output
+
+
+def test_update_all_with_no_instances_fails_cleanly(runner):
+    result = runner.invoke(main, ["update", "--all"])
+    assert result.exit_code == 1
+    assert "nothing to update" in result.output
+
+
+def test_bare_update_only_self_updates_and_touches_no_instance(runner, monkeypatch):
+    calls = []
+    monkeypatch.setattr(lc, "update_instance", lambda *a, **k: calls.append(a))
+    result = runner.invoke(main, ["update"])
+    assert result.exit_code == 0
+    assert calls == []
+    assert "already up to date" in result.output
+
+
+# ── self-update (job-squire update itself, before any instance) ─────────
+
+
+def test_update_reports_self_update_before_instance_move(runner, monkeypatch):
+    from job_squire_cli.ops import commands as cmds
+    monkeypatch.setattr(
+        cmds.self_update, "self_update",
+        lambda version=None: su.SelfUpdateResult(
+            updated=True, previous_version="0.6.0+aaa", new_version="0.7.0+bbb", tag="v0.7.0",
+        ),
+    )
+    monkeypatch.setattr(
+        lc, "update_instance",
+        lambda name, *, version: lc.UpdateResult(instance=None, previous_image="a", new_image="b", health=None),
+    )
+    result = runner.invoke(main, ["update", "castelo"])
+    assert result.exit_code == 0
+    self_update_line = result.output.index("0.6.0+aaa -> 0.7.0+bbb")
+    instance_line = result.output.index("Instance 'castelo'")
+    assert self_update_line < instance_line  # self-update happens first, unconditionally
+
+
+def test_update_self_update_failure_is_a_warning_not_fatal(runner, monkeypatch):
+    from job_squire_cli.ops import commands as cmds
+
+    def fake_self_update(version=None):
+        raise su.SelfUpdateError("Could not reach the GitHub releases API (offline).")
+
+    monkeypatch.setattr(cmds.self_update, "self_update", fake_self_update)
+    monkeypatch.setattr(
+        lc, "update_instance",
+        lambda name, *, version: lc.UpdateResult(instance=None, previous_image="a", new_image="b", health=None),
+    )
+    result = runner.invoke(main, ["update", "castelo"])
+    assert result.exit_code == 0  # instance update still succeeds
+    assert "Warning: could not update the job-squire CLI itself" in result.output
+    assert "Instance 'castelo' updated" in result.output
+
+
+def test_update_skip_self_update_never_calls_self_update(runner, monkeypatch):
+    from job_squire_cli.ops import commands as cmds
+    called = []
+    monkeypatch.setattr(cmds.self_update, "self_update", lambda version=None: called.append(version))
+    monkeypatch.setattr(
+        lc, "update_instance",
+        lambda name, *, version: lc.UpdateResult(instance=None, previous_image="a", new_image="b", health=None),
+    )
+    result = runner.invoke(main, ["update", "castelo", "--skip-self-update"])
+    assert result.exit_code == 0
+    assert called == []
+
+
+def test_update_cli_version_passed_through_to_self_update(runner, monkeypatch):
+    from job_squire_cli.ops import commands as cmds
+    captured = {}
+
+    def fake_self_update(version=None):
+        captured["version"] = version
+        return su.SelfUpdateResult(updated=False, previous_version="x", new_version="x", tag="v0.6.0")
+
+    monkeypatch.setattr(cmds.self_update, "self_update", fake_self_update)
+    result = runner.invoke(main, ["update", "--cli-version", "0.6.0"])
+    assert result.exit_code == 0
+    assert captured["version"] == "0.6.0"
 
 
 # ── adopt (Prompt C7) ────────────────────────────────────────────────────

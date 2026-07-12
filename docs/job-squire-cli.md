@@ -73,13 +73,34 @@ for the same reason `query` is (a natural home for two related verbs,
 `duckdns` and `cloudflare`, rather than two more flat top-level names) and
 was deferred to Prompt C10, the dedicated session for DNS/TLS provisioning.
 
-### Update and rollback (Prompt C7)
+### Update and rollback (Prompt C7; self-update and `--all` added later)
 
 ```
-job-squire update NAME                    # move to the latest published image
+job-squire update                         # self-update the CLI only; no instance touched
+job-squire update NAME                    # self-update the CLI, then move NAME to the latest image
 job-squire update NAME --version 0.7.0    # move to a pinned tag (or a full image ref)
 job-squire update NAME --rollback         # move back to the image running before the last update
+job-squire update --all                   # move every registered instance to the latest image
+job-squire update --skip-self-update ...  # move instance(s) without updating the CLI first
+job-squire update --cli-version 0.6.0     # pin the CLI self-update instead of taking latest
 ```
+
+**Self-update runs first, unconditionally, unless skipped.** `job-squire
+update` always brings the running CLI itself up to date (ops/
+self_update.py) before it touches any instance -- resolve the requested
+version (default latest) through the GitHub Releases API, pin the tag to
+an immutable commit with `git ls-remote` (same integrity mechanism
+bootstrap.sh uses), and `pip install --upgrade` a `git+...@<sha>` spec
+via the currently-running interpreter's own `pip`, preserving whether
+`[query]` was already installed. A failed self-update (offline, GitHub
+API hiccup) is a warning, not fatal -- instance update(s) still proceed;
+`--skip-self-update` opts out of even trying. Bare `job-squire update`
+(no NAME, no `--all`) only does this self-update step.
+
+`--all` updates every registered instance instead of one `NAME` (mutually
+exclusive with passing a `NAME`); each instance is moved in registry
+order, and the loop stops at the first instance whose update fails,
+same as `backup --all`.
 
 The new image is pulled *before* the running container is touched -- a
 failed pull changes nothing. Only then is the container stopped
