@@ -16,6 +16,11 @@ user setup guide, now that Prompts C1-C11 have landed the whole CLI
 (create/start/stop/restart/status/list/remove/update/adopt/configure/backup/
 restore/proxy/dns/tailscale).
 
+**This is a pre-release.** The CLI's deployment/lifecycle command set is now
+feature-complete, but hasn't yet had the broad real-world mileage across all
+three deployment modes and both container runtimes that would justify
+dropping the pre-release label.
+
 ### Changed
 
 - `docs/deployment.md`, `docs/multi-instance.md`, and `docs/backup-restore.md`
@@ -66,6 +71,32 @@ restore/proxy/dns/tailscale).
 - `install.sh`, `update.sh`, `uninstall.sh`, and the `docs/install/` platform
   guides that walked through them — superseded by `bootstrap.sh`/`bootstrap.ps1`
   and the `job-squire create`/`update`/`remove` subcommands.
+
+### Security
+
+- `app/main.py`: the `/ai/task/<run_id>/poll` and `/ai/task/<run_id>/status`
+  routes took `run_id` straight from the URL and used it to build a
+  filesystem path (`os.path.exists`/`open`/`os.unlink`) with no validation,
+  letting a logged-in user read or delete arbitrary files via path
+  traversal. Fixed by validating `run_id` against its actual `uuid4().hex`
+  shape and sanitizing the resulting filename with
+  `werkzeug.utils.secure_filename()` (CodeQL `py/path-injection`, alerts
+  #5/#6/#7).
+- `job_squire_cli/ops/compose.py`: `data/.env` (holding `SECRET_KEY` and
+  `ADMIN_PASSWORD`) was written with the default umask and only chmod'd to
+  `0600` afterward, leaving a brief window where it could be world-readable.
+  Now written with `0600` permissions from the moment of creation (CodeQL
+  `py/clear-text-storage-sensitive-data`, alert #178).
+- `Dockerfile`: pip inside the shipped image's `/opt/venv` is now upgraded
+  right after venv creation, closing five known pip CVEs bundled in the base
+  image's pip 25.0.1 (path traversal / arbitrary file overwrite via
+  malicious wheel installs: CVE-2026-8643, CVE-2026-6357, CVE-2026-3219,
+  CVE-2025-8869, CVE-2026-1703).
+- Five additional CodeQL findings reviewed and dismissed as false
+  positives rather than left open indefinitely: an open redirect in
+  `app/auth.py` already guarded by `_is_safe_next()` since the repo's first
+  commit, and four test-file-only assertions CodeQL misread as hardcoded
+  secrets or unsanitized URLs.
 
 ## [0.6.1] - 2026-07-11
 
