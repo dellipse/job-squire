@@ -8,20 +8,75 @@ footer as `<VERSION>-<build-sha>`.
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-07-11
+
+Continues the `job-squire` CLI's deployment/lifecycle build-out from 0.6.0
+(`docs/PROMPTS-deployment-cli.md`, Prompts C3-C7). The command grammar has
+been real and discoverable via `--help` since 0.6.0; this release is where
+most of it stops being a stub. Still a pre-release: `backup`/`restore` are
+the only commands left unimplemented (Prompt C8). The three-container
+Docker Compose install documented in `docs/install/` is unaffected.
+
 ### Added
 
 - `job_squire_cli/ops/runtime.py`: container runtime detection and per-OS
-  install with consent (Prompt C3 of `docs/PROMPTS-deployment-cli.md`).
-  Detects a working `docker`, `podman`, `orbstack`, or `colima` and reuses
-  it, installing nothing. When none is present, proposes the per-OS
-  default only with explicit consent: Podman rootless on Linux (package
-  manager chosen from `/etc/os-release`), Podman machine on macOS (OrbStack
-  as an opt-in fallback with its commercial-use threshold shown at that
-  point), and Podman on WSL2 on Windows (Docker Desktop as the fallback,
-  gated on a WSL2 check that guides `wsl --install` plus a reboot when
-  missing). The chosen runtime is recorded to `runtime.json` alongside
-  `mcp.json`, ahead of Prompt C4 folding it into the per-instance registry.
-  See `docs/job-squire-cli.md` ("Container runtime detection and install").
+  install with consent (Prompt C3). Detects a working `docker`, `podman`,
+  `orbstack`, or `colima` and reuses it, installing nothing. When none is
+  present, proposes the per-OS default only with explicit consent: Podman
+  rootless on Linux (package manager chosen from `/etc/os-release`), Podman
+  machine on macOS (OrbStack as an opt-in fallback with its commercial-use
+  threshold shown at that point), and Podman on WSL2 on Windows (Docker
+  Desktop as the fallback, gated on a WSL2 check that guides
+  `wsl --install` plus a reboot when missing). See `docs/job-squire-cli.md`
+  ("Container runtime detection and install").
+- `job_squire_cli/ops/registry.py`: the cross-platform instance registry
+  (Prompt C4) — a per-user `instances.json` at the platform's config
+  directory (`~/Library/Application Support/job-squire` on macOS,
+  `~/.config/job-squire` on Linux, `%APPDATA%\job-squire` on Windows),
+  holding only non-secret metadata (name, mode, runtime, data directory,
+  ports, cookie name, public URL, created date). Instance names are
+  sanitized to a safe slug with collision detection, and `status` can
+  report drift between the registry and what a runtime inspect actually
+  observes (a renamed/missing container, a deleted data directory).
+- Real `create`, `start`, `stop`, `restart`, `status`, `list`, and `remove`
+  commands (Prompt C5), replacing their 0.6.0 stubs. `create` writes a
+  self-contained per-instance directory (compose file, compose-level
+  `.env`, `data/.env`), allocates a free local-mode port pair, generates a
+  fresh `SECRET_KEY`, and brings the instance up on its recorded runtime,
+  reprinting the app's own startup-guard `FATAL` reason and fix verbatim
+  instead of a generic container error. `--import-from` copies non-secret
+  settings from another registered instance, with `--copy-keys` as an
+  explicit opt-in that decrypts with the source `SECRET_KEY` and
+  re-encrypts with the destination's. `remove` always asks before deleting
+  an instance's data directory and defaults to keeping it.
+- `job-squire configure` (Prompt C6): manages the local `jsq_mcp_` static
+  MCP bearer token end to end (generate/rotate/revoke, optional TTL,
+  loopback-only unless explicitly opted in on a network-reachable
+  instance), and wires in an OAuth access token obtained elsewhere as the
+  alternative. Persists each instance's MCP endpoint and token in the
+  CLI's own per-user `mcp.json` (keyed by instance name, selected with
+  `job-squire query --instance/-i`) rather than any Hermes token store.
+- `job-squire update` (Prompt C7): moves an instance to a new image
+  version (`--version`, default `latest`) or rolls back to the image it
+  was running before its last update (`--rollback`). The new image is
+  pulled before anything about the running instance changes; only once
+  that succeeds is the container stopped (`compose stop`, a graceful
+  `SIGTERM` that s6 forwards so the app checkpoints its SQLite WAL first),
+  the image swapped, and the container recreated. The previous image is
+  recorded so a rollback can undo it, and each rollback swaps current and
+  previous again.
+- `job-squire adopt` (Prompt C7): turns an existing three-container
+  install's data directory into a registered, single-container instance
+  in place, wrapping `scripts/adopt-single-container.sh`'s logic as a
+  first-class command. Derives the instance name and cookie name from the
+  install's own `INSTANCE_NAME`, keeps its existing `SECRET_KEY` so stored
+  secrets stay decryptable, and only ever appends two behavior-parity
+  lines to `data/.env` (`TRUST_PROXY=1`, `SESSION_COOKIE_SECURE=true`, each
+  only if not already set) after backing it up — never rewriting or
+  re-encrypting anything already there. `--up` (or the interactive prompt)
+  then offers to bring the instance up on the single-container image and
+  verify health, refusing if the old three-container stack still looks
+  like it's running.
 
 ## [0.6.0] - 2026-07-11
 
