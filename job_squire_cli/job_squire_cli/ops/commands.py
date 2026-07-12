@@ -36,7 +36,8 @@ from urllib.parse import urlparse
 
 import click
 
-from . import backup, lifecycle, mcp_token, secrets_copy
+from . import backup, compose, lifecycle, mcp_token, secrets_copy
+from . import dns as dns_ops
 from . import proxy as proxy_ops
 from .compose import DEFAULT_IMAGE
 from .registry import (
@@ -692,6 +693,102 @@ def proxy_cmd(name, proxy_container, config_dir, network, no_install, swag_timez
     click.echo("  Proxy reloaded.")
 
 
+# ── dns (Prompt C10) ─────────────────────────────────────────────────────
+# docs/PLAN-deployment-modes.md Section 5 ("Free and low-cost domain and DNS
+# options for personal use") and Section 7's DNS and TLS provisioning
+# touchpoint. Both subcommands only ever configure the CLI's own SWAG
+# install from `job-squire proxy NAME` (ops/dns.py's `_managed_swag_target`
+# enforces this) -- everything else (Cloudflare Tunnel, other SWAG DNS
+# plugins) is documented in docs/job-squire-cli.md, never wired here.
+# `NAME` identifies the network-mode instance whose proxy is being
+# configured, purely to reuse its recorded `runtime` the same way
+# `proxy_cmd` does; SWAG itself is shared across every instance on that
+# proxy, so this can be re-run for a different instance without redoing
+# anything instance-specific.
+
+
+@click.group(name="dns", help="Configure DNS/TLS validation for a network-mode instance's "
+                               "CLI-installed SWAG proxy (DuckDNS automated, Cloudflare DNS-01 "
+                               "semi-automated; run `job-squire proxy NAME` first).")
+def dns_group():
+    pass
+
+
+def _require_network_instance(name: str) -> Instance:
+    instance = _require_instance(name)
+    if instance.mode != "network":
+        _fail(
+            f"Instance {name!r} is in {instance.mode!r} mode -- DNS/TLS provisioning only applies "
+            f"to network-mode instances (local modes use loopback only and need no proxy)."
+        )
+    return instance
+
+
+def _print_dns_result(result: dns_ops.DnsProvisionResult, *, runtime: str) -> None:
+    click.echo(f"SWAG reconfigured for {result.mode} ({result.url}, SUBDOMAINS={result.subdomains!r}).")
+    if result.cert.issued:
+        click.echo("  Certificate issued -- the instance should now serve HTTPS through the proxy.")
+    else:
+        click.echo(
+            "  Certificate not yet confirmed issued (or --no-wait was passed). Check "
+            f"`{compose.runtime_binary(runtime)} logs {result.proxy.container_name}` for progress; "
+            "DNS propagation and Let's Encrypt rate limits can both add delay."
+        )
+
+
+@dns_group.command(name="duckdns", help="Put the CLI-installed SWAG into DuckDNS validation mode "
+                                         "and wait for Let's Encrypt to issue the certificate.")
+@click.argument("name")
+@click.option("--subdomain", required=True,
+              help="Your registered DuckDNS name, e.g. 'castelo' for castelo.duckdns.org.")
+@click.option("--token", prompt=True, hide_input=True, help="Your DuckDNS account token (from duckdns.org).")
+@click.option("--wildcard/--main-only", default=True, show_default=True,
+              help="Wildcard cert via DNS-01 (no inbound port needed) vs. the main subdomain only via "
+                   "HTTP-01 (needs port 80 reachable from the internet). DuckDNS supports one or the "
+                   "other from one SWAG config, never both at once.")
+@click.option("--network", default=proxy_ops.DEFAULT_PROXY_NETWORK, show_default=True)
+@click.option("--timezone", default="Etc/UTC", show_default=True)
+@click.option("--no-wait", "no_wait", is_flag=True, default=False,
+              help="Apply the configuration and return immediately instead of polling for the certificate.")
+@click.option("--timeout", "timeout_seconds", default=300.0, show_default=True,
+              help="Seconds to wait for the certificate before giving up (with --no-wait, ignored).")
+def dns_duckdns_cmd(name, subdomain, token, wildcard, network, timezone, no_wait, timeout_seconds):
+    instance = _require_network_instance(name)
+    try:
+        result = dns_ops.configure_duckdns(
+            subdomain=subdomain, token=token, wildcard=wildcard, runtime=instance.runtime,
+            network=network, timezone=timezone, wait_for_cert=not no_wait, timeout_seconds=timeout_seconds,
+        )
+    except dns_ops.DnsError as exc:
+        _fail(str(exc))
+    _print_dns_result(result, runtime=instance.runtime)
+
+
+@dns_group.command(name="cloudflare", help="Write the CLI-installed SWAG's Cloudflare DNS-01 "
+                                            "configuration and issue a wildcard certificate.")
+@click.argument("name")
+@click.option("--domain", required=True, help="A domain you already own, managed on Cloudflare "
+                                               "(e.g. 'example.com').")
+@click.option("--token", "api_token", prompt=True, hide_input=True,
+              help="A Cloudflare API token scoped to Zone:DNS:Edit for --domain.")
+@click.option("--network", default=proxy_ops.DEFAULT_PROXY_NETWORK, show_default=True)
+@click.option("--timezone", default="Etc/UTC", show_default=True)
+@click.option("--no-wait", "no_wait", is_flag=True, default=False,
+              help="Apply the configuration and return immediately instead of polling for the certificate.")
+@click.option("--timeout", "timeout_seconds", default=300.0, show_default=True,
+              help="Seconds to wait for the certificate before giving up (with --no-wait, ignored).")
+def dns_cloudflare_cmd(name, domain, api_token, network, timezone, no_wait, timeout_seconds):
+    instance = _require_network_instance(name)
+    try:
+        result = dns_ops.configure_cloudflare(
+            domain=domain, api_token=api_token, runtime=instance.runtime,
+            network=network, timezone=timezone, wait_for_cert=not no_wait, timeout_seconds=timeout_seconds,
+        )
+    except dns_ops.DnsError as exc:
+        _fail(str(exc))
+    _print_dns_result(result, runtime=instance.runtime)
+
+
 # ── registration ─────────────────────────────────────────────────────────
 
 
@@ -702,3 +799,4 @@ def register_ops_commands(group: click.Group) -> None:
         backup_cmd, restore_cmd, proxy_cmd,
     ):
         group.add_command(command)
+    group.add_command(dns_group)

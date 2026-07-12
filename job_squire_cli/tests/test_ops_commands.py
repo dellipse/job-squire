@@ -23,6 +23,7 @@ import pytest
 
 from job_squire_cli.cli import main
 from job_squire_cli.ops import backup as bk
+from job_squire_cli.ops import dns as dns_ops
 from job_squire_cli.ops import lifecycle as lc
 from job_squire_cli.ops import proxy as proxy_ops
 from job_squire_cli.ops import registry as reg
@@ -520,3 +521,136 @@ def test_proxy_no_install_flag_disables_swag_fallback(runner, monkeypatch, tmp_p
     assert result.exit_code == 1
     assert captured == {"install_if_missing": False}
     assert "no proxy available" in result.output
+
+
+# ── dns (Prompt C10) ─────────────────────────────────────────────────────
+# Thin adapter tests only, same philosophy as proxy above: ops/dns.py's own
+# behavior (compose rewriting, credentials files, certificate polling) is
+# covered exhaustively in test_dns.py with a fully injected fake runtime;
+# here the point is just proving the click commands parse their options,
+# reject a local-mode instance, and surface ops/dns.py's exceptions as a
+# clean exit(1) rather than a traceback.
+
+
+def _register_network_instance(tmp_path, name="castelo"):
+    reg.add_instance(
+        name=name, mode="network", runtime="docker", data_dir=str(tmp_path),
+        public_url="https://squire.example.com", app_port=None, mcp_port=None,
+    )
+
+
+def test_dns_duckdns_unregistered_instance_fails_cleanly(runner):
+    result = runner.invoke(main, ["dns", "duckdns", "ghost", "--subdomain", "castelo", "--token", "tok"])
+    assert result.exit_code == 1
+    assert "No instance named 'ghost'" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_dns_duckdns_rejects_local_mode_instance(runner, tmp_path):
+    reg.add_instance(
+        name="castelo", mode="local", runtime="docker", data_dir=str(tmp_path),
+        public_url="http://localhost:8080", app_port=8080, mcp_port=9000,
+    )
+    result = runner.invoke(main, ["dns", "duckdns", "castelo", "--subdomain", "castelo", "--token", "tok"])
+    assert result.exit_code == 1
+    assert "local" in result.output
+    assert "only applies to network-mode instances" in result.output
+
+
+def test_dns_duckdns_happy_path_prints_result(runner, monkeypatch, tmp_path):
+    _register_network_instance(tmp_path)
+    captured = {}
+
+    def fake_configure(*, subdomain, token, wildcard, runtime, network, timezone, wait_for_cert, timeout_seconds):
+        captured.update(subdomain=subdomain, token=token, wildcard=wildcard, runtime=runtime)
+        target = proxy_ops.ProxyTarget(config_dir=tmp_path / "swag-config", container_name="swag", kind="swag")
+        return dns_ops.DnsProvisionResult(
+            mode="duckdns-wildcard", url="castelo.duckdns.org", subdomains="wildcard",
+            proxy=target, cert=dns_ops.CertResult(issued=True, log_tail="Congratulations!"),
+        )
+
+    monkeypatch.setattr(dns_ops, "configure_duckdns", fake_configure)
+    result = runner.invoke(main, ["dns", "duckdns", "castelo", "--subdomain", "castelo", "--token", "tok123"])
+    assert result.exit_code == 0
+    assert captured == {"subdomain": "castelo", "token": "tok123", "wildcard": True, "runtime": "docker"}
+    assert "duckdns-wildcard" in result.output
+    assert "Certificate issued" in result.output
+
+
+def test_dns_duckdns_not_yet_issued_prints_follow_up_hint(runner, monkeypatch, tmp_path):
+    _register_network_instance(tmp_path)
+
+    def fake_configure(*, subdomain, token, wildcard, runtime, network, timezone, wait_for_cert, timeout_seconds):
+        target = proxy_ops.ProxyTarget(config_dir=tmp_path / "swag-config", container_name="swag", kind="swag")
+        return dns_ops.DnsProvisionResult(
+            mode="duckdns-wildcard", url="castelo.duckdns.org", subdomains="wildcard",
+            proxy=target, cert=dns_ops.CertResult(issued=False, log_tail=""),
+        )
+
+    monkeypatch.setattr(dns_ops, "configure_duckdns", fake_configure)
+    result = runner.invoke(main, ["dns", "duckdns", "castelo", "--subdomain", "castelo", "--token", "tok123"])
+    assert result.exit_code == 0
+    assert "not yet confirmed issued" in result.output
+    assert "docker logs swag" in result.output
+
+
+def test_dns_duckdns_propagates_dns_error_as_clean_exit(runner, monkeypatch, tmp_path):
+    _register_network_instance(tmp_path)
+
+    def fake_configure(**kwargs):
+        raise dns_ops.DnsError("no CLI-installed SWAG found")
+
+    monkeypatch.setattr(dns_ops, "configure_duckdns", fake_configure)
+    result = runner.invoke(main, ["dns", "duckdns", "castelo", "--subdomain", "castelo", "--token", "tok123"])
+    assert result.exit_code == 1
+    assert "no CLI-installed SWAG found" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_dns_cloudflare_happy_path_prints_result(runner, monkeypatch, tmp_path):
+    _register_network_instance(tmp_path)
+    captured = {}
+
+    def fake_configure(*, domain, api_token, runtime, network, timezone, wait_for_cert, timeout_seconds):
+        captured.update(domain=domain, api_token=api_token, runtime=runtime)
+        target = proxy_ops.ProxyTarget(config_dir=tmp_path / "swag-config", container_name="swag", kind="swag")
+        return dns_ops.DnsProvisionResult(
+            mode="cloudflare-dns01", url="example.com", subdomains="wildcard",
+            proxy=target, cert=dns_ops.CertResult(issued=True, log_tail="Congratulations!"),
+        )
+
+    monkeypatch.setattr(dns_ops, "configure_cloudflare", fake_configure)
+    result = runner.invoke(
+        main, ["dns", "cloudflare", "castelo", "--domain", "example.com", "--token", "cf-tok"],
+    )
+    assert result.exit_code == 0
+    assert captured == {"domain": "example.com", "api_token": "cf-tok", "runtime": "docker"}
+    assert "cloudflare-dns01" in result.output
+    assert "Certificate issued" in result.output
+
+
+def test_dns_cloudflare_rejects_local_mode_instance(runner, tmp_path):
+    reg.add_instance(
+        name="castelo", mode="local", runtime="docker", data_dir=str(tmp_path),
+        public_url="http://localhost:8080", app_port=8080, mcp_port=9000,
+    )
+    result = runner.invoke(
+        main, ["dns", "cloudflare", "castelo", "--domain", "example.com", "--token", "cf-tok"],
+    )
+    assert result.exit_code == 1
+    assert "only applies to network-mode instances" in result.output
+
+
+def test_dns_cloudflare_propagates_dns_error_as_clean_exit(runner, monkeypatch, tmp_path):
+    _register_network_instance(tmp_path)
+
+    def fake_configure(**kwargs):
+        raise dns_ops.DnsError("domain and a Cloudflare API token are required")
+
+    monkeypatch.setattr(dns_ops, "configure_cloudflare", fake_configure)
+    result = runner.invoke(
+        main, ["dns", "cloudflare", "castelo", "--domain", "example.com", "--token", "cf-tok"],
+    )
+    assert result.exit_code == 1
+    assert "domain and a Cloudflare API token are required" in result.output
+    assert "Traceback" not in result.output

@@ -29,6 +29,7 @@ job_squire_cli/
     ops/backup.py      # backup/restore orchestration (Prompt C8)
     ops/backup_crypto.py  # Argon2id + AES-256-GCM archive encryption (Prompt C8)
     ops/proxy.py       # reverse-proxy provisioning: detect/install SWAG, nginx confs (Prompt C9)
+    ops/dns.py         # DNS/TLS validation for the CLI-installed SWAG: DuckDNS auto, Cloudflare DNS-01 semi-auto (Prompt C10)
     query/
       commands.py      # health, list, pipeline, contacts, job, contact, followups
       mcp_client.py     # self-contained MCP client (Streamable HTTP, no Hermes)
@@ -56,6 +57,7 @@ own subcommand:
 | Group | Invocation | Commands |
 |---|---|---|
 | Deployment/lifecycle | `job-squire <cmd>` (flat, top level) | `create`, `start`, `stop`, `restart`, `status`, `list`, `update`, `remove`, `adopt`, `configure`, `backup`, `restore`, `proxy` |
+| DNS/TLS | `job-squire dns <cmd>` | `duckdns`, `cloudflare` |
 | Query | `job-squire query <cmd>` | `health`, `list`, `pipeline`, `contacts`, `job`, `contact`, `followups` |
 
 The deployment group is new in this fold-in; its commands are structural
@@ -66,7 +68,10 @@ original table either -- C1 deliberately deferred `adopt`'s exact shape
 (along with `update`'s rollback design) to Prompt C7, the dedicated session
 for version movement and adopting existing data (PLAN Section 8), and
 deferred `proxy` to Prompt C9, the dedicated session for reverse-proxy
-provisioning (PLAN Section 5).
+provisioning (PLAN Section 5). `dns` is namespaced under its own subcommand
+for the same reason `query` is (a natural home for two related verbs,
+`duckdns` and `cloudflare`, rather than two more flat top-level names) and
+was deferred to Prompt C10, the dedicated session for DNS/TLS provisioning.
 
 ### Update and rollback (Prompt C7)
 
@@ -445,6 +450,86 @@ terminates at the proxy. Network mode is still not considered configured
 without a working proxy in front, which the app's own startup guard
 (PLAN Section 3) already enforces regardless of whether `job-squire proxy`
 was ever run.
+
+## DNS and TLS provisioning (Prompt C10)
+
+```
+job-squire dns duckdns NAME --subdomain castelo --token <duckdns-token>              # wildcard, DNS-01 (default)
+job-squire dns duckdns NAME --subdomain castelo --token <duckdns-token> --main-only   # main subdomain, HTTP-01
+job-squire dns cloudflare NAME --domain example.com --token <cloudflare-api-token>    # wildcard, DNS-01
+```
+
+`NAME` is a registered network-mode instance -- used only to reuse its
+recorded `runtime` (the same way `job-squire proxy NAME` does), since SWAG
+is shared across every instance on that proxy and neither command touches
+anything instance-specific otherwise. Both commands prompt for `--token`
+(hidden input) if it's omitted rather than accepting it only on the
+command line, where it would land in shell history.
+
+`ops/dns.py` implements the two auto-configured paths from PLAN Section 5
+("Free and low-cost domain and DNS options for personal use") plus the
+resolved auto-configure-versus-document open item in Section 8:
+
+- **DuckDNS (fully automated).** `configure_duckdns` rewrites the
+  CLI-installed SWAG's compose file with the operator's subdomain and
+  account token and recreates the container. DuckDNS's own tradeoff
+  carries straight through unchanged: `--wildcard` (the default) sets
+  `VALIDATION=duckdns`, SWAG's native DNS-01 mode that drives DuckDNS's
+  TXT-record API directly, no inbound port needed, covering
+  `*.<subdomain>.duckdns.org`; `--main-only` sets `VALIDATION=http`
+  instead, ordinary HTTP-01 for just `<subdomain>.duckdns.org`, which
+  needs port 80 reachable from the internet. SWAG cannot do both from one
+  config at once, which is why this is a flag rather than automatic.
+- **Cloudflare DNS-01 (semi-automated).** `configure_cloudflare` takes the
+  domain and API token the operator already owns and brings with them --
+  the one manual input, since the CLI cannot conjure either -- writes
+  certbot's Cloudflare DNS-01 plugin credentials to
+  `config/dns-conf/cloudflare.ini` (`dns_cloudflare_api_token = ...`,
+  permissioned `0600`), and rewrites the compose file with
+  `VALIDATION=dns`, `DNSPLUGIN=cloudflare`, `SUBDOMAINS=wildcard`. A
+  Cloudflare API token should be scoped to `Zone:DNS:Edit` for the target
+  domain, not the legacy account-wide global key.
+- **Documented only.** Cloudflare Tunnel and the long tail of other SWAG
+  DNS plugins (Route53, Google Domains, Porkbun, DNSimple, and the rest
+  SWAG's own `dns-conf/` directory ships templates for) are not wired to
+  any command here. Tunnel uses a fundamentally different topology --
+  TLS terminates at the tunnel provider, not at a locally facing proxy --
+  and the other plugins are an open-ended, provider-specific credentials
+  problem this module does not try to enumerate. An operator who wants one
+  of these configures it directly against the CLI-installed SWAG's
+  `config/` directory (`swag_root()/config`, see `ops/proxy.py`) using
+  SWAG's own documentation for that plugin, then restarts the SWAG
+  container by hand; nothing about a manually configured SWAG conflicts
+  with what `job-squire proxy` already installed. See PLAN Section 5's own
+  prose on Tailscale Funnel and Cloudflare Tunnel for the tradeoffs.
+
+Neither automated path will touch a proxy `job-squire proxy` didn't
+install itself. If that instance's `proxy` run detected and reused an
+existing third-party SWAG or bare nginx instead of installing a fresh one
+(`ops/proxy.py`'s `detect_existing_proxy`), `dns duckdns`/`dns cloudflare`
+refuse to run (`_managed_swag_target` raises `DnsError`) rather than
+guessing at how to reach into a proxy the operator already set up and
+already has its own DNS/TLS story for.
+
+**Waiting for the certificate.** After rewriting and recreating SWAG, both
+commands poll `docker/podman logs` on the SWAG container for certbot's own
+success or failure wording (`_await_certificate`, attempt-counted against
+`--timeout`/a fixed 10-second poll interval, not wall-clock-timed, so it's
+deterministic under test). A failure marker (a bad token, a DNS record
+that doesn't resolve) raises immediately with the recent log tail attached
+rather than waiting out the full timeout pointlessly; hitting the timeout
+with no marker either way is reported as "not yet issued," not an error,
+since DNS propagation and Let's Encrypt's own rate limits can both add
+delay a wrong-credentials failure wouldn't. `--no-wait` skips polling
+entirely and just applies the configuration.
+
+**Never conjures a domain or working DNS.** Both commands assume the
+operator already holds a registered DuckDNS subdomain (free, from
+duckdns.org) or a Cloudflare-managed domain and API token before running
+either one -- exactly the PLAN Section 5/7 boundary restated: "there is one
+thing the CLI cannot conjure: a domain and working DNS." This is a
+network-mode-only concern; a local install uses loopback and needs none of
+it.
 
 ## Versioning
 
