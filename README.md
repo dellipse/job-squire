@@ -12,7 +12,7 @@
 [![Python 3.14](https://img.shields.io/badge/python-3.14-blue.svg)](https://www.python.org/)
 [![Docker](https://img.shields.io/badge/docker-ghcr.io%2Fdellipse%2Fjob--squire-blue)](https://github.com/dellipse/job-squire/pkgs/container/job-squire)
 
-A self-hosted, two-user job-search assistant built with Flask + SQLite, packaged as a single Docker image run as three containers. It both **finds** new jobs automatically and **tracks** applications from first contact to offer. Claude integrates three ways: manual copy/paste, a direct Anthropic API call, or a live MCP connector.
+A self-hosted, two-user job-search assistant built with Flask + SQLite, packaged as a single multi-architecture Docker image and deployed through the `job-squire` CLI. It both **finds** new jobs automatically and **tracks** applications from first contact to offer. Claude integrates three ways: manual copy/paste, a direct Anthropic API call, or a live MCP connector.
 
 > **Two-user design.** The app is built for exactly two trusted accounts: one admin (the operator) and one user (the job seeker). There is no public registration and it is not hardened for multi-tenant use. Keep it behind TLS and a reverse proxy.
 
@@ -44,65 +44,56 @@ Automatic Features and the MCP connector are independent toggles — both can be
 
 ## Installation
 
-**Linux and macOS — use the install script (recommended):**
+One command installs the `job-squire` CLI, which then drives everything else — creating an
+instance, starting it, and bringing it up in your browser:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/dellipse/job-squire/main/install.sh -o install.sh
-bash install.sh
+# macOS or Linux
+curl -fsSL https://raw.githubusercontent.com/dellipse/job-squire/main/bootstrap.sh | sh
 ```
 
-The script detects Docker or Podman (and installs one if neither is present), generates a secret key, prompts for passwords, and starts all three containers. Download the script before running rather than piping curl directly to bash — the script needs an interactive terminal for password prompts.
+```powershell
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/dellipse/job-squire/main/bootstrap.ps1 | iex
+```
 
-To reverse a completed install: `bash uninstall.sh` from the install directory. The script asks before removing anything and cleans up exactly what was created.
+The CLI detects an existing container runtime (Docker, Podman, OrbStack, Colima) and reuses it; if
+none is found, it offers to install Podman (free for any use, including commercial) with your
+consent. There's no separate installer beyond this — `job-squire create`, `update`, `remove`, and
+the rest are all subcommands of the same tool.
 
-**Platform-specific guides** (manual setup, Windows, or native Python):
-
-| Platform | Guide |
-|---|---|
-| Linux | [docs/install/linux.md](docs/install/linux.md) |
-| macOS | [docs/install/macos.md](docs/install/macos.md) |
-| Windows | [docs/install/windows.md](docs/install/windows.md) |
-
-The manual quick start below assumes Linux with Docker already installed.
+For the full guided walkthrough — written for a non-technical, first-time setup — see
+[`docs/Setup-Guide.md`](docs/Setup-Guide.md). For the complete command reference and network-mode
+runbook, see [`docs/deployment.md`](docs/deployment.md).
 
 ---
 
 ## Prerequisites
 
-- Docker + Docker Compose (v2)
-- A reverse proxy for TLS termination (SWAG / nginx). The compose file also supports direct host-port mode for local testing.
+- Nothing you need to install yourself first — the bootstrap script above lands the CLI, and the
+  CLI handles the container runtime.
 - Free API keys for one or more job sources (Adzuna + Jooble recommended as a starting pair)
 - Optional: a free AI provider API key (Gemini, Groq, OpenRouter, etc.) or an Anthropic API key for API mode; Claude Pro for MCP mode
+- Optional, for network mode only: a domain name (a free DuckDNS subdomain works) — see [`docs/deployment.md`](docs/deployment.md#network-mode-the-reverse-proxy)
 
 ---
 
 ## Quick Start
 
 ```bash
-# 1. Clone the repo
-git clone https://github.com/dellipse/job-squire.git
-cd job-squire
+# 1. Install the CLI
+curl -fsSL https://raw.githubusercontent.com/dellipse/job-squire/main/bootstrap.sh | sh
 
-# 2. Create the data directory and copy the env template
-mkdir -p data
-cp examples/.env.example data/.env
+# 2. Create an instance (interactive: name, mode, admin password, ...)
+job-squire create
 
-# 3. Fill in required values (open data/.env in any editor)
-#    Generate a SECRET_KEY:
-python3 -c "import secrets; print(secrets.token_hex(32))"
-#    Set: SECRET_KEY, ADMIN_PASSWORD (avoid $ in passwords)
-#    Set USER_PASSWORD only if you need the second account
-
-# 4. Start all three containers
-docker compose up -d
-
-# 5. Confirm startup
-docker compose logs -f job-squire          # gunicorn up, accounts seeded
-docker compose logs -f job-squire-worker   # "scheduler up ..."
-docker compose logs -f job-squire-mcp      # uvicorn on :9000
+# 3. Check it's up
+job-squire status <name>
 ```
 
-The web app is available at `http://localhost:8080`. Sign in with `admin` and the password you set.
+`create` prints the address to open once it's done — for local mode (the default, and what almost
+everyone wants), something like `http://localhost:8080`. Sign in with `admin` and the password you
+set (or the one it generated for you).
 
 ---
 
@@ -110,7 +101,7 @@ The web app is available at `http://localhost:8080`. Sign in with `admin` and th
 
 Configuration is split into two layers.
 
-**Environment variables** live in `data/.env` and are loaded by all three containers at startup. The only required variables are `SECRET_KEY` and `ADMIN_PASSWORD`. See [`docs/configuration.md`](docs/configuration.md) for the full reference.
+**Environment variables** live in the instance's `data/.env` and are loaded by all three internal processes at container startup. The only required variables are `SECRET_KEY` and `ADMIN_PASSWORD` — `job-squire create` sets both for you. See [`docs/configuration.md`](docs/configuration.md) for the full reference.
 
 Key variables:
 
@@ -129,30 +120,26 @@ Key variables:
 
 ---
 
-## Deploying Behind SWAG
+## Network Mode (reachable over the internet)
 
-The default compose file publishes the web app on `127.0.0.1:8080` and the MCP server on `127.0.0.1:9000`. Any reverse proxy can reach them at those ports. For a **shared Docker network** with SWAG:
+Local mode (the default) is loopback-only — nothing beyond the one machine can reach it. To put an
+instance on a server behind a domain name and HTTPS instead:
 
 ```bash
-# Create the shared network once
-docker network create swag
-
-# In docker-compose.yml: comment out the `ports` blocks, uncomment the `networks` blocks
-# Copy the sample proxy confs
-cp examples/nginx/job-squire.subdomain.conf /path/to/swag/config/nginx/proxy-confs/
-cp examples/nginx/mcp-squire.subdomain.conf /path/to/swag/config/nginx/proxy-confs/
-
-docker compose up -d
-docker exec swag nginx -t && docker exec swag nginx -s reload
+job-squire create --mode network --hostname squire.yourdomain.com
+job-squire proxy squire                # detects an existing proxy, or installs SWAG
+job-squire dns duckdns squire --subdomain squire --token <your-duckdns-token>
 ```
 
-Point `squire.<yourdomain>` and `mcp-squire.<yourdomain>` at the host. SWAG issues Let's Encrypt certs automatically. See [`docs/deployment.md`](docs/deployment.md) for the complete runbook.
+SWAG (bundled nginx + certbot + fail2ban) terminates TLS and issues Let's Encrypt certificates
+automatically. See [`docs/deployment.md`](docs/deployment.md#network-mode-the-reverse-proxy) for
+the complete runbook, including using a domain you already have on Cloudflare instead of DuckDNS.
 
 To run more than one instance on the same host (e.g. one per job seeker), see [`docs/multi-instance.md`](docs/multi-instance.md).
 
 ---
 
-## Local Dev (no Docker)
+## Local Dev (no Docker, for contributors working on the source)
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
@@ -196,7 +183,7 @@ The **AI analysis** tab shows up to three options depending on what's configured
 
 ### MCP Connector Setup
 
-1. Ensure `PUBLIC_MCP_URL=https://mcp-squire.<domain>` is set in `data/.env` and the `job-squire-mcp` container is running.
+1. Ensure `PUBLIC_MCP_URL` is set in the instance's `data/.env` (local mode's default already points at the loopback MCP port; network mode's is set when you run `job-squire create --mode network`).
 2. On **Settings → AI → MCP Connector**, enable the connector and note the connector URL and name.
 
 **Claude Pro (OAuth):** In Claude, go to Settings → Connectors → Add custom connector. Paste the connector URL, give it the exact name shown in Settings, and authorize. **Open in Claude** buttons appear throughout the UI. No Anthropic API key required.
@@ -209,17 +196,19 @@ The MCP server exposes 23 tools for reads and writes. See [`docs/mcp-connector.m
 
 ## Backups
 
-Everything is in the host data folder (`DATA_HOST_DIR`, defaulting to `./job-squire/data`): the SQLite database, uploads, and the candidate profile.
-
 ```bash
-tar czf job-squire-backup-$(date +%F).tgz -C ./job-squire/data .
+job-squire backup <name>
 ```
+
+Writes a single passphrase-encrypted archive of the instance to your home folder. See
+[`docs/backup-restore.md`](docs/backup-restore.md) for what's inside and the restore procedure.
 
 ---
 
 ## Resetting a Password
 
-Set the new value in `data/.env`, add `RESET_UIDS_AND_PWDS_ON_START=true`, restart (`docker compose up -d`), confirm login, then remove the flag and restart again.
+Set the new value in the instance's `data/.env`, add `RESET_UIDS_AND_PWDS_ON_START=true`, run
+`job-squire restart <name>`, confirm login, then remove the flag and restart again.
 
 ---
 
@@ -245,12 +234,18 @@ job-squire/
     extensions.py     Shared Flask extension singletons
     templates/        Jinja2 templates
     static/           CSS and JS (one file each; no inline JS -- CSP enforced)
+  job_squire_cli/            The job-squire deployment CLI (separate installable package)
+    job_squire_cli/
+      cli.py                  Top-level command group
+      ops/                    Lifecycle, registry, runtime, proxy, DNS, backup/restore, ...
+      query/                  MCP query commands (health, list, pipeline, contacts, ...)
   wsgi.py
   Dockerfile
-  docker-compose.yml
+  docker-compose.single.yml   Generated per instance by `job-squire create`; also usable directly
+  bootstrap.sh / bootstrap.ps1  The one-line CLI installer
   requirements.txt
   examples/
-    .env.example              Template for data/.env
+    .env.example              Template for an instance's data/.env
     nginx/                    Sample SWAG/nginx proxy-conf files
   docs/                       Full documentation
 ```

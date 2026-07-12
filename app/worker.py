@@ -376,8 +376,8 @@ def main():
                       id="weekly_review", max_instances=1, coalesce=True)
 
     # Heartbeat — proves the scheduler process itself is alive, independent of
-    # whether search/AI features are enabled or due to run. Backs the Docker
-    # healthcheck (docker-compose.yml) and the in-app staleness warning.
+    # whether search/AI features are enabled or due to run. Backs the
+    # container's aggregated healthcheck and the in-app staleness warning.
     heartbeat_minutes = max(1, int(os.environ.get("HEARTBEAT_INTERVAL_MINUTES", "5")))
     sched.add_job(_touch_heartbeat, "interval", minutes=heartbeat_minutes,
                   id="heartbeat", max_instances=1, coalesce=True)

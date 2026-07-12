@@ -1,168 +1,108 @@
 # Backup and Restore
 
-> **Heads up:** this doc predates the eventual `job-squire` CLI's single encrypted
-> passphrase-protected archive (Argon2id + AES-256-GCM). `scripts/backup.sh`/`scripts/restore.sh`
-> below remain the supported path for now — see [`PLAN-deployment-modes.md`](PLAN-deployment-modes.md)
-> Section 7 for what's planned.
+Backup and restore are `job-squire` CLI operations. Each backup is a single, portable,
+**passphrase-encrypted** archive per instance — there is no unencrypted archive format, because
+the archive necessarily contains the instance's `SECRET_KEY` (without it, every stored provider
+key, the SMTP password, and the Anthropic key can't be decrypted on restore).
 
-All persistent state lives in one host directory (`DATA_HOST_DIR`, default `./job-squire/data`),
-bind-mounted into all three containers at `/data`:
+## Creating a backup
 
-| File / dir | What |
-|---|---|
-| `job-squire.db` | SQLite database — jobs, contacts, settings, everything except uploaded files |
-| `job-squire.db-wal`, `job-squire.db-shm` | SQLite WAL-mode journal files (present while the app is running) |
-| `uploads/` | Uploaded resumes, cover letters, and other attachments |
-| `candidate_profile.md` | The master candidate profile used by AI routines |
-| `oauth_tokens.json` | Encrypted MCP OAuth access tokens |
-| `.env` | Secrets and config — `SECRET_KEY`, passwords, provider credentials are all Fernet-encrypted *using* `SECRET_KEY`, so this file and the DB must travel together |
-| `.init.lock`, `provider_cooldowns.json`, `.worker_heartbeat` | Transient/operational — safe to skip in a backup, regenerated automatically |
-
-## Why not just `cp` or `tar` the data folder
-
-The database runs in **WAL (Write-Ahead Log) mode**. While the app is live, recently committed
-rows can sit in `job-squire.db-wal` rather than in `job-squire.db` itself, and a plain file copy of
-the three files while a writer is active is not guaranteed to be point-in-time consistent — you can
-end up with a `.db` file paired with a `.db-wal` from a different moment. Two ways to avoid that:
-
-1. **Hot backup (no downtime)** — use SQLite's own Online Backup API, which is safe under
-   concurrent writers by design. This is what `scripts/backup.sh` does.
-2. **Cold backup (simplest, brief downtime)** — stop all three containers first, *then* copy the
-   folder. No WAL subtlety applies because nothing is writing.
-
-Either is fine. Hot backup is what you want for a scheduled/unattended job (e.g. cron); cold backup
-is fine for a one-off before an upgrade.
-
-## Option 0 — In-app download (easiest, no host/shell access needed)
-
-Settings → Backup → **Download backup**, signed in as the admin account. Builds the exact same
-archive as `scripts/backup.sh` (Online Backup API snapshot + integrity check + `uploads/` +
-`candidate_profile.md` + `oauth_tokens.json`, with an option to include or leave out `.env`) and
-streams it straight to your browser — nothing to install, no SSH or `docker exec` needed. Restore
-still requires the CLI (see [Restoring](#restoring) below): a safe restore has to stop all three
-containers before the data directory is replaced, and the web app has no way to do that to itself.
-
-## Option 1 — Hot backup (recommended, no downtime)
-
-```
-./scripts/backup.sh                    # writes to ./backups/job-squire-backup-<timestamp>.tgz
-./scripts/backup.sh /path/to/backups   # or a custom destination
+```bash
+job-squire backup NAME                         # prompts for a passphrase, writes to your home folder
+job-squire backup NAME --dest /path/to/backups # a custom destination
+job-squire backup NAME --format zip            # .zip instead of the default .tgz
+job-squire backup --all                        # one archive per registered instance
 ```
 
-What it does, in order:
+The archive is named for the instance and a UTC timestamp, e.g.
+`job-squire-castelo-20260711T1830Z.tgz`. You'll be prompted twice for a passphrase (to catch
+typos) unless you pass `--passphrase` — prefer the prompt over the flag so the passphrase never
+lands in shell history.
 
-1. Runs `sqlite3.Connection.backup()` (Python stdlib, driving SQLite's Backup API) against the
-   live `job-squire.db`, producing a single consistent snapshot file. This folds in any pending WAL
-   frames automatically — you do **not** need to copy `.db-wal`/`.db-shm` separately.
-2. Runs `PRAGMA integrity_check` against that snapshot and aborts if it doesn't come back `ok`.
-3. Copies `uploads/`, `candidate_profile.md`, `oauth_tokens.json`, and `.env` alongside it.
-4. Tars the result into a timestamped `.tgz` in the destination directory.
+**Write the passphrase down somewhere safe.** There is no recovery path: a lost passphrase means a
+lost backup. The CLI states this plainly every time you run `backup`.
 
-Needs `python3` on the host (stdlib only — nothing to `pip install`). If the host has no Python,
-run the backup from inside the running container instead:
+### What's inside
 
-```
-docker compose exec job-squire python3 -c "
-import sqlite3
-s = sqlite3.connect('/data/job-squire.db')
-d = sqlite3.connect('/data/job-squire-backup.db')
-with d:
-    s.backup(d)
-"
-docker cp job-squire:/data/job-squire-backup.db ./job-squire-backup-$(date +%F).db
-docker exec job-squire rm /data/job-squire-backup.db
-```
+- The entire data directory verbatim — the SQLite database, `uploads/`, `candidate_profile.md`,
+  the OAuth token store, and anything else sitting in that folder, so nothing you didn't expect to
+  lose a backup of is left out.
+- The database is captured through a WAL-safe snapshot (SQLite's own Online Backup API, the same
+  mechanism the app's own in-app backup uses), so a live instance can be backed up with no
+  downtime and no risk of pairing a `.db` file with a `.db-wal` from a different moment.
+- `backup-manifest.json`: a backup-format version, the timestamp, the instance's full registry
+  entry (name, mode, runtime, ports or hostname, cookie name, public URL), the image version the
+  instance was running, a fingerprint of the database schema, the CLI version, and a SHA-256
+  checksum for every file in the archive.
 
-Then separately copy `uploads/`, `candidate_profile.md`, `oauth_tokens.json`, and `.env` from the
-host data directory.
+### How it's encrypted
 
-### Scheduling it
-
-Add a cron entry on the host, e.g. nightly at 2 AM, keeping the last 14 backups:
-
-```
-0 2 * * * cd /path/to/job-squire && ./scripts/backup.sh /path/to/backups >> /var/log/job-squire-backup.log 2>&1 && \
-  find /path/to/backups -name 'job-squire-backup-*.tgz' -mtime +14 -delete
-```
-
-## Option 2 — Cold backup (simplest, brief downtime)
-
-```
-cd job-squire
-sudo docker compose stop job-squire job-squire-worker job-squire-mcp
-sudo tar czf job-squire-backup-$(date +%F).tgz -C ./job-squire/data .
-sudo docker compose up -d job-squire job-squire-worker job-squire-mcp
-```
-
-Downtime is however long the tar takes (typically a few seconds unless `uploads/` is large).
+The passphrase is stretched with **Argon2id** (the current OWASP-recommended passphrase KDF), and
+the archive is sealed with **AES-256-GCM** for authenticated encryption — a corrupted or tampered
+archive fails loudly on restore instead of silently decrypting to garbage. A random salt and nonce,
+plus the Argon2id parameters, are stored in a small archive header. Both primitives come from the
+`cryptography` library the app already depends on; nothing new was added for this, and no external
+tool (like `age`) is required.
 
 ## Restoring
 
-```
-./scripts/restore.sh /path/to/job-squire-backup-<timestamp>.tgz
-```
-
-What it does:
-
-1. Prompts for confirmation, then stops all three services.
-2. Moves the *current* data directory aside to `<data-dir>.pre-restore-<timestamp>` — it is never
-   deleted, so a bad restore is itself recoverable.
-3. Extracts the archive into a fresh data directory.
-4. Fixes ownership to match `PUID`/`PGID` from the restored `.env` (defaults to 1000:1000 if unset)
-   — the container runs as that host user/group and can't write to files owned by anyone else.
-5. Restarts the three services and waits for the web app's healthcheck.
-
-**SECRET_KEY note:** the archive includes the `.env` that was active when the backup was taken, so
-by default the restore brings that `SECRET_KEY` back too — which is what you want, since every
-encrypted secret (provider API keys, SMTP password, Anthropic key, OAuth tokens) was encrypted
-with it. If you're restoring onto a host that already has its own `data/.env` and want to *keep*
-that key instead, decline the prompt in the archive-vs-current `.env` step and merge them by hand;
-otherwise expect a "could not decrypt" warning on the Settings page and follow the re-entry steps
-in [`deployment.md`](deployment.md#rotating-secret_key-and-re-entering-secrets).
-
-Manual restore, if you'd rather not use the script:
-
-```
-cd job-squire
-sudo docker compose stop job-squire job-squire-worker job-squire-mcp
-sudo mv ./job-squire/data ./job-squire/data.bak-$(date +%F)
-sudo mkdir -p ./job-squire/data
-sudo tar xzf job-squire-backup-<timestamp>.tgz -C ./job-squire/data
-sudo chown -R <PUID>:<PGID> ./job-squire/data
-sudo docker compose up -d job-squire job-squire-worker job-squire-mcp
+```bash
+job-squire restore /path/to/job-squire-castelo-20260711T1830Z.tgz
+job-squire restore /path/to/archive.tgz --rename-to castelo-2
+job-squire restore /path/to/archive.tgz --overwrite
+job-squire restore /path/to/archive.tgz --no-up
+job-squire restore /path/to/archive.tgz --image ghcr.io/dellipse/job-squire:0.6.0
 ```
 
-## Verifying a restore (tested checklist)
+What happens, in order:
 
-Run through this after every restore — restoring is only as good as confirming it worked:
+1. Prompts for the passphrase (unless `--passphrase` is given) and decrypts. A wrong passphrase or
+   a corrupted archive fails clearly rather than producing garbage data.
+2. Verifies every file's checksum against the manifest, and the backup-format version, before
+   writing anything to disk.
+3. Unpacks the data directory and restores `data/.env`, including `SECRET_KEY` — this is what lets
+   every previously stored secret decrypt correctly on the restored instance.
+4. Re-registers the instance from the manifest's registry entry, reallocating ports or hostname as
+   appropriate if the target machine differs from where the backup was taken.
+5. If an instance of the same name is already registered, prompts to `--rename-to` a different
+   name or `--overwrite` the existing one, rather than clobbering it silently.
+6. Ensures a container runtime is available (prompting for consent to install one unless `--yes`
+   was implied elsewhere), then brings the instance up — on the image recorded in the manifest by
+   default, or the one passed via `--image` — unless `--no-up` was given. The app's own additive
+   boot-time migrations carry the schema forward if the target image is newer than the one the
+   backup was taken on.
 
-1. `docker compose ps` — all three services show `healthy` (the worker may take up to a minute for
-   its first heartbeat; see [Operations — worker healthchecks](#operations-worker-healthchecks) below).
-2. `curl -is http://localhost:8080/health` (or your public URL) returns `{"ok": true}`.
-3. Log in with your normal credentials and confirm the job pipeline, contacts, and settings match
+## Verifying a restore (worth doing once, before you need it for real)
+
+Run through this after every restore that matters:
+
+1. `job-squire status NAME` — the instance reports healthy.
+2. Log in with your normal credentials and confirm the job pipeline, contacts, and settings match
    what you expect from the backup's point in time.
-4. Settings → History tab shows the `SearchRun` history you expect. A gap just means no scheduled
-   run fell in that window — not a bad restore.
-5. Settings → Sources/AI/Email tabs show provider keys and the SMTP password as already set (no
-   "could not decrypt" warning). If you do see one, `SECRET_KEY` doesn't match what encrypted them
-   — see the note above.
-6. If MCP is in use, reconnect the Claude connector once (existing OAuth tokens are restored, but
-   verifying end-to-end catches anything `oauth_tokens.json` alone can't).
+3. Settings → History tab shows the `SearchRun` history you expect.
+4. Settings → Sources/AI/Email tabs show provider keys and the SMTP password as already set (no
+   "could not decrypt" warning — if you see one, something about `SECRET_KEY` didn't restore
+   correctly).
+5. If MCP is in use, reconnect the Claude connector once to confirm the OAuth token store
+   round-tripped.
 
-This exercise (backup → restore into a scratch directory → confirm the checklist above) is worth
-running once after first deploying, so the procedure is proven before you ever need it for real.
+Doing one backup → restore into a scratch instance → confirm the checklist above is worth running
+right after your first real deploy, so the procedure is proven before you ever need it under
+pressure.
 
-## Operations: worker healthchecks
+## Other ways to grab a copy of your data
 
-The three containers each have a Docker `healthcheck:` (see `docker-compose.yml`):
+`job-squire backup`/`restore` is the recommended path — it's the only one that's a complete,
+portable, encrypted single file. Two lighter-weight options still exist underneath it, for quick
+ad-hoc use without the CLI:
 
-- `job-squire` (web) and `job-squire-mcp` check their respective `/health` HTTP endpoints.
-- `job-squire-worker` has no HTTP endpoint (it's a background APScheduler loop), so it instead
-  touches `DATA_DIR/.worker_heartbeat` every `HEARTBEAT_INTERVAL_MINUTES` (default 5) and the
-  healthcheck fails if that file goes stale (>15 minutes old). This is independent of whether
-  automated search is enabled — a stopped heartbeat means the *process* died or wedged, not that
-  search is merely idle between scheduled runs.
+- **Settings → Backup → Download backup**, in the app itself: streams the same kind of WAL-safe
+  snapshot (database + `uploads/` + `candidate_profile.md` + the OAuth token store, optionally
+  `.env`) straight to your browser, unencrypted. No shell or CLI access needed to grab a copy.
+- **`scripts/backup.sh`/`scripts/restore.sh`**, if you have a checkout on the host: the same
+  WAL-safe hot-backup mechanism, callable directly. Restoring this way still has to stop the
+  instance itself first, since the app can't safely replace its own data directory out from under
+  itself.
 
-`docker compose ps` shows the health status directly. The same signal is also surfaced in the app
-itself (Dashboard banner + Settings → History tab), so you don't have to be at a terminal to notice
-a dead worker.
+Neither of these encrypts the archive or bundles the registry/version manifest the CLI's format
+does, so prefer `job-squire backup` for anything you intend to keep or move to another machine.

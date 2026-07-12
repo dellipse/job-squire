@@ -9,8 +9,8 @@ need to change behavior, then read the specific file.
 job-squire/
   wsgi.py                  # gunicorn entrypoint: app = create_app()
   requirements.txt
-  Dockerfile               # python:3.14-slim, non-root UID/GID (build args PUID/PGID, default 1000)
-  docker-compose.yml       # the job-squire services (web, worker, mcp); Option A (ports) or Option B (shared network)
+  Dockerfile               # LinuxServer baseimage-alpine + s6-overlay, non-root UID/GID (PUID/PGID)
+  docker-compose.single.yml # web+worker+mcp in one container; `job-squire create` generates a per-instance copy of this
   examples/
     .env.example                     # template for data/.env
     nginx/

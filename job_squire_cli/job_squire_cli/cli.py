@@ -42,12 +42,19 @@ from .ops.commands import register_ops_commands
 class _LazyGroup(click.Group):
     """A click.Group whose commands aren't imported until actually invoked.
 
-    Click's dispatch machinery only calls list_commands()/get_command() to
-    resolve a subcommand and then invokes the returned Command object
-    directly, so overriding just those two is enough -- this group's own
-    `invoke` is never reached for real subcommand calls, only for
-    `--help` on the group itself, which is handled by the static `help=`
-    text passed at construction and doesn't need the load.
+    Overrides list_commands()/get_command() so subcommand dispatch doesn't
+    need the load, and get_params() so this group's own options (`--json`,
+    `--instance` on the real `query` group) are picked up too -- Click's
+    `Command.parse_args`/`format_options` both go through `get_params(ctx)`,
+    not the `params` list set at construction time, so without this
+    override the wrapper parsed as if it had no group-level options at all
+    (a real bug: `job-squire query --instance NAME health` failed with
+    "No such option '--instance'", and `--help` silently omitted every
+    group-level option). Loading here only happens once `query` itself has
+    already been dispatched to from the top-level group, so a plain
+    `job-squire create ...` (or `job-squire --help`, which never calls
+    get_params on subcommands it merely lists) still never imports `rich`/
+    `mcp` for an ops-only install.
     """
 
     def __init__(self, *args, import_name: str, **kwargs):
@@ -74,6 +81,10 @@ class _LazyGroup(click.Group):
 
     def get_command(self, ctx, name):
         return self._load().get_command(ctx, name)
+
+    def get_params(self, ctx):
+        self.params = self._load().params
+        return super().get_params(ctx)
 
 
 query_group = _LazyGroup(

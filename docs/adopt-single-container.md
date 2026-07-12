@@ -27,8 +27,18 @@ exactly what the CLI command does under the hood.
   versions. The adopt helper checks for `docker-compose.single.yml` and
   refuses to run without it.
 - This assumes your existing install already has `data/.env` with a
-  `SECRET_KEY`, matching the three-container `docker-compose.yml` layout
-  `install.sh` produces. If your layout differs, adjust the paths below.
+  `SECRET_KEY`, matching the three-container layout the old `install.sh`
+  produced. If your layout differs, adjust the paths below.
+- **On the old `docker-compose.yml`:** the three-container compose file
+  itself is no longer shipped in this repository — the topology it
+  describes has been retired now that the single-container image is
+  proven (`PLAN-deployment-modes.md` Section 8). Your *existing install
+  directory* still has its own copy from whenever you first deployed, and
+  that's all this runbook needs; neither the helper script nor
+  `job-squire adopt` reads or requires the file to exist in a fresh
+  checkout. If your own copy is already gone, stop the old containers by
+  name (`docker stop <name> <name>-worker <name>-mcp`) instead of via
+  `docker compose ... down` in Step 1 below.
 
 ## The four steps
 

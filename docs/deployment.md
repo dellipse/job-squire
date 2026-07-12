@@ -1,200 +1,280 @@
 # Deployment Runbook
 
-> **Heads up:** this doc predates the single-container image, `DEPLOY_MODE`, and the eventual
-> `job-squire` CLI. It's still accurate for the three-container topology described here, but see
-> [`PLAN-deployment-modes.md`](PLAN-deployment-modes.md) for what's landed and what's still
-> in flight, and [`adopt-single-container.md`](adopt-single-container.md) if you want to move an
-> existing install onto the single-container image now rather than waiting for the full rewrite.
+Job Squire is deployed and operated through the `job-squire` CLI. One bootstrap command lands
+the CLI; every step after that — creating an instance, starting or stopping it, updating it,
+putting a reverse proxy and TLS in front of it, backing it up — is a `job-squire` subcommand. See
+[`Setup-Guide.md`](Setup-Guide.md) for the guided, narrative walkthrough aimed at a first-time,
+non-technical operator. This doc is the operator's reference runbook: every lifecycle command,
+what it does, and the network-mode/proxy mechanics behind it. The full design rationale lives in
+[`PLAN-deployment-modes.md`](PLAN-deployment-modes.md); the exact command grammar and internals are
+in [`job-squire-cli.md`](job-squire-cli.md).
 
-Target: a Linux host running Docker + LinuxServer **SWAG** reverse proxy. Commands assume you run
-as a sudo-capable non-root user. The examples below use `yourdomain.com` with a wildcard cert;
-substitute your own domain throughout.
+If you're moving an existing three-container install onto this CLI, see
+[`adopt-single-container.md`](adopt-single-container.md) or run `job-squire adopt` directly, below.
 
-## Host layout
+---
 
-| Path | What |
-|---|---|
-| `job-squire/` | App source, `examples/`, and `docker-compose.yml` (the 3 Job Squire services) |
-| `./job-squire/data/` | Persistent data (`job-squire.db`, `uploads/`, `candidate_profile.md`, `oauth_tokens.json`) + `data/.env`. Bind-mounted into each container at `/data`. |
-| `job-squire/examples/.env.example` | Template for `data/.env` |
-| `job-squire/examples/nginx/` | Sample nginx/SWAG proxy-conf files — copy to your proxy's conf directory |
+## The three deployment modes
 
-Persistent data is a **host bind mount** (`DATA_HOST_DIR`, defaulting to
-`./job-squire/data`), not a Docker named volume — so a backup is just a copy of
-that folder.
+Every instance is one of three modes. The mode is a convenience preset the CLI sets when it
+creates an instance's env file — the running app never branches on the mode string itself, only
+on the granular flags (`TRUST_PROXY`, `SESSION_COOKIE_SECURE`, ...) the mode fills in.
 
-## First-time deploy
+| Mode | Who it's for | Exposure | Proxy / TLS |
+|---|---|---|---|
+| Local, single | One person, one machine | `http://localhost:PORT`, loopback only | None — loopback is a secure context in every modern browser |
+| Local, multi-instance | Two-plus people on one machine, kept fully separate | `http://localhost:PORT` per instance, distinct ports | None |
+| Network | A server, small lab, or classroom | A hostname per instance | Mandatory external reverse proxy terminating TLS |
 
-1. **Source in place:** clone or copy the repo to your host so `job-squire/` is on disk
-   (e.g. `git clone https://github.com/dellipse/job-squire.git` or `scp -r`).
+Local instances need nothing beyond `job-squire create`. Network instances need a reverse proxy
+and a certificate in front of them — the CLI can provision both, covered below.
 
-2. **Secrets:** copy `examples/.env.example` to `data/.env`, then fill in the required values:
-   ```
-   mkdir -p ./job-squire/data
-   cp job-squire/examples/.env.example ./job-squire/data/.env
-   # Edit data/.env — at minimum set SECRET_KEY and ADMIN_PASSWORD.
-   # USER_PASSWORD is optional; omit it to run with a single admin account.
-   # Generate SECRET_KEY with:
-   python3 -c "import secrets; print('SECRET_KEY=' + secrets.token_hex(32))"
-   sudo tee ./job-squire/data/.env >/dev/null <<'EOF'
-   SECRET_KEY=...
-   ADMIN_PASSWORD=...           # no '$' (or escape as '$$')
-   # USER_PASSWORD=...          # optional — omit to run with admin account only
-   SESSION_COOKIE_SECURE=true
-   PUBLIC_URL=https://squire.yourdomain.com
-   PUBLIC_MCP_URL=https://mcp-squire.yourdomain.com
-   SCHEDULE_TZ=                 # blank = derive from the in-app search location
-   SCHEDULE_WEEKDAY_HOURS=8,13,17
-   SCHEDULE_WEEKEND_HOURS=9
-   INGEST_API_KEY=...
-   EOF
-   sudo chmod 660 ./job-squire/data/.env
-   ```
+---
 
-3. **SWAG proxy-confs:**
-   ```
-   sudo cp job-squire/examples/nginx/job-squire.subdomain.conf \
-           /containers/docker/swag/config/nginx/proxy-confs/
-   sudo cp job-squire/examples/nginx/mcp-squire.subdomain.conf \
-           /containers/docker/swag/config/nginx/proxy-confs/
-   ```
+## Installing the CLI
 
-4. **Pull + start** all Job Squire services (SWAG should already be running):
-   ```
-   cd job-squire
-   sudo docker compose pull
-   sudo docker compose up -d job-squire job-squire-worker job-squire-mcp
-   ```
+```bash
+# macOS, Linux
+curl -fsSL https://raw.githubusercontent.com/dellipse/job-squire/main/bootstrap.sh | sh
 
-5. **Reload SWAG** and verify:
-   ```
-   sudo docker exec swag nginx -t && sudo docker exec swag nginx -s reload
-   sudo docker logs job-squire            # gunicorn up, accounts seeded, no traceback
-   sudo docker logs job-squire-worker     # "scheduler up ..."
-   sudo docker logs job-squire-mcp        # uvicorn on :9000
-   sudo docker exec swag ping -c1 job-squire
-   curl -is https://squire.yourdomain.com/ | head -1
-   curl -is https://mcp-squire.yourdomain.com/health   # {"ok": true}
-   ```
-
-6. **In-app setup:** sign in, open **Settings**, enter your search titles + location (Search tab),
-   add provider API keys (Sources tab) + SMTP (Email tab), set the candidate profile and documents
-   (Candidate Profile tab), pick the AI mode (AI tab), and (for MCP) add the **base** MCP URL as
-   a custom connector in Claude (OAuth sign-in — no token to generate).
-
-## Updating to a new version
-
-Pull the latest image from ghcr.io and restart Job Squire services **without touching SWAG**:
-
-```
-cd job-squire
-sudo docker compose pull
-sudo docker compose up -d --no-deps --force-recreate job-squire job-squire-worker job-squire-mcp
-# then confirm the new version shows in the page footer
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/dellipse/job-squire/main/bootstrap.ps1 | iex
 ```
 
-- **Static assets (CSS/JS) changed?** Also hard-refresh the browser (Ctrl/Cmd+Shift+R); the old
-  `app.js`/page can be cached.
-- **`requirements.txt` changed?** The `--build` is required.
-- **A new DB table was added?** No action — `create_all()` creates it on next boot. A new
-  **column** on an existing table needs a manual migration (or wipe the volume if no data).
-- **Verify the running image has your code:** `sudo docker exec job-squire grep -c <marker>
-  /app/app/...` is a quick way to confirm a build actually picked up a change.
+Pin a version instead of the latest release with `JOBSQUIRE_VERSION=<version>` (shell) or
+`$env:JOBSQUIRE_VERSION="<version>"` (PowerShell) before the command. The bootstrap installs the
+CLI and nothing else; it resolves the requested version against GitHub Releases, pins it to an
+immutable commit SHA, and installs `job-squire` (alias: `jobsquire`) into an isolated virtualenv
+under `~/.job-squire/`. There is no separate `install.sh` anymore — see
+["What replaced `install.sh`/`update.sh`/`uninstall.sh`"](#what-replaced-installshupdateshuninstallsh)
+below.
 
-## Resetting a password
+The CLI detects an existing container runtime (Docker, Podman, OrbStack, Colima) and reuses it. If
+none is found, it proposes installing Podman — the default on every platform, including macOS,
+since it's free for commercial use with no threshold — and only installs with your consent.
 
-Set the new values in `data/.env`, add `RESET_UIDS_AND_PWDS_ON_START=true`, `up -d` the web service,
-confirm login, then remove the line and `up -d` again.
+---
 
-## Rotating SECRET_KEY (and re-entering secrets)
+## Instance lifecycle
 
-`SECRET_KEY` does two jobs: it signs session cookies **and** derives the Fernet
-key that encrypts every stored secret (provider API keys, the Anthropic key, the
-SMTP password, and the on-disk OAuth token store). Rotating it does not corrupt
-the app, but it makes everything encrypted with the old key undecryptable, so
-those secrets must be re-entered afterward. Rotate if the key may have been
-exposed (committed to git, printed in logs, or shared).
-
-There is no re-encrypt-in-place migration by design: the app never holds two
-keys at once. If you only need to cut off access, revoke MCP tokens and reset
-passwords (above) instead of rotating.
-
-Steps:
-
-1. **Revoke live MCP tokens first.** Settings, Connections, "Revoke all tokens".
-   This ensures no old bearer token survives the rotation.
-2. **Generate a new key:** `python -c "import secrets; print(secrets.token_hex(32))"`
-3. **Set it** in `data/.env` as `SECRET_KEY`, then `up -d` all three services
-   (`job-squire`, `job-squire-worker`, `job-squire-mcp`).
-4. **Sign back in.** Every session cookie signed with the old key is now invalid,
-   so all users are logged out.
-5. **Re-enter every stored secret** on the Settings page: provider API keys, the
-   Anthropic API key, and the SMTP password. The UI shows a "could not decrypt"
-   warning for any secret it can no longer read.
-6. **Re-authorize the Claude MCP connector.** Old OAuth tokens can no longer be
-   decrypted (and were revoked in step 1), so clients must re-run authorization.
-
-If you skip the re-entry step, providers surface a decryption warning, SMTP
-sending fails until the password is re-saved, and the MCP connector rejects the
-old tokens. Nothing is silently wrong beyond the secrets themselves.
-
-## Wiping data (dev / re-init)
-
-Removes all jobs, settings, uploads. Needed if you change `PUID/PGID` or want a clean slate.
-Stop Job Squire services (not `down`, which would stop SWAG), then clear the bind-mounted data
-folder and bring them back up:
-
-```
-cd job-squire
-sudo docker compose rm -sf job-squire job-squire-worker job-squire-mcp
-sudo rm -rf ./job-squire/data/{job-squire.db,job-squire.db-*,uploads,.init.lock,provider_cooldowns.json}
-sudo docker compose up -d job-squire job-squire-worker job-squire-mcp
+```bash
+job-squire create                 # interactive: mode, name, ports/hostname, secrets, first boot
+job-squire start NAME
+job-squire stop NAME
+job-squire restart NAME
+job-squire status NAME            # health + registry-vs-reality drift
+job-squire list                   # every registered instance
+job-squire remove NAME            # always asks before deleting the data directory
 ```
 
-> Leaving `candidate_profile.md` in place keeps the master profile; delete it too for a truly
-> clean slate (it is re-seeded from the bundled copy on next boot).
+`create` walks through choosing a mode, naming the instance (a slug, unique on this machine),
+generating a fresh `SECRET_KEY`, allocating a local port pair or collecting a network hostname, and
+bringing the instance up. If other instances already exist, it offers to import their non-secret
+settings (search targets, schedule, enabled providers, SMTP host/port, AI provider selection) —
+secrets are excluded unless you pass `--copy-keys` explicitly.
 
-## Backups
+Every instance lives in its own directory (`~/job-squire/<name>/` by default), containing a
+generated `docker-compose.single.yml`, a compose-level `.env` (host ports, `PUID`/`PGID`), and
+`data/.env` plus the SQLite database under `data/`. Nothing about this is proprietary: `cd` into
+the directory and run `docker compose ...` (or `podman compose ...`) directly any time. Read-only
+and operational commands (`logs`, `ps`, `stop`, `restart`, `exec`) are always safe to run this way.
+Structural changes (renaming a container, changing published ports) should go through the CLI, and
+`job-squire status` reports drift if the registry and reality disagree.
 
-Everything is in the host data folder (`DATA_HOST_DIR`, default
-`./job-squire/data`): `job-squire.db`, `uploads/`, `candidate_profile.md`,
-`oauth_tokens.json`, and `.env`.
+**If an instance won't start because of an unsafe configuration** — for example a network-mode
+instance with `PUBLIC_URL` not set to `https://` — the app's own startup safety guard refuses to
+boot and writes a `FATAL:` reason and fix to its log. `create`/`start`/`restart` catch that and
+reprint the exact same reason and fix on the command line, rather than a generic "container
+exited."
 
-The database runs in WAL mode, so a plain `tar`/`cp` of the folder while the
-app is live is not guaranteed to be point-in-time consistent (recent commits
-can be sitting in `job-squire.db-wal` rather than `job-squire.db`). Use one of:
+### Updating and rolling back
 
+```bash
+job-squire update NAME                    # move to the latest published image
+job-squire update NAME --version 0.7.0    # move to a pinned tag
+job-squire update NAME --rollback         # move back to the image running before the last update
 ```
-./scripts/backup.sh              # hot backup, no downtime (recommended)
+
+The new image is pulled before the running container is touched, so a failed pull changes nothing.
+Only then is the container stopped with a graceful `SIGTERM` (which s6-overlay forwards so the app
+checkpoints its SQLite WAL before exiting), the image swapped, and the container recreated. Each
+rollback swaps current and previous again, so rolling back twice returns to where you started.
+
+### Adopting an existing three-container install
+
+```bash
+job-squire adopt /path/to/existing/install [--name NAME] [--up]
 ```
 
-or stop the services first for a cold backup:
+Given an existing install's directory (it already has `data/.env`), this derives the instance name
+and cookie name from `INSTANCE_NAME`, keeps the existing `SECRET_KEY` so stored secrets stay
+decryptable, additively patches `data/.env` (only `TRUST_PROXY=1` and `SESSION_COOKIE_SECURE=true`
+if not already set — never `SECRET_KEY` or anything else), writes the single-container compose
+file, registers the instance, and — with `--up` — brings it up on the single-container image and
+verifies health. See [`adopt-single-container.md`](adopt-single-container.md) for the exact
+before/after and what to check.
 
-```
-sudo docker compose stop job-squire job-squire-worker job-squire-mcp
-sudo tar czf job-squire-backup-$(date +%F).tgz -C ./job-squire/data .
-sudo docker compose up -d job-squire job-squire-worker job-squire-mcp
+---
+
+## Network mode: the reverse proxy
+
+Network mode always sits behind an external TLS-terminating reverse proxy; the app itself never
+terminates TLS. The CLI can provision one for you.
+
+```bash
+job-squire proxy NAME                       # detect an existing proxy, or offer to install SWAG
+job-squire proxy NAME --no-install          # fail instead of installing SWAG if none is detected
+job-squire proxy NAME --yes                 # don't prompt before installing SWAG
 ```
 
-See **[`backup-restore.md`](backup-restore.md)** for the full runbook: why WAL mode matters, the
-restore procedure (`scripts/restore.sh`), a post-restore verification checklist, and how to
-schedule backups via cron.
+If the machine already runs a SWAG or nginx-based proxy, `job-squire proxy` generates the Job
+Squire web and MCP host configurations, drops them into the proxy's config directory, joins the
+instance to the proxy's Docker network, and reloads it — no second proxy is ever installed. If
+nothing is running, it installs and brings up a LinuxServer SWAG container (bundling nginx, certbot,
+and fail2ban) and configures it the same way. Either way the proxy stays a separate, independently
+maintained component — nothing here is baked into the Job Squire image.
+
+### DNS and TLS
+
+A hostname and a certificate are the one thing the CLI cannot conjure — you need a domain (or a
+free DuckDNS subdomain) and working DNS before running either of these:
+
+```bash
+job-squire dns duckdns NAME --subdomain castelo --token <duckdns-token>              # wildcard, DNS-01
+job-squire dns duckdns NAME --subdomain castelo --token <duckdns-token> --main-only  # main subdomain, HTTP-01
+job-squire dns cloudflare NAME --domain example.com --token <cloudflare-api-token>   # wildcard, DNS-01
+```
+
+**DuckDNS** (free, fully automated) is the recommended zero-cost default — sign up for a
+`yourname.duckdns.org` subdomain at duckdns.org, then run the command above with your subdomain and
+account token. The default is the wildcard/DNS-01 path (no inbound port needed); `--main-only` uses
+ordinary HTTP-01 for just the one subdomain if you'd rather not use DNS validation. SWAG can't do
+both from one config at once, hence the flag.
+
+**Cloudflare DNS-01** (semi-automated) is for anyone who already owns a domain on Cloudflare: bring
+your domain and an API token scoped to `Zone:DNS:Edit`, and the command writes the certbot plugin
+config and issues a wildcard certificate.
+
+**Everything else** — Cloudflare Tunnel, Route53, and the rest of the providers SWAG's own
+`dns-conf/` directory supports — is documented, not automated, because each is either a different
+topology (TLS terminating at a tunnel provider instead of your own proxy) or a long tail of
+provider-specific credentials. Configure one directly against the CLI-installed SWAG's `config/`
+directory using SWAG's own docs for that plugin; nothing about a manually configured SWAG conflicts
+with what `job-squire proxy` already installed.
+
+Both `dns` commands only apply to a proxy `job-squire proxy` installed itself — they refuse to
+touch a third-party SWAG or bare nginx they didn't provision.
+
+### Reaching a local instance remotely without going to network mode
+
+If you just want to check your pipeline from your phone without exposing anything publicly,
+Tailscale Serve is the sanctioned path — it keeps the instance local and unexposed while giving it
+a real HTTPS front door on your own private tailnet:
+
+```bash
+job-squire tailscale enable NAME     # Serve on 443 (web) / 8443 (MCP)
+job-squire tailscale status NAME
+job-squire tailscale disable NAME    # back to loopback-only
+```
+
+This is Serve, never Funnel — the app stays bound to loopback and nothing is published to the
+public internet. See [`PLAN-deployment-modes.md`](PLAN-deployment-modes.md) Section 5 for why this
+is safe and what it changes under the hood (briefly: it's local mode with a private front door, not
+a separate mode).
+
+---
+
+## MCP authentication
+
+OAuth 2.0/PKCE is the default in every mode and needs no CLI setup — Claude's connector flow
+handles it. For headless clients that can't complete a browser redirect, a local static token is
+available on local instances only:
+
+```bash
+job-squire configure NAME --mcp-token generate [--ttl-hours N] [--allow-network]
+job-squire configure NAME --mcp-token rotate
+job-squire configure NAME --mcp-token revoke
+job-squire configure NAME --show
+```
+
+The token is refused for a network-reachable instance unless `--allow-network` is passed
+explicitly — it's never enabled implicitly. See [`job-squire-cli.md`](job-squire-cli.md#mcp-authentication-prompt-c6)
+for the full mechanics.
+
+---
+
+## Backup and restore
+
+```bash
+job-squire backup NAME              # writes an encrypted archive to your home folder
+job-squire backup --all             # one archive per registered instance
+job-squire restore /path/to/archive.tgz
+```
+
+See [`backup-restore.md`](backup-restore.md) for the full runbook — the archive is always
+passphrase-encrypted, and losing the passphrase means losing the backup.
+
+---
 
 ## Running multiple instances
 
-To run more than one independent deployment on the same host — for example, one instance per job seeker — see **[`docs/multi-instance.md`](multi-instance.md)**. In brief:
+Every instance the CLI creates is already isolated by design — its own data directory, its own
+`SECRET_KEY`, its own session cookie name, its own ports (local mode) or hostname (network mode).
+See [`multi-instance.md`](multi-instance.md) for the instance model and the registry that makes
+this work.
 
-- Each instance needs its own `data/` directory, its own `SECRET_KEY`, its own public URLs, and different host port values for `APP_HOST_PORT` and `MCP_HOST_PORT`.
-- Run each instance with a unique project name: `docker compose -p <name> --env-file <data-dir>/.env up -d`.
-- Each instance gets its own SWAG proxy conf and its own MCP connector entry in Claude.
+---
 
-## Compose / networking notes
+## What replaced `install.sh`/`update.sh`/`uninstall.sh`
 
-- The Job Squire `docker-compose.yml` defines the three services. By default it publishes the web
-  app on `127.0.0.1:8080` and the MCP server on `127.0.0.1:9000` (host-port mode — Option A). To
-  use SWAG or another nginx container on a shared Docker network, switch to Option B: comment out
-  the `ports` blocks and uncomment the `networks` blocks in `docker-compose.yml`, then create the
-  network once with `sudo docker network create <network-name>`.
-- The MCP subdomain conf uses `http2 off` and **no** `proxy_*` overrides (SWAG's bundled
-  `proxy.conf` already sets `proxy_http_version`, the Connection header, buffering, and timeouts —
-  redeclaring them makes nginx reject the file).
+The repository's old standalone shell scripts are retired. Their logic now lives in CLI
+subcommands:
+
+| Old script | Replaced by |
+|---|---|
+| `install.sh` | `bootstrap.sh` (or `bootstrap.ps1`) + `job-squire create` |
+| `update.sh` | `job-squire update` |
+| `uninstall.sh` | `job-squire remove` |
+
+The legacy per-platform manual guides that walked through those scripts
+(`docs/install/linux.md`, `macos.md`, `windows.md`, `docker-vs-podman.md`) are retired for the same
+reason — everything they covered (runtime install, `docker compose` invocation, reverse-proxy
+wiring) is now a CLI concern documented above and in [`Setup-Guide.md`](Setup-Guide.md).
+
+## Resetting a password
+
+Set the new value in the instance's `data/.env` (`ADMIN_PASSWORD`/`USER_PASSWORD`), add
+`RESET_UIDS_AND_PWDS_ON_START=true`, `job-squire restart NAME`, confirm login, then remove the line
+and restart again.
+
+## Rotating `SECRET_KEY` (and re-entering secrets)
+
+`SECRET_KEY` signs session cookies **and** derives the Fernet key that encrypts every stored
+secret (provider API keys, the Anthropic key, the SMTP password, and the OAuth token store).
+Rotating it does not corrupt the app, but everything encrypted with the old key becomes
+undecryptable, so those secrets must be re-entered afterward. Rotate if the key may have been
+exposed (committed to git, printed in logs, shared).
+
+There is no re-encrypt-in-place migration by design — the app never holds two keys at once. If you
+only need to cut off access, revoke MCP tokens (`job-squire configure NAME --mcp-token revoke`) and
+reset passwords instead of rotating.
+
+1. **Revoke live MCP tokens first**, in-app (Settings → Connections → "Revoke all tokens") or via
+   `job-squire configure NAME --mcp-token revoke`.
+2. **Generate a new key:** `python3 -c "import secrets; print(secrets.token_hex(32))"`.
+3. **Set it** in the instance's `data/.env` as `SECRET_KEY`, then `job-squire restart NAME`.
+4. **Sign back in** — every session cookie signed with the old key is now invalid.
+5. **Re-enter every stored secret** on the Settings page. The UI shows a "could not decrypt"
+   warning for anything it can no longer read.
+6. **Re-authorize the Claude MCP connector** — old OAuth tokens can no longer be decrypted.
+
+## Wiping data (dev / re-init)
+
+```bash
+job-squire stop NAME
+rm -rf ~/job-squire/NAME/data/{job-squire.db,job-squire.db-*,uploads,.init.lock,provider_cooldowns.json}
+job-squire start NAME
+```
+
+Leaving `candidate_profile.md` in place keeps the master profile; delete it too for a truly clean
+slate (it's re-seeded from the bundled copy on next boot).

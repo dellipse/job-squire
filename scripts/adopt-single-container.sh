@@ -6,8 +6,12 @@
 #   ./scripts/adopt-single-container.sh [install-dir]
 #
 #   install-dir defaults to the current directory. It must contain
-#   data/.env (the existing install's config) and docker-compose.yml (the
-#   three-container topology being migrated away from).
+#   data/.env (the existing install's config). It's expected to already
+#   have its own docker-compose.yml from whenever this install was first
+#   set up (that file is no longer shipped in this repository -- the
+#   three-container topology it describes has been retired, see
+#   docs/PLAN-deployment-modes.md Section 8) -- this script only reads
+#   from data/.env and never touches that compose file itself.
 #
 # What this does — additive only, never rewrites or re-encrypts anything:
 #   1. Confirms data/.env and docker-compose.single.yml exist.

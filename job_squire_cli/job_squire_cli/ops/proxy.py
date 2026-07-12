@@ -28,9 +28,9 @@ Two cases, matching the plan exactly:
 Either way, the instance's own container is attached to whatever Docker
 network the proxy is on (`resolve_shared_network`/`attach_to_network`) so
 nginx can resolve it by container name rather than guessing at a host IP
-from inside its own network namespace -- the same shared-network pattern
-the app repo's own docker-compose.swag.yml already documents for the
-legacy three-container topology, just for this CLI's single container.
+from inside its own network namespace -- the shared-network pattern the
+app repo's now-retired three-container `docker-compose.swag.yml` used to
+document, for this CLI's single container instead.
 
 The proxy stays a separate, independently maintained component (PLAN
 Section 5): nothing here is baked into the Job Squire image, TLS still
@@ -59,6 +59,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -69,6 +70,7 @@ from .registry import Instance, derive_compose_project
 
 Runner = Callable[..., "subprocess.CompletedProcess[str]"]
 Confirm = Callable[[str], bool]
+Sleep = Callable[[float], None]
 
 DEFAULT_PROXY_NETWORK = "job-squire-proxy"
 PROXY_ROOT_DIRNAME = "_proxy"
@@ -492,14 +494,19 @@ def render_swag_compose(
     DNS/certificate validation is split across two prompts: this function
     just renders whatever `url`/`validation`/`subdomains` (plus the
     optional `duckdns_token`/`dnsplugin`) it's given, as SWAG's own
-    required env vars. `install_swag` (this prompt, C9) calls it with
-    empty/"http" placeholders when no domain is in hand yet; Prompt C10's
-    `ops/dns.py` (`_rewrite_and_recreate`) calls it again with the real
-    DuckDNS or Cloudflare values once the operator supplies them, then
-    recreates the container so SWAG picks up the change. Network mode is
-    still not considered configured without a working proxy in front
-    (PLAN Section 5), and a bare SWAG container with no valid domain yet
-    is exactly that -- present, but not yet finished.
+    required env vars. `provision_instance_proxy` (this prompt, C9) calls
+    it with the instance's own hostname and a "http" placeholder validation
+    when no real domain is in hand yet -- `url` can never be truly empty
+    here, because SWAG's `init-require-url` service hangs forever
+    (`sleep infinity`) rather than finishing boot without one, which would
+    leave nginx's real config never generated from its `.sample`
+    templates. Prompt C10's `ops/dns.py` (`_rewrite_and_recreate`) calls
+    this again with the real DuckDNS or Cloudflare values once the
+    operator supplies them, then recreates the container so SWAG picks up
+    the change. Network mode is still not considered configured without a
+    working proxy *and* a real certificate in front (PLAN Section 5), and
+    a bare SWAG container with a placeholder domain is exactly that --
+    present and serving, but not yet finished.
     """
     extra_env = ""
     if duckdns_token:
@@ -544,6 +551,43 @@ networks:
   {network}:
     external: true
 """
+
+
+def _await_swag_ready(
+    runtime: str, container_name: str, *, run: Runner, sleep: Sleep,
+    timeout_seconds: float = 60.0, poll_interval: float = 2.0,
+) -> bool:
+    """Poll until SWAG's own first-boot init has populated
+    `/config/nginx/proxy.conf`, the bundled snippet every generated
+    subdomain conf `include`s.
+
+    `compose_up` in `install_swag` only waits for the container to start,
+    not for its entrypoint to finish -- SWAG's init (self-signed key
+    generation, copying its default nginx templates into the bind-mounted
+    `/config`) takes a few seconds on a fresh install, and calling
+    `install_confs`/`reload_proxy` before it's done fails with `nginx:
+    [emerg] open() ".../proxy.conf" failed (2: No such file or
+    directory)` -- caught during Prompt C12's own end-to-end network-mode
+    dry run (docs/PROMPTS-deployment-cli.md). Attempt-counted rather than
+    wall-clock-timed so this is deterministic and fast under test with an
+    injected `sleep` that doesn't actually sleep, matching ops/dns.py's
+    `_await_certificate`. Returns whether the marker file was found; never
+    raises on a timeout, since `reload_proxy` right after this call will
+    surface a clear error of its own if SWAG genuinely isn't ready.
+    """
+    attempts = max(1, int(timeout_seconds // poll_interval) + 1)
+    argv = [compose.runtime_binary(runtime), "exec", container_name,
+            "test", "-f", "/config/nginx/proxy.conf"]
+    for attempt in range(attempts):
+        try:
+            result = run(argv, capture_output=True, text=True, timeout=15)
+        except (OSError, subprocess.TimeoutExpired):
+            result = None
+        if result is not None and result.returncode == 0:
+            return True
+        if attempt < attempts - 1:
+            sleep(poll_interval)
+    return False
 
 
 def install_swag(
@@ -591,6 +635,7 @@ def provision_instance_proxy(
     data_root: Path | None = None,
     confirm: Confirm = lambda _msg: True,
     run: Runner = subprocess.run,
+    sleep: Sleep = time.sleep,
 ) -> ProxyProvisionResult:
     """Provision a reverse proxy for a network-mode instance end to end:
     detect an existing proxy or install SWAG, attach the instance's
@@ -629,11 +674,24 @@ def provision_instance_proxy(
             "No existing reverse proxy was detected. Install a LinuxServer SWAG container now?"
         ):
             raise ProxyError("No reverse proxy is available, and installing SWAG was declined.")
+        # SWAG's own init-require-url service (`sleep infinity` if URL is
+        # unset -- see _await_swag_ready's docstring) never finishes
+        # booting on a truly empty URL, so nginx's real config is never
+        # generated from its .sample templates and every later reload
+        # fails forever, not just until DNS/TLS is configured (caught by
+        # Prompt C12's own end-to-end network-mode dry run). The
+        # instance's own hostname is already known at this point and is
+        # the right value regardless -- `job-squire dns duckdns`/
+        # `cloudflare` (Prompt C10) still owns getting a real certificate
+        # for it; this only unblocks SWAG's init so there's an nginx to
+        # reload in the meantime.
+        resolved_swag_url = swag_url or (urlparse(instance.public_url).hostname or instance.name)
         proxy = install_swag(
             runtime=instance.runtime, network=network, timezone=swag_timezone,
-            url=swag_url, validation=swag_validation, data_root=data_root, run=run,
+            url=resolved_swag_url, validation=swag_validation, data_root=data_root, run=run,
         )
         installed_swag = True
+        _await_swag_ready(instance.runtime, proxy.container_name, run=run, sleep=sleep)
 
     resolved_network = network
     if proxy.container_name:

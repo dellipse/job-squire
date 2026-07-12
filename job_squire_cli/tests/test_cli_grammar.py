@@ -82,6 +82,43 @@ def test_lazy_import_in_subprocess_never_touches_query_stack():
     assert "OK" in proc.stdout
 
 
+def test_query_group_help_lists_its_own_options_through_the_lazy_wrapper():
+    """Regression test: `_LazyGroup` only overrode list_commands/get_command,
+    so `self.params` was always the empty list the wrapper was constructed
+    with -- `query --help` silently omitted `--json`/`--instance` and
+    `query --instance NAME health` failed with "No such option
+    '--instance'". Must go through `main` (the real top-level lazy-wrapped
+    group), not `job_squire_cli.query.commands.query` directly -- the
+    other query tests invoke that real group and would never have caught
+    this."""
+    runner = click.testing.CliRunner()
+    result = runner.invoke(main, ["query", "--help"])
+    assert result.exit_code == 0
+    assert "--instance" in result.output
+    assert "--json" in result.output
+
+
+def test_query_instance_option_is_parsed_by_the_lazy_wrapper(monkeypatch, tmp_path):
+    # Isolate from this machine's real ~/.config or ~/Library config file --
+    # "does-not-exist" would never coincidentally be configured there, but
+    # pin it anyway rather than depend on ambient state.
+    from job_squire_cli.query import config as config_module
+
+    monkeypatch.setattr(config_module.platform, "system", lambda: "Linux")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.delenv("JOB_SQUIRE_MCP_URL", raising=False)
+    monkeypatch.delenv("JOB_SQUIRE_MCP_TOKEN", raising=False)
+
+    runner = click.testing.CliRunner()
+    result = runner.invoke(main, ["query", "--instance", "does-not-exist", "health"])
+    # The option itself must parse -- reaching an MCP-config resolution
+    # error (not "No such option '--instance'") is the proof this test is
+    # after; the exact wording depends on whether anything is configured.
+    assert "No such option" not in result.output
+    assert result.exit_code == 1
+    assert "No MCP endpoint configured" in result.output
+
+
 def test_version_flag_reports_unified_scheme():
     import re
 

@@ -3,10 +3,9 @@
 ## Containers
 
 The project builds **one Docker image** (`Dockerfile`, `ghcr.io/linuxserver/baseimage-alpine`
-base) that can run either as **one container** (`docker-compose.single.yml`, the current default)
-or as the original **three containers** (`docker-compose.yml`, kept as a fallback during
-migration — see below). Either way, the same application code runs the same three logical
-processes and shares the same `/data` bind mount, so they see the same SQLite database.
+base) that runs as **one container** (`docker-compose.single.yml`), generated per instance by the
+`job-squire` CLI's `create` command. The same application code runs three logical processes inside
+that one container, sharing the same `/data` bind mount and therefore the same SQLite database.
 
 | Process | Command | Port | Role |
 |---|---|---|---|
@@ -14,67 +13,56 @@ processes and shares the same `/data` bind mount, so they see the same SQLite da
 | `worker` | `python -m app.worker` | none | APScheduler process that runs the automated job search on a cron cadence. Exactly one process so each scheduled slot fires once. |
 | `mcp` | `python -m app.mcp_server` | 9000 | Remote MCP server (Streamable HTTP) that Claude connects to as a custom connector. |
 
-### Single-container topology (default)
+### Single-container topology
 
 All three processes run inside **one container**, supervised by **s6-overlay as PID 1** on the
 LinuxServer Alpine base — not a shell script backgrounding three processes, because that wouldn't
 propagate `SIGTERM` correctly and would risk SQLite WAL corruption on every stop/update. `worker`
 and `mcp` are s6 longrun services that depend on `web` via s6's `notification-fd` mechanism
 (`s6-notifyoncheck` polls `web`'s `/health` in the background while `web` itself stays the
-directly-supervised process, so it receives `SIGTERM` straight from s6) — this reproduces the old
-compose `depends_on: service_healthy` ordering inside one container. A single aggregated
+directly-supervised process, so it receives `SIGTERM` straight from s6). A single aggregated
 `HEALTHCHECK` (`/etc/s6-overlay/scripts/healthcheck`) passes only when all three internal probes
 pass: `web`'s `/health` on 8000, `mcp`'s `/health` on `MCP_PORT`, and the worker's
-`.worker_heartbeat` freshness check (the worker has no HTTP endpoint of its own).
+`.worker_heartbeat` freshness check (the worker has no HTTP endpoint of its own) — this is what
+`job-squire status` reads.
 
 The container runs as a non-root user (`abc`) via the LinuxServer `PUID`/`PGID`/`UMASK`
 convention — the base image itself must start as root so s6's init can apply that mapping and
-drop each service to `abc` itself, which is why `docker-compose.single.yml` deliberately does
-*not* set a compose `user:` directive (unlike the legacy compose file below).
+drop each service to `abc` itself, which is why `docker-compose.single.yml` deliberately does not
+set a compose `user:` directive.
+
+In network mode, an external reverse proxy (SWAG or nginx, provisioned by `job-squire proxy` — see
+[`deployment.md`](deployment.md#network-mode-the-reverse-proxy)) terminates TLS and reaches the
+container over a shared Docker network by container name:
 
 ```
                          ┌─────────────── SWAG (nginx, TLS) ───────────────┐
-   Browser  ──HTTPS──►   │ squire.*      → job-squire:8000               │
-   Claude   ──HTTPS──►   │ mcp-squire.*  → job-squire:9000                │
+   Browser  ──HTTPS──►   │ castelo.*      → job-squire-castelo:8000       │
+   Claude   ──HTTPS──►   │ mcp-castelo.*  → job-squire-castelo:9000       │
                          └─────────────────────┬───────────────────────────┘
-                                               │  (all on Docker network "swag")
+                                               │  (shared Docker network)
                               ┌────────────────┴────────────────┐
-                              │        job-squire (1 container)  │
+                              │   job-squire-castelo (1 container) │
                               │   s6-overlay (PID 1, root)        │
                               │   ├─ web    (gunicorn, non-root)  │
                               │   ├─ worker (APScheduler, ↳ web)  │
                               │   └─ mcp    (uvicorn, ↳ web)      │
                               └────────────────┬────────────────┘
                                                │  bind mount
-                                   host data dir           → /data
+                    ~/job-squire/castelo/data/          → /data
                                         /data/job-squire.db (SQLite, WAL)
                                         /data/uploads/  /data/candidate_profile.md
 ```
 
-### Legacy three-container topology (fallback)
+In local mode there is no proxy at all — the container publishes its two ports straight to
+`127.0.0.1` and the browser talks to it directly (see
+[`PLAN-deployment-modes.md`](PLAN-deployment-modes.md) Section 5 for why loopback is a safe,
+warning-free trust boundary on its own).
 
-`docker-compose.yml` still runs the same image as three separate containers — `job-squire`,
-`job-squire-worker`, `job-squire-mcp` — each its own process, each with its own per-container
-healthcheck, kept for anyone who wants component-level isolation (restart or inspect one process
-without touching the others) during the migration to the single-container image. It is scheduled
-for removal once the single-container image is proven out (`PLAN-deployment-modes.md` Section 8).
-
-Because the image's own `ENTRYPOINT` is now s6-overlay's `/init` (which must start as root), each
-service in the legacy compose file carries an explicit `entrypoint: []` override so it bypasses
-`/init` and execs its process directly — otherwise the compose file's `user: "${PUID}:${PGID}"`
-directive (which the legacy topology still uses, unlike the single-container one) would try to
-run `/init` as a non-root user and fail.
-
-All three run as the UID/GID set via `PUID`/`PGID` build args (default `1000`; override in
-`data/.env`) and join the SWAG Docker network named `swag`. SWAG terminates TLS and proxies:
-
-- `squire.yourdomain.com` → `job-squire:8000`
-- `mcp-squire.yourdomain.com` → `job-squire-mcp:9000`
-
-The worker has no inbound traffic. The MCP subdomain is served over **HTTP/1.1** (`http2 off`)
-because MCP uses unbuffered streaming/SSE, which trips nginx HTTP/2 framing.
-
-If you're moving an existing three-container install onto the single-container image, see
+A prior three-container topology (`docker-compose.yml`, one process per container) existed during
+the migration to this single-container image and has been removed now that the single-container
+image is proven in practice (`PLAN-deployment-modes.md` Section 8). Anyone still running that
+topology can move onto this one with `job-squire adopt` — see
 [`adopt-single-container.md`](adopt-single-container.md).
 
 ## Request lifecycle (web)

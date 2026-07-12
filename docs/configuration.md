@@ -5,7 +5,11 @@ settings** (entered on the Settings page, stored encrypted in the database).
 
 ## Environment variables (`data/.env`)
 
-Lives at `./job-squire/data/.env`, referenced by every service via `env_file`.
+For an instance created by the `job-squire` CLI, this lives at
+`~/job-squire/<instance-name>/data/.env` (the per-instance directory `job-squire create` generates
+— see [`multi-instance.md`](multi-instance.md)) and is read at container start. Editing it directly
+is fine; restart the instance afterward with `job-squire restart <name>` (or
+`docker compose`/`podman compose` directly from that directory) to pick up the change.
 
 > **Gotcha:** Docker Compose interpolates `$` in `.env` values. A literal `$` must be escaped as
 > `$$`, or avoided. A `$` in a password silently truncated it during deployment once.
@@ -58,8 +62,8 @@ known-unsafe combinations into an early, explicit signal rather than a silent mi
 
 - **Fatal — refuses to start, exits non-zero:** `DEPLOY_MODE=network` but `PUBLIC_URL` isn't an
   `https://` URL, or `TRUST_PROXY` resolves off. Written to the log and printed as a
-  `FATAL:`-prefixed line on stderr (a stable shape a future `job-squire` CLI can catch and
-  re-surface, rather than a generic "container exited").
+  `FATAL:`-prefixed line on stderr — a stable shape the `job-squire` CLI catches and reprints
+  verbatim on `create`/`start`/`restart`, rather than a generic "container exited" message.
 - **Warning — starts, shows a persistent in-app banner:** `DEPLOY_MODE=local` but `PUBLIC_URL` is
   set to a non-loopback host. This is a self-consistency check between two declared values, not a
   live network probe — the app has no way to observe its own container's actual host-level
@@ -89,7 +93,8 @@ ignored for scheduling.
 | `PROVIDER_COOLDOWN_HOURS` | `4` | Hours to skip a provider after it returns a 503 outage; resumes automatically afterward. |
 | `RUN_ON_START` | `0` | `1` runs one search immediately when the worker boots (handy to test). |
 
-> Changing the schedule requires `docker compose ... restart job-squire-worker`.
+> Changing the schedule requires `job-squire restart <name>` (the worker is one of the three
+> processes inside the instance's single container, so a full instance restart picks it up).
 
 ### Automated AI features (scheduler)
 

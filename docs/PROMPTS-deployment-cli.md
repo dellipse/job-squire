@@ -43,7 +43,7 @@
 - [x] Prompt C9: reverse-proxy provisioning (SWAG / nginx)
 - [x] Prompt C10: DNS and TLS (DuckDNS auto, Cloudflare semi, others documented)
 - [x] Prompt C11: Tailscale Serve for private remote access
-- [ ] Prompt C12: docs supersession, user setup guide rewrite, full verification
+- [x] Prompt C12: docs supersession, user setup guide rewrite, full verification
 
 ---
 

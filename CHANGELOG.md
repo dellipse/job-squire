@@ -8,6 +8,63 @@ footer as `<VERSION>-<build-sha>`.
 
 ## [Unreleased]
 
+Prompt C12 (`docs/PROMPTS-deployment-cli.md`), the last in the `job-squire` CLI's
+deployment/lifecycle build-out: documentation supersession and the rewritten
+user setup guide, now that Prompts C1-C11 have landed the whole CLI
+(create/start/stop/restart/status/list/remove/update/adopt/configure/backup/
+restore/proxy/dns/tailscale).
+
+### Changed
+
+- `docs/deployment.md`, `docs/multi-instance.md`, and `docs/backup-restore.md`
+  rewritten around the `job-squire` CLI as the primary interface — instance
+  lifecycle, network-mode reverse-proxy/DNS/TLS provisioning, the instance
+  registry, and the passphrase-encrypted backup archive — replacing the
+  three-container/manual-script runbooks they previously described.
+- `docs/Setup-Guide.md` rewritten for a first-time, non-technical operator
+  around the one-line bootstrap, `job-squire create`, and the three
+  deployment modes, rather than a manual `install.sh`/`docker compose` walkthrough.
+- `docs/configuration.md` and `docs/architecture.md` updated for the CLI's
+  per-instance directory layout and the now-permanent single-container
+  topology.
+- `README.md` and `docs/README.md` updated to lead with the CLI bootstrap
+  instead of `install.sh` and the three-container compose.
+
+### Fixed
+
+- `job-squire query`'s group-level options (`--json`, `--instance`/`-i`) were
+  silently unusable through the real `job-squire` entry point: `_LazyGroup`
+  (`job_squire_cli/cli.py`) only overrode `list_commands`/`get_command`, so
+  `job-squire query --instance NAME health` failed with "No such option
+  '--instance'" and `job-squire query --help` omitted every group-level
+  option, even though the same options worked fine in tests that invoked the
+  real `query` group directly (never through the lazy wrapper). Found during
+  this prompt's own end-to-end MCP verification. Fixed by having
+  `_LazyGroup.get_params()` load and delegate to the real group's params.
+- `job-squire proxy`'s fresh-SWAG-install path could never actually finish:
+  a blank `--url` (the documented default, since DNS/TLS is deliberately a
+  separate `job-squire dns` step) left SWAG's own `init-require-url` service
+  waiting forever (`sleep infinity`), so nginx's real config was never
+  generated from its `.sample` templates and every reload failed with
+  `nginx: [emerg] open() ".../proxy.conf" failed`. Found during this
+  prompt's own end-to-end network-mode dry run. Fixed by defaulting the SWAG
+  `URL` env var to the instance's own hostname (still correct once DNS/TLS
+  is configured for real) and by waiting for SWAG's init to actually
+  populate its config before the first reload, rather than assuming the
+  container being "up" means its entrypoint has finished.
+
+### Removed
+
+- The legacy three-container `docker-compose.yml` and `docker-compose.swag.yml`,
+  now that the single-container image (`docker-compose.single.yml`) is
+  proven in practice (`docs/PLAN-deployment-modes.md` Section 8). Existing
+  three-container installs move onto the single-container image with
+  `job-squire adopt` or `scripts/adopt-single-container.sh`, both unaffected
+  by this removal.
+- `install.sh`, `update.sh`, `uninstall.sh`, and the `docs/install/` platform
+  guides that walked through them — superseded by `bootstrap.sh`/`bootstrap.ps1`
+  and the `job-squire create`/`update`/`remove` subcommands.
+
 ## [0.6.1] - 2026-07-11
 
 Continues the `job-squire` CLI's deployment/lifecycle build-out from 0.6.0

@@ -1,266 +1,254 @@
 # Setup Guide
 
-> **Heads up:** this guide predates the eventual `job-squire` CLI's one-line bootstrap and the
-> three deployment modes (local single, local multi-instance, network). It's still accurate for
-> `install.sh` today — see [`PLAN-deployment-modes.md`](PLAN-deployment-modes.md) for where setup
-> is headed, and this guide will be rewritten around that once the CLI lands.
+This guide walks through setting up Job Squire from nothing — no programming experience assumed,
+no prior knowledge of Docker, containers, or the command line beyond copying and pasting a couple
+of commands into a terminal. It works the same way on macOS, Windows, and Linux.
 
-Step-by-step onboarding for a new deployment.
-
-> **Quickstart:** If you want a guided setup that handles the configuration for you, run the install script instead of following this guide manually:
-> ```bash
-> curl -fsSL https://raw.githubusercontent.com/dellipse/job-squire/main/install.sh -o install.sh
-> bash install.sh
-> ```
-> The script detects Docker or Podman (installing one if needed), generates a secret key, prompts for passwords, and starts the containers. Supports Linux and macOS. Come back to this guide for the reverse proxy and in-app configuration steps.
->
-> To reverse a completed install, run `bash uninstall.sh` from the install directory. The uninstall script asks before removing anything and cleans up exactly what the install script created.
+Everything after the first command is driven by the `job-squire` command-line tool. You don't
+need to hand-edit configuration files, wire up a database, or know what a "container" is — the
+tool asks a short series of questions and does the rest.
 
 ---
 
-## Prerequisites
+## Before you start
 
-- Docker Engine with Compose v2 (`docker compose`), **or** Podman v4+ with built-in compose
-  - Not sure which to use? See [Docker vs. Podman](install/docker-vs-podman.md)
-- A running reverse proxy (nginx, Caddy, Traefik, or SWAG) for TLS termination in production
-- A domain with DNS pointing to your host (needed for HTTPS and the MCP connector)
-- Optional: free API keys for job sources (get at least one before running your first search)
+You'll need:
 
----
+- A macOS, Windows, or Linux computer.
+- 15–20 minutes for the initial setup, plus a few more minutes per job board you want to connect.
+- Optional, but recommended before your first automated search: a free API key from at least one
+  job board (the setup steps below tell you exactly where to get one).
 
-## Step 1: Get the Code
-
-```bash
-git clone https://github.com/dellipse/job-squire.git
-cd job-squire
-```
-
-Or pull the pre-built image directly (no source needed for a production deploy):
-
-```bash
-# The compose file references ghcr.io/dellipse/job-squire:latest
-# It will pull automatically on first `docker compose up`
-```
+You do **not** need to install Docker, Python, or anything else yourself first — the setup tool
+checks for what it needs and offers to install it for you, asking before it changes anything.
 
 ---
 
-## Step 2: Create the Data Directory and Env File
+## Step 1: Install the `job-squire` tool
+
+Open a terminal (**Terminal** on macOS, **PowerShell** on Windows, your usual shell on Linux) and
+run one of these:
+
+**macOS or Linux:**
 
 ```bash
-mkdir -p data
-cp examples/.env.example data/.env
-chmod 660 data/.env
+curl -fsSL https://raw.githubusercontent.com/dellipse/job-squire/main/bootstrap.sh | sh
 ```
 
-Open `data/.env` in an editor. The minimum required values:
+**Windows (PowerShell):**
 
-```bash
-# Generate a random secret key:
-python3 -c "import secrets; print(secrets.token_hex(32))"
-
-SECRET_KEY=<paste generated value>
-ADMIN_PASSWORD=<your admin password>   # avoid $ characters
+```powershell
+irm https://raw.githubusercontent.com/dellipse/job-squire/main/bootstrap.ps1 | iex
 ```
 
-Optional second account (the job seeker):
+This single command downloads and installs the `job-squire` tool from the official GitHub
+repository and hands off to it. It doesn't touch anything else on your computer. If you'd rather
+install a specific version instead of the newest one, that's also supported — see
+[`deployment.md`](deployment.md#installing-the-cli) — but for a first install, just run the
+command above as-is.
 
-```bash
-USER_PASSWORD=<job seeker password>
-```
-
-Set your public URLs if you are deploying behind SWAG:
-
-```bash
-SESSION_COOKIE_SECURE=true
-PUBLIC_URL=https://squire.yourdomain.com
-PUBLIC_MCP_URL=https://mcp-squire.yourdomain.com
-PUBLIC_MCP_HOST=mcp-squire.yourdomain.com
-```
-
-Find your host user/group IDs for file permissions:
-
-```bash
-id -u   # PUID
-id -g   # PGID
-```
-
-Set `PUID` and `PGID` in `data/.env` to match. The data folder must be owned by this UID/GID.
+The tool then checks whether you already have a container runtime (the piece of software that
+actually runs Job Squire, isolated from the rest of your computer). If you don't have one, it
+offers to install **Podman** — a free, open-source option that works the same way whether you're
+an individual or a business — and explains exactly what it's about to do before doing it. If you
+already have Docker installed, it uses that instead and installs nothing new.
 
 ---
 
-## Step 3: Configure the Reverse Proxy
-
-### Option A: Host-port mode (simplest)
-
-The default compose file publishes the web app on `127.0.0.1:8080` and the MCP server on `127.0.0.1:9000`. Point your proxy at these addresses. No changes to `docker-compose.yml` are needed.
-
-### Option B: Shared Docker network with SWAG
-
-Create the shared network once:
+## Step 2: Create your instance
 
 ```bash
-docker network create swag
+job-squire create
 ```
 
-In `docker-compose.yml`, for both `job-squire` and `job-squire-mcp`: comment out the `ports` blocks and uncomment the `networks` blocks and the bottom-level `networks:` declaration.
+This asks you a few questions:
 
-Copy the sample proxy confs:
+1. **Instance name** — a short label for this install, like `mystuff` or your own name. If you're
+   only ever going to run one copy of Job Squire, this doesn't matter much; pick anything.
+2. **Deployment mode** — almost everyone wants `local` here. This runs Job Squire entirely on your
+   own computer, reachable only from that computer, with no setup beyond this. The other option,
+   `network`, is for putting Job Squire on a server that other devices reach over the internet —
+   see ["Which mode do I want?"](#which-mode-do-i-want) below if you're not sure, and
+   [Setting up network mode](#setting-up-network-mode-optional) later in this guide if you pick it.
+3. **Admin password** — leave blank to have one generated for you (it will be printed once, so
+   save it somewhere).
+4. **A second account, for the job seeker** — if the person searching for a job is a different
+   person than the one running the setup (for example, a family member helping out), you can set a
+   separate login for them. Otherwise one account covers both roles.
 
-```bash
-cp examples/nginx/job-squire.subdomain.conf \
-   /path/to/swag/config/nginx/proxy-confs/
+That's it. `job-squire create` then brings the instance up and prints the address to open in your
+browser — for local mode, something like `http://localhost:8080`.
 
-cp examples/nginx/mcp-squire.subdomain.conf \
-   /path/to/swag/config/nginx/proxy-confs/
-```
-
-Edit each file to replace `yourdomain.com` with your actual domain.
-
-> The MCP proxy conf uses `http2 off`. Do not add any `proxy_*` directives -- SWAG's bundled `proxy.conf` already sets them, and duplicates will fail `nginx -t`.
-
-Test and reload SWAG:
-
-```bash
-docker exec swag nginx -t
-docker exec swag nginx -s reload
-```
+If you ever want to run a second, completely separate copy (for a second person, keeping their
+data fully apart from yours), just run `job-squire create` again with a different name — see
+[`multi-instance.md`](multi-instance.md).
 
 ---
 
-## Step 4: Start the Containers
+## Step 3: Sign in
 
-```bash
-docker compose up -d
-```
-
-Verify startup:
-
-```bash
-docker compose logs job-squire          # gunicorn up, accounts seeded, no traceback
-docker compose logs job-squire-worker   # "scheduler up ..."
-docker compose logs job-squire-mcp      # uvicorn on :9000
-```
-
-Test connectivity:
-
-```bash
-curl -is https://squire.yourdomain.com/ | head -1
-# HTTP/2 200
-
-curl -s https://mcp-squire.yourdomain.com/health
-# {"ok": true}
-```
+Open the address `job-squire create` printed. Sign in with `admin` and the password from Step 2
+(or whichever account you set up for the job seeker).
 
 ---
 
-## Step 5: In-App Setup
+## Which mode do I want?
 
-Sign in at `https://squire.yourdomain.com` with `admin` and the password from `data/.env`.
+| If you're... | Pick |
+|---|---|
+| One person, running this on your own laptop or desktop | **local** |
+| Two or more people sharing one machine, each wanting their own separate pipeline | **local** (just run `job-squire create` again for the second person) |
+| Putting this on a server so it's reachable from anywhere, or running it for a small group | **network** |
 
-Open **Settings** and work through each tab:
+Local mode needs nothing else — no domain name, no certificate, no reverse proxy. It's reachable
+only from the computer it's running on, which every modern browser treats as a fully secure
+connection with no warnings. If you later want to check your pipeline from your phone without
+setting up network mode, see ["Reaching a local instance from your phone"](#reaching-a-local-instance-from-your-phone-optional)
+below — it's a middle ground that stays fully private.
+
+Network mode is for a server that other devices reach over the internet, and it always requires a
+domain name and a certificate for encryption (HTTPS). The setup tool can handle most of that for
+you too — see [Setting up network mode](#setting-up-network-mode-optional) below.
+
+---
+
+## Step 4: Set up your search
+
+Sign in and open **Settings**, then work through each tab.
 
 **Search tab**
 
 - Enter job titles (one per line).
-- Set location as `City, ST` (e.g. `Austin, TX`). ZIP codes and street addresses are rejected.
-- Set radius, minimum salary (optional), and max posting age.
+- Set your location as `City, ST` (e.g. `Austin, TX`) if you're in the US — ZIP codes and street
+  addresses aren't accepted, since the job search APIs need a city and state. Outside the US, any
+  non-empty location works.
+- Set a search radius, an optional minimum salary, and how old a posting can be before it's
+  ignored.
 
 **Sources tab**
 
 For each job board you want to use:
 
 1. Click the "get a key" link and sign up (all are free).
-2. Paste the key(s) into the fields.
+2. Paste the key into the field.
 3. Tick "Use this source" and save.
 
-Adzuna + Jooble is the recommended starting pair. They provide good coverage for most US metro markets.
+Adzuna + Jooble is a good starting pair with solid coverage for most US metro markets. Dice and
+Jobicy need no key at all and are worth turning on regardless.
 
 **Email tab**
 
-Fill in your SMTP settings and enable notifications. Click **Send test email** to verify.
-
-> Brevo users: the **Username** is the dedicated SMTP login on Brevo's SMTP & API page, not your Brevo account email. The **Password** is the SMTP key, not your account password.
+Fill in your email provider's SMTP settings and turn on notifications, then click **Send test
+email** to confirm it works. This is what sends you a digest whenever new jobs are found.
 
 **Candidate Profile tab**
 
-Edit the master profile (or upload a `.md` file). This is the source of truth for every application kit and the MCP `get_candidate_profile` tool. It lives on disk at `DATA_DIR/candidate_profile.md` and survives image rebuilds.
+Write or upload your master profile — the resume/background summary every application kit is
+built from — and add any supporting documents (existing resumes, recommendation letters,
+certificates) to the document library.
 
-Use the **Document library** to upload the base resume, recommendation letters, certs, and portfolio items.
+**AI tab** (optional, but where most of the value is)
 
-**AI tab** (optional)
+Two independent switches:
 
-Two independent settings, each with its own toggle:
+- **Automatic Features** — turns on background AI work: scoring new jobs automatically, drafting
+  follow-up emails, and a weekly strategy review. Needs at least one AI provider — several (Gemini,
+  Groq, OpenRouter) have a free tier that's enough for typical use.
+- **MCP Connector** — lets you talk to your pipeline directly from a Claude conversation: "build me
+  a kit for this job," "what's overdue for follow-up," and so on. See Step 5 below to connect it.
 
-- **Automatic Features** -- enables one-click analysis and background automation (auto-triage, follow-up drafts, weekly review). Add at least one AI provider under AI Providers, or paste an Anthropic API key. Free tiers from Gemini, Groq, and OpenRouter are sufficient for typical use.
-- **MCP Connector** -- exposes Job Squire as a custom connector for Claude Pro, Hermes Agent, and OpenClaw. Requires the MCP container running and a public HTTPS URL (see Step 6). Enter the connector name that will match what you give it in your Claude account.
-
-Manual copy/paste analysis is always available without any AI tab configuration.
-
-Not sure which AI provider to use? See [Setting Up AI](wiki/10-ai-setup.md) for a comparison of provider strategies, privacy considerations, and setup instructions.
+Both can be on at the same time, and neither is required — copying your pipeline into Claude by
+hand always works with no setup at all.
 
 **Application Kit tab**
 
-Set the salary floor for fit assessments (default `$60,000`). Postings below this are flagged in the kit.
+Set a salary floor (default $60,000); postings below it are flagged so you don't spend effort on
+underpaying roles.
 
 ---
 
-## Step 6: Connect the MCP Connector (Optional)
+## Step 5: Connect Claude (optional)
 
-Prerequisites: `PUBLIC_MCP_URL` is set in `data/.env` and the `job-squire-mcp` container is running.
+1. On **Settings → AI tab → MCP Connector**, turn the connector on, give it a name, and save.
+2. In Claude: **Settings → Connectors → Add custom connector**, and paste the URL shown on the
+   Settings page.
+3. Claude opens a sign-in page — use the job seeker's Job Squire login (not the admin account).
+4. Once connected, "Open in Claude" buttons appear throughout the app, on job pages and the
+   Settings AI tab, and Claude can read and update your pipeline directly.
 
-1. On **Settings → AI tab → MCP Connector**, enable the connector, enter a connector name (e.g. "JobSquire"), and save.
-2. In Claude: go to **Settings > Connectors > Add custom connector**.
-3. Paste the base URL shown on the Settings page (e.g. `https://mcp-squire.yourdomain.com`).
-4. Claude opens an OAuth sign-in page. Enter Job Squire `user` account credentials (not the admin account).
-5. Claude completes the handshake. The connector shows as active.
-
-Verify by watching the MCP logs while connecting:
-
-```bash
-docker logs -f job-squire-mcp
-# You should see: discovery -> register -> authorize -> token, then ListToolsRequest 200
-```
-
-**Open in Claude** buttons now appear on the AI tab, on individual job pages, and on the Jobs list.
+If you're connecting a non-browser tool instead of Claude itself (a local agent script, for
+example), see ["MCP authentication"](deployment.md#mcp-authentication) in the deployment runbook
+for the alternative static-token method.
 
 ---
 
-## Step 7: Run Your First Search
+## Step 6: Run your first search
 
-1. Go to **Settings > Search tab**.
+1. Go to **Settings → Search tab**.
 2. Click **Run search now**.
-3. New jobs appear under the `Saved` status on the Jobs page.
-4. A digest email goes to the configured address if anything was found.
+3. New postings show up under the `Saved` status on the Jobs page, and a digest email goes out if
+   anything was found.
 
-Check the **History tab** to see the run log.
+From here, the automated schedule takes over — three times a day on weekdays, once on weekends, by
+default (Settings → Search tab shows and lets you change this).
 
 ---
 
-## Updating to a New Version
+## Keeping it running
 
 ```bash
-cd job-squire
-docker compose pull
-docker compose up -d --no-deps --force-recreate job-squire job-squire-worker job-squire-mcp
+job-squire status NAME     # is it healthy?
+job-squire update NAME     # move to the newest version
+job-squire backup NAME     # make an encrypted copy of everything
+job-squire stop NAME
+job-squire start NAME
 ```
 
-Hard-refresh the browser after updating (Ctrl+Shift+R / Cmd+Shift+R) to clear cached CSS/JS.
-
-If `requirements.txt` changed, add `--build` to the `up` command.
-
----
-
-## Resetting a Password
-
-1. Set the new password in `data/.env`.
-2. Add `RESET_UIDS_AND_PWDS_ON_START=true` to `data/.env`.
-3. `docker compose up -d`
-4. Confirm you can log in.
-5. Remove the `RESET_UIDS_AND_PWDS_ON_START` line and `docker compose up -d` again.
+Run these any time — they're the whole day-to-day toolkit. See
+[`deployment.md`](deployment.md) for the complete command reference, and
+[`backup-restore.md`](backup-restore.md) for the backup/restore walkthrough — worth doing once,
+soon after your first real setup, so you know it works before you ever need it.
 
 ---
 
-## Local Dev (No Docker)
+## Reaching a local instance from your phone (optional)
+
+If you use [Tailscale](https://tailscale.com) (a free personal VPN between your own devices), you
+can check your pipeline from your phone while the instance keeps running on your computer at home,
+without exposing anything to the public internet:
+
+```bash
+job-squire tailscale enable NAME
+```
+
+This gives the instance a real, certificate-secured address reachable only by your own signed-in
+devices. See [`deployment.md`](deployment.md#reaching-a-local-instance-remotely-without-going-to-network-mode)
+for details.
+
+---
+
+## Setting up network mode (optional)
+
+Network mode is for running Job Squire on a server so it's reachable by hostname rather than only
+from one computer — useful for a small group, or if "local" isn't the right shape for your setup.
+It always needs a domain name (a free one from [DuckDNS](https://www.duckdns.org) works fine for
+personal use) and a certificate, and the setup tool automates most of both:
+
+```bash
+job-squire create --mode network --hostname castelo.example.com
+job-squire proxy castelo                                              # sets up the reverse proxy
+job-squire dns duckdns castelo --subdomain castelo --token <your-duckdns-token>  # domain + certificate
+```
+
+Full walkthrough, including what to do if you already have a domain on Cloudflare instead of
+DuckDNS, is in [`deployment.md`](deployment.md#network-mode-the-reverse-proxy).
+
+---
+
+## Local development (for contributors)
+
+If you're working on Job Squire's own source code rather than just running it, you don't need the
+CLI or a container at all:
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
@@ -277,30 +265,10 @@ python wsgi.py
 # http://localhost:8000
 ```
 
-`fcntl`-based DB locking is Linux-only. On macOS, the lock degrades gracefully for single-process dev use.
+`fcntl`-based DB locking is Linux-only; on macOS it degrades gracefully for single-process dev use.
 
 ---
 
-## Backups
+## Something not working?
 
-The entire Job Squire lives in one directory:
-
-```bash
-tar czf job-squire-backup-$(date +%F).tgz -C ./data .
-```
-
-Contents: `job-squire.db`, `uploads/`, `candidate_profile.md`, `oauth_tokens.json`.
-
----
-
-## Wiping Data (Dev / Re-Init)
-
-Stops Job Squire services, clears the DB and uploads, and brings them back up with a fresh database:
-
-```bash
-docker compose rm -sf job-squire job-squire-worker job-squire-mcp
-rm -rf ./data/{job-squire.db,job-squire.db-*,uploads,.init.lock,provider_cooldowns.json}
-docker compose up -d job-squire job-squire-worker job-squire-mcp
-```
-
-Omit `candidate_profile.md` from the rm to preserve the master profile. The bundled default is re-seeded from the image on first boot if the file is missing.
+See [`troubleshooting.md`](troubleshooting.md) for the most common issues and their fixes.

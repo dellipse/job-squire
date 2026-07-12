@@ -664,8 +664,9 @@ def restore_cmd(archive_path, rename_to, overwrite, passphrase, image, bring_up,
 @click.option("--timezone", "swag_timezone", default="Etc/UTC", show_default=True,
               help="TZ for a freshly installed SWAG container.")
 @click.option("--url", "swag_url", default="",
-              help="SWAG URL env var, if a fresh SWAG install is needed. DNS/TLS validation is "
-                   "`job-squire`'s own separate DNS/TLS setup -- this can be left blank for now.")
+              help="SWAG URL env var, if a fresh SWAG install is needed. Defaults to the instance's "
+                   "own hostname (SWAG cannot finish booting with no URL at all). DNS/TLS validation "
+                   "is `job-squire`'s own separate DNS/TLS setup, so this doesn't need to resolve yet.")
 @click.option("--validation", "swag_validation", type=click.Choice(["http", "dns"]), default="http",
               show_default=True, help="SWAG VALIDATION env var, if a fresh SWAG install is needed.")
 @click.option("--yes", "assume_yes", is_flag=True, default=False,

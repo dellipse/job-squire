@@ -354,10 +354,12 @@ def test_provision_instance_proxy_installs_swag_when_none_detected_and_confirmed
         .on(("docker", "inspect", "--format", "{{json .NetworkSettings.Networks}}", proxy.SWAG_CONTAINER_NAME),
             stdout=json.dumps({"job-squire-proxy": {}}))
         .on(("docker", "network", "connect", "job-squire-proxy", "job-squire-castelo"), returncode=0)
+        .on(("docker", "exec", proxy.SWAG_CONTAINER_NAME, "test", "-f", "/config/nginx/proxy.conf"), returncode=0)
         .on(("docker", "exec", proxy.SWAG_CONTAINER_NAME, "nginx", "-s", "reload"), returncode=0)
     )
     result = proxy.provision_instance_proxy(
         instance, root=instance_root, data_root=tmp_path, confirm=lambda _msg: True, run=run,
+        sleep=lambda _seconds: None,
     )
     assert result.installed_swag is True
     assert result.proxy.container_name == proxy.SWAG_CONTAINER_NAME
@@ -391,3 +393,64 @@ def test_provision_instance_proxy_manual_config_dir_skips_networking(instance_ro
     assert not any(call[:2] == ("docker", "network") for call in run.calls)
     # The instance's compose file is untouched (no proxy_network line added).
     assert "job-squire-proxy" not in paths.compose_path(instance_root).read_text()
+
+
+# ── _await_swag_ready (regression: a fresh SWAG isn't reload-ready the
+# instant its container starts -- see the function's own docstring) ──────
+
+
+def test_await_swag_ready_retries_until_the_marker_file_appears():
+    """SWAG's own init takes a beat to populate /config/nginx/proxy.conf;
+    the first two polls must find it missing and the third must succeed,
+    with a sleep between each failed attempt."""
+    attempts = {"n": 0}
+
+    def run(args, **kwargs):
+        attempts["n"] += 1
+        return SimpleNamespace(returncode=0 if attempts["n"] >= 3 else 1, stdout="", stderr="")
+
+    slept = []
+    ready = proxy._await_swag_ready(
+        "docker", "job-squire-swag", run=run, sleep=slept.append,
+        timeout_seconds=10, poll_interval=1,
+    )
+    assert ready is True
+    assert attempts["n"] == 3
+    assert slept == [1, 1]
+
+
+def test_await_swag_ready_gives_up_after_the_timeout():
+    def run(args, **kwargs):
+        return SimpleNamespace(returncode=1, stdout="", stderr="")
+
+    ready = proxy._await_swag_ready(
+        "docker", "job-squire-swag", run=run, sleep=lambda _seconds: None,
+        timeout_seconds=3, poll_interval=1,
+    )
+    assert ready is False
+
+
+def test_provision_instance_proxy_waits_for_swag_before_reloading(instance_root, tmp_path):
+    """End-to-end proof the wait is actually wired into provisioning, not
+    just unit-tested in isolation: the fake exec for `test -f
+    .../proxy.conf` must be called (and satisfied) before `nginx -s
+    reload` is attempted."""
+    instance = make_instance()
+    run = (
+        FakeRun()
+        .on(("docker", "ps"), stdout="")
+        .on(("docker", "network", "create", "job-squire-proxy"), returncode=0)
+        .on(("docker", "compose"), returncode=0)
+        .on(("docker", "inspect", "--format", "{{json .NetworkSettings.Networks}}", proxy.SWAG_CONTAINER_NAME),
+            stdout=json.dumps({"job-squire-proxy": {}}))
+        .on(("docker", "network", "connect", "job-squire-proxy", "job-squire-castelo"), returncode=0)
+        .on(("docker", "exec", proxy.SWAG_CONTAINER_NAME, "test", "-f", "/config/nginx/proxy.conf"), returncode=0)
+        .on(("docker", "exec", proxy.SWAG_CONTAINER_NAME, "nginx", "-s", "reload"), returncode=0)
+    )
+    proxy.provision_instance_proxy(
+        instance, root=instance_root, data_root=tmp_path, confirm=lambda _msg: True, run=run,
+        sleep=lambda _seconds: None,
+    )
+    ready_check = ("docker", "exec", proxy.SWAG_CONTAINER_NAME, "test", "-f", "/config/nginx/proxy.conf")
+    reload_call = ("docker", "exec", proxy.SWAG_CONTAINER_NAME, "nginx", "-s", "reload")
+    assert run.calls.index(ready_check) < run.calls.index(reload_call)
