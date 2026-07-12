@@ -531,6 +531,71 @@ thing the CLI cannot conjure: a domain and working DNS." This is a
 network-mode-only concern; a local install uses loopback and needs none of
 it.
 
+## Tailscale Serve for private remote access (Prompt C11)
+
+```
+job-squire tailscale enable NAME                                  # Serve on 443 (web) / 8443 (MCP), the defaults
+job-squire tailscale enable NAME --web-port 8443 --mcp-port 10000  # a second Tailscale-enabled instance on one machine
+job-squire tailscale disable NAME                                 # back to loopback-only
+job-squire tailscale status NAME
+```
+
+Only applies to a `local`-mode instance -- this is a private remote-access
+path for a local install, not a substitute for network mode's own reverse
+proxy (`ops/proxy.py`/`ops/dns.py`), and `ops/tailscale.py` refuses a
+`network`-mode instance outright.
+
+**Serve, never Funnel.** `enable` only ever calls `tailscale serve --bg
+--https=<port> http://127.0.0.1:<port>`, forwarding to the instance's
+existing loopback host port (the same one `create` already published --
+nothing about the compose file changes, unlike `job-squire proxy`'s
+network-mode provisioning, since Serve runs as a host-level daemon and
+reaches the instance the same way any other host process would). Funnel is
+public exposure and this module never invokes it. Serve only issues a
+valid certificate on three ports -- `443`, `8443`, `10000` -- so an
+operator running Tailscale for a second instance on the same machine picks
+a different pair from that same set of three with `--web-port`/`--mcp-port`.
+
+**Local mode stays local mode.** Per PLAN Section 5, this is "local mode
+with a private Serve front door rather than a separate mode." `enable`
+never touches `Instance.mode` or `DEPLOY_MODE` -- both stay `local`. What
+it does flip, in the instance's `data/.env`, are the individual overrides
+`app/deploy.py`'s `DEPLOY_MODE` resolution already supports independently
+of the mode string: `TRUST_PROXY=true`, `SESSION_COOKIE_SECURE=true`, and
+`PUBLIC_URL`/`PUBLIC_MCP_URL`/`PUBLIC_MCP_HOST` set to this device's
+`<device>.<tailnet>.ts.net` name (from `tailscale status --json`'s
+`Self.DNSName`), then recreates the container so the new env takes effect.
+`disable` reverts all five to exactly what `create` itself would have
+written for a local instance (loopback URLs, both flags off) and recreates
+the container again. The registry's `public_url` is updated to match on
+both sides, so `job-squire status`/`list` show the real reachable address
+while Serve is on.
+
+**A known, expected app-side warning.** `app/deploy.py`'s startup guard
+treats `DEPLOY_MODE=local` combined with a non-loopback `PUBLIC_URL` as a
+*warning*, not fatal -- the container keeps running. A Tailscale-enabled
+instance is exactly that combination by design, so `enable` prints this
+expectation up front rather than leaving the operator to discover a
+surprise banner and wonder if something broke.
+
+**Where the on/off state lives.** Not the registry -- `Instance` (Prompt
+C4) is a fixed, non-secret schema, and this is a toggle on an existing
+field's *meaning*, not new instance identity. Instead a small
+`tailscale.json` manifest sits beside `docker-compose.single.yml` in the
+instance's own directory (`ops/tailscale.py`'s `read_state`/`is_tailnet_
+reachable`), the same per-instance-directory precedent `ops/mcp_token.py`
+already established for state with no natural home in the registry.
+
+**MCP over the tailnet, and the reachability rule.** Because `Instance.mode`
+stays `"local"` for a Serve-fronted instance, Prompt C6's `is_static_token_
+allowed()` check (keyed on `mode`) can't see the tailnet reachability on
+its own. `job-squire configure`'s static-token gate additionally consults
+`ops/tailscale.py`'s state manifest: a tailnet-reachable instance is
+refused the static token exactly like a `network`-mode one, unless the
+operator passes the *same* `--allow-network` opt-in C6 defines -- never a
+separate flag, never implicit. OAuth remains preferred there, same as any
+instance reachable beyond the one machine.
+
 ## Versioning
 
 The old split was `0.1.0-<sha>` for the app versus `0.1.0+<sha>` for

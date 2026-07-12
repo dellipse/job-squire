@@ -25,6 +25,7 @@ from job_squire_cli.cli import main
 from job_squire_cli.ops import mcp_token as mt
 from job_squire_cli.ops import paths
 from job_squire_cli.ops import registry as reg
+from job_squire_cli.ops import tailscale as tailscale_ops
 from job_squire_cli.query import config as query_config_module
 
 # Not tests/test_secrets_copy.py's _SCHEMA: that one is intentionally
@@ -193,6 +194,51 @@ def test_network_instance_allows_static_token_with_explicit_opt_in(runner):
     # public_url hostname via the same mcp-<hostname> convention `create
     # --mcp-hostname` defaults to.
     assert query_config_module.load_query_config().endpoint == "https://mcp-squire.example.com"
+
+
+# ── tailnet reachability rule (Prompt C11) ────────────────────────────────
+# A Tailscale-Serve-fronted instance stays mode="local" by design (ops/
+# tailscale.py's module docstring), so Instance.mode alone can't tell
+# `configure` it's reachable beyond this machine -- the state manifest
+# ops/tailscale.py writes is what closes that gap. The gate itself reuses
+# the exact same --allow-network opt-in as the network-mode rule above,
+# never a separate flag.
+
+
+def test_tailnet_reachable_instance_refuses_static_token_without_opt_in(runner):
+    _make_instance("castelo")
+    root = paths.instance_root("castelo")
+    tailscale_ops._write_state(root, tailscale_ops.TailscaleState(
+        enabled=True, hostname="castelo.tail1234.ts.net", web_port=443, mcp_port=8443,
+        enabled_at="2026-07-11T12:00:00Z",
+    ))
+    result = runner.invoke(main, ["configure", "castelo", "--mcp-token", "generate"])
+    assert result.exit_code == 1
+    assert "reachable over your tailnet" in result.output
+    assert "--allow-network" in result.output
+    assert mt.read_state(root).active is False
+
+
+def test_tailnet_reachable_instance_allows_static_token_with_explicit_opt_in(runner):
+    _make_instance("castelo")
+    root = paths.instance_root("castelo")
+    tailscale_ops._write_state(root, tailscale_ops.TailscaleState(
+        enabled=True, hostname="castelo.tail1234.ts.net", web_port=443, mcp_port=8443,
+        enabled_at="2026-07-11T12:00:00Z",
+    ))
+    result = runner.invoke(
+        main, ["configure", "castelo", "--mcp-token", "generate", "--allow-network"],
+    )
+    assert result.exit_code == 0, result.output
+    state = mt.read_state(root)
+    assert state.active is True
+    assert state.allow_network is True
+
+
+def test_instance_without_tailscale_enabled_is_unaffected_by_the_gate(runner):
+    _make_instance("castelo")
+    result = runner.invoke(main, ["configure", "castelo", "--mcp-token", "generate"])
+    assert result.exit_code == 0, result.output
 
 
 def test_allow_network_flag_alone_toggles_without_generating(runner):

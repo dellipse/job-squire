@@ -39,6 +39,7 @@ import click
 from . import backup, compose, lifecycle, mcp_token, secrets_copy
 from . import dns as dns_ops
 from . import proxy as proxy_ops
+from . import tailscale as tailscale_ops
 from .compose import DEFAULT_IMAGE
 from .registry import (
     Instance,
@@ -463,9 +464,22 @@ def configure(name, mcp_token_action, ttl_hours, allow_network, manual_token, ma
             return
 
         effective_allow_network = allow_network if allow_network is not None else state.allow_network
-        if not mcp_token.is_static_token_allowed(instance.mode, effective_allow_network):
+        # Instance.mode alone can't see Tailscale reachability -- Prompt C11
+        # deliberately keeps a Serve-fronted instance's mode at "local" (see
+        # ops/tailscale.py's module docstring), so its own state manifest is
+        # consulted too. Either way, the same explicit --allow-network opt-in
+        # from C6 is what's required; nothing here is allowed implicitly.
+        tailnet_reachable = instance.mode == "local" and tailscale_ops.is_tailnet_reachable(root)
+        if not mcp_token.is_static_token_allowed(instance.mode, effective_allow_network) or (
+            tailnet_reachable and not effective_allow_network
+        ):
+            reachability = (
+                "network-reachable (mode=network)" if instance.mode == "network"
+                else "reachable over your tailnet (Tailscale Serve is enabled -- "
+                     "see `job-squire tailscale status " + instance.name + "`)"
+            )
             _fail(
-                f"Instance {instance.name!r} is network-reachable (mode=network). The static "
+                f"Instance {instance.name!r} is {reachability}. The static "
                 f"token is refused there unless explicitly enabled -- pass --allow-network to "
                 f"opt in, or prefer OAuth (the default flow) for a reachable instance."
             )
@@ -789,6 +803,92 @@ def dns_cloudflare_cmd(name, domain, api_token, network, timezone, no_wait, time
     _print_dns_result(result, runtime=instance.runtime)
 
 
+# ── tailscale (Prompt C11) ───────────────────────────────────────────────
+# docs/PLAN-deployment-modes.md Section 5 ("Reaching a local instance from
+# your own devices (Tailscale)"). Serve, never Funnel, in front of a
+# *local*-mode instance's loopback ports -- see ops/tailscale.py's module
+# docstring for why Instance.mode stays "local" throughout and where the
+# on/off state actually lives (a per-instance tailscale.json manifest, not
+# the registry).
+
+
+@click.group(name="tailscale", help="Front a local instance with Tailscale Serve for private "
+                                     "remote access (never Funnel; the app stays on loopback).")
+def tailscale_group():
+    pass
+
+
+@tailscale_group.command(name="enable", help="Turn on Tailscale Serve for a local instance's "
+                                              "web and MCP ports.")
+@click.argument("name")
+@click.option("--web-port", type=click.Choice([str(p) for p in tailscale_ops.ALLOWED_SERVE_PORTS]),
+              default=str(tailscale_ops.DEFAULT_WEB_SERVE_PORT), show_default=True,
+              help="Tailnet HTTPS port Serve publishes the web app on.")
+@click.option("--mcp-port", type=click.Choice([str(p) for p in tailscale_ops.ALLOWED_SERVE_PORTS]),
+              default=str(tailscale_ops.DEFAULT_MCP_SERVE_PORT), show_default=True,
+              help="Tailnet HTTPS port Serve publishes the MCP endpoint on.")
+def tailscale_enable_cmd(name, web_port, mcp_port):
+    instance = _require_instance(name)
+    # Path(instance.data_dir), not paths.instance_root(instance.name): same
+    # reason as _print_mcp_config above -- an adopted instance's data_dir
+    # doesn't necessarily live under the default per-user data root.
+    root = Path(instance.data_dir)
+    try:
+        result = tailscale_ops.enable_tailscale_serve(
+            instance, root=root, web_port=int(web_port), mcp_port=int(mcp_port),
+        )
+    except tailscale_ops.TailscaleError as exc:
+        _fail(str(exc))
+
+    click.echo(f"Tailscale Serve enabled for {instance.name!r}.")
+    click.echo(f"  Web: {result.public_url}")
+    click.echo(f"  MCP: {result.public_mcp_url}")
+    if result.health is not None:
+        click.echo(f"  Health: {result.health.get('Health', {}).get('Status') or result.health.get('Status')}")
+    click.echo(f"  Note: {result.expected_warning}")
+    click.echo(
+        "  MCP over the tailnet: prefer OAuth (the default flow) now that this instance is "
+        "reachable beyond this machine. The local static token still works but is refused unless "
+        "explicitly opted in -- see `job-squire configure " + instance.name + " --allow-network`."
+    )
+
+
+@tailscale_group.command(name="disable", help="Turn off Tailscale Serve for an instance and "
+                                               "revert it to loopback-only.")
+@click.argument("name")
+def tailscale_disable_cmd(name):
+    instance = _require_instance(name)
+    root = Path(instance.data_dir)
+    try:
+        result = tailscale_ops.disable_tailscale_serve(instance, root=root)
+    except tailscale_ops.TailscaleError as exc:
+        _fail(str(exc))
+
+    click.echo(f"Tailscale Serve disabled for {instance.name!r}.")
+    click.echo(f"  Web: {result.public_url}")
+    if result.health is not None:
+        click.echo(f"  Health: {result.health.get('Health', {}).get('Status') or result.health.get('Status')}")
+
+
+@tailscale_group.command(name="status", help="Show whether Tailscale Serve is enabled for an instance.")
+@click.argument("name")
+def tailscale_status_cmd(name):
+    instance = _require_instance(name)
+    root = Path(instance.data_dir)
+    try:
+        state = tailscale_ops.read_state(root)
+    except tailscale_ops.TailscaleError as exc:
+        _fail(str(exc))
+
+    if not state.enabled:
+        click.echo(f"Tailscale Serve is not enabled for {instance.name!r}.")
+        return
+    click.echo(f"Tailscale Serve is enabled for {instance.name!r} (since {state.enabled_at}).")
+    click.echo(f"  Hostname: {state.hostname}")
+    click.echo(f"  Web port: {state.web_port}")
+    click.echo(f"  MCP port: {state.mcp_port}")
+
+
 # ── registration ─────────────────────────────────────────────────────────
 
 
@@ -800,3 +900,4 @@ def register_ops_commands(group: click.Group) -> None:
     ):
         group.add_command(command)
     group.add_command(dns_group)
+    group.add_command(tailscale_group)

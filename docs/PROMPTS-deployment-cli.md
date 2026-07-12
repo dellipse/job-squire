@@ -42,7 +42,7 @@
 - [x] Prompt C8: passphrase-encrypted backup and restore
 - [x] Prompt C9: reverse-proxy provisioning (SWAG / nginx)
 - [x] Prompt C10: DNS and TLS (DuckDNS auto, Cloudflare semi, others documented)
-- [ ] Prompt C11: Tailscale Serve for private remote access
+- [x] Prompt C11: Tailscale Serve for private remote access
 - [ ] Prompt C12: docs supersession, user setup guide rewrite, full verification
 
 ---

@@ -27,6 +27,7 @@ from job_squire_cli.ops import dns as dns_ops
 from job_squire_cli.ops import lifecycle as lc
 from job_squire_cli.ops import proxy as proxy_ops
 from job_squire_cli.ops import registry as reg
+from job_squire_cli.ops import tailscale as tailscale_ops
 from job_squire_cli.query import config as query_config_module
 
 
@@ -654,3 +655,145 @@ def test_dns_cloudflare_propagates_dns_error_as_clean_exit(runner, monkeypatch, 
     assert result.exit_code == 1
     assert "domain and a Cloudflare API token are required" in result.output
     assert "Traceback" not in result.output
+
+
+# ── tailscale (Prompt C11) ───────────────────────────────────────────────
+# Thin adapter tests only, same philosophy as proxy/dns above: ops/
+# tailscale.py's own behavior (Serve invocations, data/.env rewriting,
+# registry/state updates) is covered exhaustively in test_tailscale.py with
+# a fully injected fake runtime; here the point is just proving the click
+# commands parse their options and surface ops/tailscale.py's exceptions
+# and results cleanly.
+
+
+def _register_local_instance(tmp_path, name="castelo"):
+    reg.add_instance(
+        name=name, mode="local", runtime="docker", data_dir=str(tmp_path),
+        public_url="http://localhost:8080", app_port=8080, mcp_port=9000,
+    )
+
+
+def test_tailscale_enable_unregistered_instance_fails_cleanly(runner):
+    result = runner.invoke(main, ["tailscale", "enable", "ghost"])
+    assert result.exit_code == 1
+    assert "No instance named 'ghost'" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_tailscale_enable_happy_path_prints_result(runner, monkeypatch, tmp_path):
+    _register_local_instance(tmp_path)
+    captured = {}
+
+    def fake_enable(instance, *, root, web_port, mcp_port):
+        captured.update(name=instance.name, web_port=web_port, mcp_port=mcp_port)
+        return tailscale_ops.TailscaleEnableResult(
+            hostname="castelo.tail1234.ts.net", web_port=web_port, mcp_port=mcp_port,
+            public_url="https://castelo.tail1234.ts.net",
+            public_mcp_url="https://castelo.tail1234.ts.net:8443",
+            health={"Status": "running", "Health": {"Status": "healthy"}},
+            expected_warning="expect a WARNING banner about PUBLIC_URL -- that's normal here.",
+        )
+
+    monkeypatch.setattr(tailscale_ops, "enable_tailscale_serve", fake_enable)
+    result = runner.invoke(main, ["tailscale", "enable", "castelo"])
+    assert result.exit_code == 0, result.output
+    assert captured == {"name": "castelo", "web_port": 443, "mcp_port": 8443}
+    assert "Tailscale Serve enabled for 'castelo'" in result.output
+    assert "https://castelo.tail1234.ts.net" in result.output
+    assert "prefer OAuth" in result.output
+
+
+def test_tailscale_enable_custom_ports(runner, monkeypatch, tmp_path):
+    _register_local_instance(tmp_path)
+    captured = {}
+
+    def fake_enable(instance, *, root, web_port, mcp_port):
+        captured.update(web_port=web_port, mcp_port=mcp_port)
+        return tailscale_ops.TailscaleEnableResult(
+            hostname="castelo.tail1234.ts.net", web_port=web_port, mcp_port=mcp_port,
+            public_url="https://castelo.tail1234.ts.net:8443",
+            public_mcp_url="https://castelo.tail1234.ts.net:10000",
+            health=None, expected_warning="",
+        )
+
+    monkeypatch.setattr(tailscale_ops, "enable_tailscale_serve", fake_enable)
+    result = runner.invoke(
+        main, ["tailscale", "enable", "castelo", "--web-port", "8443", "--mcp-port", "10000"],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured == {"web_port": 8443, "mcp_port": 10000}
+
+
+def test_tailscale_enable_rejects_an_unsupported_port(runner, tmp_path):
+    _register_local_instance(tmp_path)
+    result = runner.invoke(main, ["tailscale", "enable", "castelo", "--web-port", "9999"])
+    assert result.exit_code != 0
+    assert "Traceback" not in result.output
+
+
+def test_tailscale_enable_propagates_tailscale_error_as_clean_exit(runner, monkeypatch, tmp_path):
+    _register_local_instance(tmp_path)
+
+    def fake_enable(instance, *, root, web_port, mcp_port):
+        raise tailscale_ops.TailscaleError("tailscale status failed")
+
+    monkeypatch.setattr(tailscale_ops, "enable_tailscale_serve", fake_enable)
+    result = runner.invoke(main, ["tailscale", "enable", "castelo"])
+    assert result.exit_code == 1
+    assert "tailscale status failed" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_tailscale_disable_unregistered_instance_fails_cleanly(runner):
+    result = runner.invoke(main, ["tailscale", "disable", "ghost"])
+    assert result.exit_code == 1
+    assert "No instance named 'ghost'" in result.output
+
+
+def test_tailscale_disable_happy_path_prints_result(runner, monkeypatch, tmp_path):
+    _register_local_instance(tmp_path)
+
+    def fake_disable(instance, *, root):
+        return tailscale_ops.TailscaleDisableResult(
+            public_url="http://localhost:8080", health={"Status": "running"},
+        )
+
+    monkeypatch.setattr(tailscale_ops, "disable_tailscale_serve", fake_disable)
+    result = runner.invoke(main, ["tailscale", "disable", "castelo"])
+    assert result.exit_code == 0, result.output
+    assert "Tailscale Serve disabled for 'castelo'" in result.output
+    assert "http://localhost:8080" in result.output
+
+
+def test_tailscale_disable_propagates_error_when_not_enabled(runner, monkeypatch, tmp_path):
+    _register_local_instance(tmp_path)
+
+    def fake_disable(instance, *, root):
+        raise tailscale_ops.TailscaleError("does not have Tailscale Serve enabled")
+
+    monkeypatch.setattr(tailscale_ops, "disable_tailscale_serve", fake_disable)
+    result = runner.invoke(main, ["tailscale", "disable", "castelo"])
+    assert result.exit_code == 1
+    assert "does not have Tailscale Serve enabled" in result.output
+
+
+def test_tailscale_status_not_enabled(runner, tmp_path):
+    _register_local_instance(tmp_path)
+    result = runner.invoke(main, ["tailscale", "status", "castelo"])
+    assert result.exit_code == 0
+    assert "is not enabled" in result.output
+
+
+def test_tailscale_status_enabled(runner, monkeypatch, tmp_path):
+    _register_local_instance(tmp_path)
+    monkeypatch.setattr(
+        tailscale_ops, "read_state",
+        lambda root: tailscale_ops.TailscaleState(
+            enabled=True, hostname="castelo.tail1234.ts.net", web_port=443, mcp_port=8443,
+            enabled_at="2026-07-11T12:00:00Z",
+        ),
+    )
+    result = runner.invoke(main, ["tailscale", "status", "castelo"])
+    assert result.exit_code == 0
+    assert "enabled for 'castelo'" in result.output
+    assert "castelo.tail1234.ts.net" in result.output
