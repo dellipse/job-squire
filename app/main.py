@@ -2299,7 +2299,15 @@ def ai_task_poll(run_id: str):
     if not _RUN_ID_RE.fullmatch(run_id or ""):
         return jsonify({"status": "not_found"}), 404
     data_dir = current_app.config["DATA_DIR"]
-    path = os.path.join(data_dir, f"task_{run_id}.json")
+    base_path = os.path.normpath(data_dir)
+    path = os.path.normpath(os.path.join(base_path, f"task_{run_id}.json"))
+    # Belt-and-suspenders on top of the regex check above: normalize and
+    # confirm the resulting path is still under DATA_DIR before it's used.
+    # The regex already makes traversal structurally impossible (run_id
+    # can't contain "/" or ".."), but this normalize-then-contain check is
+    # the exact sanitizer shape CodeQL's py/path-injection query looks for.
+    if not (path == base_path or path.startswith(base_path + os.sep)):
+        return jsonify({"status": "not_found"}), 404
     if not os.path.exists(path):
         return jsonify({"status": "not_found"}), 404
     try:
