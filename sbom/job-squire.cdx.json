@@ -835,9 +835,14 @@
       "version": "2026.6.17"
     },
     {
-      "bom-ref": "cffi==2.0.0",
+      "bom-ref": "cffi==2.1.0",
       "description": "Foreign Function Interface for Python calling C code.",
       "externalReferences": [
+        {
+          "comment": "from packaging metadata Project-URL: Download",
+          "type": "distribution",
+          "url": "https://github.com/python-cffi/cffi/releases"
+        },
         {
           "comment": "from packaging metadata Project-URL: Documentation",
           "type": "documentation",
@@ -854,11 +859,6 @@
           "url": "https://github.com/python-cffi/cffi"
         },
         {
-          "comment": "from packaging metadata Project-URL: Downloads",
-          "type": "other",
-          "url": "https://github.com/python-cffi/cffi/releases"
-        },
-        {
           "comment": "from packaging metadata Project-URL: Contact",
           "type": "other",
           "url": "https://groups.google.com/forum/#!forum/python-cffi"
@@ -873,14 +873,14 @@
         {
           "license": {
             "acknowledgement": "declared",
-            "id": "MIT"
+            "id": "MIT-0"
           }
         }
       ],
       "name": "cffi",
-      "purl": "pkg:pypi/cffi@2.0.0",
+      "purl": "pkg:pypi/cffi@2.1.0",
       "type": "library",
-      "version": "2.0.0"
+      "version": "2.1.0"
     },
     {
       "bom-ref": "chardet==5.2.0",
@@ -921,7 +921,7 @@
       "version": "5.2.0"
     },
     {
-      "bom-ref": "charset-normalizer==3.4.7",
+      "bom-ref": "charset-normalizer==3.4.9",
       "description": "The Real First Universal Charset Detector. Open, modern and actively maintained alternative to Chardet.",
       "externalReferences": [
         {
@@ -954,9 +954,9 @@
         }
       ],
       "name": "charset-normalizer",
-      "purl": "pkg:pypi/charset-normalizer@3.4.7",
+      "purl": "pkg:pypi/charset-normalizer@3.4.9",
       "type": "library",
-      "version": "3.4.7"
+      "version": "3.4.9"
     },
     {
       "bom-ref": "click==8.4.2",
@@ -2854,7 +2854,7 @@
       "version": "4.16.0"
     },
     {
-      "bom-ref": "tzdata==2026.2",
+      "bom-ref": "tzdata==2026.3",
       "description": "Provider of IANA time zone data",
       "externalReferences": [
         {
@@ -2887,9 +2887,9 @@
         }
       ],
       "name": "tzdata",
-      "purl": "pkg:pypi/tzdata@2026.2",
+      "purl": "pkg:pypi/tzdata@2026.3",
       "type": "library",
-      "version": "2026.2"
+      "version": "2026.3"
     },
     {
       "bom-ref": "tzlocal==5.4.4",
@@ -3211,7 +3211,7 @@
     {
       "dependsOn": [
         "python-dateutil==2.9.0.post0",
-        "tzdata==2026.2"
+        "tzdata==2026.3"
       ],
       "ref": "arrow==1.4.0"
     },
@@ -3221,7 +3221,7 @@
     {
       "dependsOn": [
         "chardet==5.2.0",
-        "charset-normalizer==3.4.7",
+        "charset-normalizer==3.4.9",
         "lxml==6.1.1",
         "soupsieve==2.8.4",
         "typing_extensions==4.16.0"
@@ -3241,20 +3241,20 @@
       "dependsOn": [
         "pycparser==3.0"
       ],
-      "ref": "cffi==2.0.0"
+      "ref": "cffi==2.1.0"
     },
     {
       "ref": "chardet==5.2.0"
     },
     {
-      "ref": "charset-normalizer==3.4.7"
+      "ref": "charset-normalizer==3.4.9"
     },
     {
       "ref": "click==8.4.2"
     },
     {
       "dependsOn": [
-        "cffi==2.0.0",
+        "cffi==2.1.0",
         "typing_extensions==4.16.0"
       ],
       "ref": "cryptography==49.0.0"
@@ -3465,7 +3465,7 @@
         "pydantic_core==2.46.4",
         "typing-inspection==0.4.2",
         "typing_extensions==4.16.0",
-        "tzdata==2026.2"
+        "tzdata==2026.3"
       ],
       "ref": "pydantic==2.13.4"
     },
@@ -3515,7 +3515,7 @@
       "dependsOn": [
         "certifi==2026.6.17",
         "chardet==5.2.0",
-        "charset-normalizer==3.4.7",
+        "charset-normalizer==3.4.9",
         "idna==3.18",
         "urllib3==2.7.0"
       ],
@@ -3579,11 +3579,11 @@
       "ref": "typing_extensions==4.16.0"
     },
     {
-      "ref": "tzdata==2026.2"
+      "ref": "tzdata==2026.3"
     },
     {
       "dependsOn": [
-        "tzdata==2026.2"
+        "tzdata==2026.3"
       ],
       "ref": "tzlocal==5.4.4"
     },
@@ -3610,7 +3610,7 @@
     }
   ],
   "metadata": {
-    "timestamp": "2026-07-06T06:10:44.092766+00:00",
+    "timestamp": "2026-07-12T07:47:02.712499+00:00",
     "tools": {
       "components": [
         {
@@ -3717,7 +3717,7 @@
       "bom-ref": "root-component",
       "type": "application",
       "name": "job-squire",
-      "version": "0.5.0",
+      "version": "0.6.1",
       "description": "Self-hosted, two-user job-search companion: automates job discovery, tracks applications through a hiring funnel, and integrates with Claude as an AI coach via MCP.",
       "licenses": [
         {
@@ -3734,7 +3734,7 @@
       ]
     }
   },
-  "serialNumber": "urn:uuid:cfcb09f8-fa19-48a2-83c9-e1bc228baf25",
+  "serialNumber": "urn:uuid:a5dcee3a-52a3-4bf9-9cbd-990501dcf984",
   "version": 1,
   "$schema": "http://cyclonedx.org/schema/bom-1.6.schema.json",
   "bomFormat": "CycloneDX",
