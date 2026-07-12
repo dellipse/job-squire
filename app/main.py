@@ -2267,22 +2267,21 @@ def ai_run_task(task):
     return redirect(url_for("main.ai_task_status", run_id=run_id, task=task))
 
 
+# run_id is always server-generated via uuid.uuid4().hex (see _TaskStatus /
+# the callers that create one) -- 32 lowercase hex characters, nothing else.
+# The regex check below is inlined into each route right before its
+# filesystem use rather than factored into a shared helper, so CodeQL's
+# taint-tracking sees the sanitizing guard in the same function as the sink
+# it protects (os.path.join/open/os.unlink) instead of losing the flow
+# across a function boundary.
 _RUN_ID_RE = re.compile(r"^[0-9a-f]{32}$")
-
-
-def _is_valid_run_id(run_id: str) -> bool:
-    """run_id is always server-generated via uuid.uuid4().hex (see _TaskStatus /
-    the callers that create one). Reject anything else before it touches a
-    filesystem path, since these routes take run_id straight from the URL.
-    """
-    return bool(_RUN_ID_RE.fullmatch(run_id or ""))
 
 
 @main_bp.route("/ai/task/<run_id>/status")
 @login_required
 def ai_task_status(run_id: str):
     """Status page for a running background AI task. Opened in a new tab."""
-    if not _is_valid_run_id(run_id):
+    if not _RUN_ID_RE.fullmatch(run_id or ""):
         return jsonify({"status": "not_found"}), 404
     task = request.args.get("task", "")
     labels = {
@@ -2297,7 +2296,7 @@ def ai_task_status(run_id: str):
 @login_required
 def ai_task_poll(run_id: str):
     """JSON endpoint polled by the status page every 2 s."""
-    if not _is_valid_run_id(run_id):
+    if not _RUN_ID_RE.fullmatch(run_id or ""):
         return jsonify({"status": "not_found"}), 404
     data_dir = current_app.config["DATA_DIR"]
     path = os.path.join(data_dir, f"task_{run_id}.json")
