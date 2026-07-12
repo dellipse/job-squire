@@ -6,10 +6,13 @@ single-container image (`docker-compose.single.yml`), with its data and
 secrets intact. See `docs/PLAN-deployment-modes.md` Section 2 for why the
 single-container image exists and Section 8 for the full migration design.
 
-This is a manual, scriptable path. It will be superseded once the
-`job-squire` CLI's own `adopt` command lands (see the design's Section 7) —
-until then, this doc and `scripts/adopt-single-container.sh` are the
-supported way to move.
+**The `job-squire` CLI's own `adopt` command now wraps this exact logic**
+(`job-squire adopt /path/to/existing/install`, see `docs/job-squire-cli.md`)
+— prefer it if you have the CLI installed; it does everything below plus
+registering the instance and offering to bring it up, in one guided step.
+This doc and `scripts/adopt-single-container.sh` remain as the manual,
+scriptable path for anyone not using the CLI, and as a reference for
+exactly what the CLI command does under the hood.
 
 ---
 

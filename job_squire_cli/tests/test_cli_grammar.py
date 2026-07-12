@@ -19,8 +19,10 @@ the whole point of the lazy group is defeated.
 Prompt C5 made create/start/stop/restart/status/list/remove real (see
 ops/lifecycle.py and tests/test_lifecycle.py, tests/test_ops_commands.py
 for their behavior). Prompt C6 made `configure` real too (see
-tests/test_configure.py); `update`/`backup`/`restore` remain C7-C8 stubs,
-so only that remaining set is exercised here as "not implemented yet".
+tests/test_configure.py). Prompt C7 made `update` and `adopt` real (see
+tests/test_lifecycle.py and tests/test_ops_commands.py); `backup`/
+`restore` remain C8 stubs, so only that remaining set is exercised here
+as "not implemented yet".
 """
 import subprocess
 import sys
@@ -32,10 +34,10 @@ from job_squire_cli.cli import main
 
 DEPLOYMENT_COMMANDS = [
     "create", "start", "stop", "restart", "status", "list",
-    "update", "remove", "configure", "backup", "restore",
+    "update", "remove", "adopt", "configure", "backup", "restore",
 ]
 
-STUB_COMMANDS = ["update", "backup", "restore"]
+STUB_COMMANDS = ["backup", "restore"]
 
 
 def test_top_level_lists_deployment_commands_and_query_group():
@@ -72,7 +74,7 @@ def test_lazy_import_in_subprocess_never_touches_query_stack():
         "import sys\n"
         "from click.testing import CliRunner\n"
         "from job_squire_cli.cli import main\n"
-        "result = CliRunner().invoke(main, ['update'])\n"
+        "result = CliRunner().invoke(main, ['backup'])\n"
         "assert result.exit_code == 1, result.output\n"
         "assert 'rich' not in sys.modules, 'rich should not be imported for a deployment command'\n"
         "assert 'mcp' not in sys.modules, 'mcp should not be imported for a deployment command'\n"
@@ -88,7 +90,7 @@ def test_lazy_import_in_subprocess_never_touches_query_stack():
 
 def test_deployment_stub_accepts_arbitrary_args_and_flags():
     runner = click.testing.CliRunner()
-    result = runner.invoke(main, ["update", "some-instance", "--mode", "local", "--whatever"])
+    result = runner.invoke(main, ["backup", "some-instance", "--mode", "local", "--whatever"])
     assert result.exit_code == 1
     assert "not implemented yet" in result.output
 

@@ -38,7 +38,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from job_squire_cli.ops import lifecycle as lc, paths
+from job_squire_cli.ops import compose, crypto_mirror, lifecycle as lc, paths
 from job_squire_cli.ops import registry as reg
 from job_squire_cli.query import config as query_config_module
 
@@ -74,6 +74,8 @@ class FakeRuntime:
         self.containers: dict[str, dict] = {}
         self.logs: dict[str, str] = {}
         self.fail_projects: set[str] = set()
+        self.fail_pulls: set[str] = set()
+        self.fail_stops: set[str] = set()
         self.calls: list[tuple] = []
 
     def run(self, args, **kwargs):
@@ -83,12 +85,20 @@ class FakeRuntime:
         if args[:2] in (["docker", "info"], ["podman", "info"]):
             return SimpleNamespace(returncode=0, stdout="", stderr="")
 
+        if len(args) == 3 and args[1] == "pull":
+            image = args[2]
+            if image in self.fail_pulls:
+                return SimpleNamespace(returncode=1, stdout="", stderr=f"error pulling {image}")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
         if len(args) >= 2 and args[1] == "compose":
             project = args[args.index("-p") + 1]
             cwd = kwargs.get("cwd")
-            if args[-2:] == ["up", "-d"]:
+            if "up" in args and "-d" in args:
                 self._on_up(project, cwd)
             elif args[-1] == "stop":
+                if project in self.fail_stops:
+                    return SimpleNamespace(returncode=1, stdout="", stderr=f"error stopping {project}")
                 self._on_stop(project)
             elif args[-1] in ("start", "restart"):
                 self._on_up(project, cwd)
@@ -410,3 +420,323 @@ def test_create_import_from_unknown_instance_raises(fake, data_root):
             name="dest", mode="local", data_root=data_root, import_from="nonexistent",
             **create_kwargs(fake),
         )
+
+
+# ── update / rollback (Prompt C7) ────────────────────────────────────────
+
+
+def test_update_pulls_stops_swaps_and_recreates_in_order(fake, data_root):
+    lc.create_instance(name="castelo", mode="local", data_root=data_root, **create_kwargs(fake))
+    root = paths.instance_root("castelo", data_root)
+    assert compose.read_image(root) == compose.DEFAULT_IMAGE
+
+    result = lc.update_instance(
+        "castelo", version="0.7.0", data_root=data_root, run=fake.run, sleep=lambda _s: None,
+    )
+
+    assert result.previous_image == compose.DEFAULT_IMAGE
+    assert result.new_image == "ghcr.io/dellipse/job-squire:0.7.0"
+    assert compose.read_image(root) == "ghcr.io/dellipse/job-squire:0.7.0"
+    assert result.health["Status"] == "running"
+
+    # Order: pull, then stop, then up --force-recreate.
+    kinds = []
+    for call in fake.calls:
+        if call[1] == "pull":
+            kinds.append("pull")
+        elif call[1] == "compose" and call[-1] == "stop":
+            kinds.append("stop")
+        elif call[1] == "compose" and "up" in call and "-d" in call:
+            kinds.append("up")
+    first_pull = kinds.index("pull")
+    first_stop = kinds.index("stop")
+    last_up = len(kinds) - 1 - kinds[::-1].index("up")
+    assert first_pull < first_stop < last_up
+
+
+def test_update_records_previous_image_in_compose_env(fake, data_root):
+    lc.create_instance(name="castelo", mode="local", data_root=data_root, **create_kwargs(fake))
+    root = paths.instance_root("castelo", data_root)
+
+    lc.update_instance("castelo", version="0.7.0", data_root=data_root, run=fake.run, sleep=lambda _s: None)
+    assert compose.read_compose_env_value(root, "PREVIOUS_IMAGE") == compose.DEFAULT_IMAGE
+
+
+def test_update_defaults_to_latest(fake, data_root):
+    lc.create_instance(name="castelo", mode="local", data_root=data_root, **create_kwargs(fake))
+    root = paths.instance_root("castelo", data_root)
+    compose.write_image(root, "ghcr.io/dellipse/job-squire:0.6.0")
+
+    result = lc.update_instance("castelo", data_root=data_root, run=fake.run, sleep=lambda _s: None)
+    assert result.new_image == "ghcr.io/dellipse/job-squire:latest"
+
+
+def test_update_failed_pull_never_touches_the_running_container(fake, data_root):
+    """The core WAL-safety guarantee: if the pull fails, the container is
+    never stopped and the compose file's image line never changes."""
+    lc.create_instance(name="castelo", mode="local", data_root=data_root, **create_kwargs(fake))
+    root = paths.instance_root("castelo", data_root)
+    fake.fail_pulls.add("ghcr.io/dellipse/job-squire:0.7.0")
+
+    with pytest.raises(lc.LifecycleError, match="Failed to pull"):
+        lc.update_instance("castelo", version="0.7.0", data_root=data_root, run=fake.run, sleep=lambda _s: None)
+
+    assert fake.containers["job-squire-castelo"]["Status"] == "running"
+    assert compose.read_image(root) == compose.DEFAULT_IMAGE
+    assert compose.read_compose_env_value(root, "PREVIOUS_IMAGE") is None
+    assert not any(call[1] == "compose" and call[-1] == "stop" for call in fake.calls)
+
+
+def test_update_failed_stop_leaves_image_unswapped(fake, data_root):
+    lc.create_instance(name="castelo", mode="local", data_root=data_root, **create_kwargs(fake))
+    root = paths.instance_root("castelo", data_root)
+    fake.fail_stops.add("job-squire-castelo")
+
+    with pytest.raises(lc.LifecycleError, match="Failed to stop"):
+        lc.update_instance("castelo", version="0.7.0", data_root=data_root, run=fake.run, sleep=lambda _s: None)
+
+    assert compose.read_image(root) == compose.DEFAULT_IMAGE
+    assert compose.read_compose_env_value(root, "PREVIOUS_IMAGE") is None
+
+
+def test_update_surfaces_startup_guard_failure_on_the_new_image(fake, data_root):
+    lc.create_instance(name="castelo", mode="local", data_root=data_root, **create_kwargs(fake))
+    fake.fail_projects.add("job-squire-castelo")
+
+    with pytest.raises(lc.StartupGuardFailure):
+        lc.update_instance("castelo", version="0.7.0", data_root=data_root, run=fake.run, sleep=lambda _s: None)
+
+
+def test_update_unregistered_instance_raises_not_found(fake, data_root):
+    with pytest.raises(lc.InstanceNotFoundError):
+        lc.update_instance("ghost", data_root=data_root, run=fake.run)
+
+
+def test_rollback_returns_to_the_previous_image(fake, data_root):
+    lc.create_instance(name="castelo", mode="local", data_root=data_root, **create_kwargs(fake))
+    root = paths.instance_root("castelo", data_root)
+
+    lc.update_instance("castelo", version="0.7.0", data_root=data_root, run=fake.run, sleep=lambda _s: None)
+    result = lc.rollback_instance("castelo", data_root=data_root, run=fake.run, sleep=lambda _s: None)
+
+    assert result.new_image == compose.DEFAULT_IMAGE
+    assert compose.read_image(root) == compose.DEFAULT_IMAGE
+    # A second rollback swaps forward again -- no data lost either direction.
+    result2 = lc.rollback_instance("castelo", data_root=data_root, run=fake.run, sleep=lambda _s: None)
+    assert result2.new_image == "ghcr.io/dellipse/job-squire:0.7.0"
+
+
+def test_rollback_without_a_prior_update_raises(fake, data_root):
+    lc.create_instance(name="castelo", mode="local", data_root=data_root, **create_kwargs(fake))
+    with pytest.raises(lc.LifecycleError, match="nothing to roll back"):
+        lc.rollback_instance("castelo", data_root=data_root, run=fake.run, sleep=lambda _s: None)
+
+
+# ── adopt (Prompt C7) ────────────────────────────────────────────────────
+
+
+def _write_legacy_install(
+    root: Path, *, instance_name="castelo", app_port=None, mcp_port=None,
+    public_url=None, secret_key="legacy-secret-key-0123456789", extra_lines=(),
+):
+    data_dir = root / "data"
+    data_dir.mkdir(parents=True)
+    lines = [f"SECRET_KEY={secret_key}", f"INSTANCE_NAME={instance_name}"]
+    if app_port is not None:
+        lines.append(f"APP_HOST_PORT={app_port}")
+    if mcp_port is not None:
+        lines.append(f"MCP_HOST_PORT={mcp_port}")
+    if public_url is not None:
+        lines.append(f"PUBLIC_URL={public_url}")
+    lines.append(f"DATA_HOST_DIR={data_dir}")
+    lines.extend(extra_lines)
+    (data_dir / ".env").write_text("\n".join(lines) + "\n")
+    return root
+
+
+def test_adopt_registers_instance_with_derived_slug_and_legacy_cookie_name(fake, tmp_path):
+    install_dir = _write_legacy_install(tmp_path / "install", instance_name="Castelo HQ")
+
+    result = lc.adopt_instance(install_dir, **create_kwargs(fake))
+
+    assert result.instance.name == "castelo-hq"  # sanitize_slug: lowercase, space -> hyphen
+    assert result.cookie_name == "castelo_hq_session"  # app's own derivation: space -> underscore
+    assert reg.get_instance("castelo-hq") is not None
+    assert reg.get_instance("castelo-hq").data_dir == str(install_dir)
+
+
+def test_adopt_never_rewrites_secret_key_and_a_stored_secret_still_decrypts(fake, tmp_path):
+    secret_key = "legacy-secret-key-0123456789"
+    plaintext = "sk-super-secret-provider-key"
+    # Simulate a value the app previously encrypted and stored (in its real
+    # database, not the .env -- but the property under test is just that
+    # SECRET_KEY itself survives adopt untouched, which is what makes any
+    # such stored value still decryptable).
+    encrypted = crypto_mirror.encrypt(secret_key, plaintext)
+
+    install_dir = _write_legacy_install(tmp_path / "install", secret_key=secret_key)
+    lc.adopt_instance(install_dir, **create_kwargs(fake))
+
+    data_env = paths.data_env_path(install_dir).read_text()
+    assert f"SECRET_KEY={secret_key}" in data_env
+    assert crypto_mirror.decrypt(secret_key, encrypted) == plaintext
+
+
+def test_adopt_appends_trust_proxy_and_secure_cookie_only_when_absent(fake, tmp_path):
+    install_dir = _write_legacy_install(tmp_path / "install")
+
+    result = lc.adopt_instance(install_dir, **create_kwargs(fake))
+
+    data_env = paths.data_env_path(install_dir).read_text()
+    assert "TRUST_PROXY=1" in data_env
+    assert "SESSION_COOKIE_SECURE=true" in data_env
+    assert set(result.env_appended) == {"TRUST_PROXY=1", "SESSION_COOKIE_SECURE=true"}
+    assert result.env_backup.exists()
+    assert "SECRET_KEY=legacy-secret-key-0123456789" in result.env_backup.read_text()
+
+
+def test_adopt_does_not_append_when_already_explicitly_set(fake, tmp_path):
+    install_dir = _write_legacy_install(
+        tmp_path / "install", extra_lines=["TRUST_PROXY=0", "SESSION_COOKIE_SECURE=false"],
+    )
+
+    result = lc.adopt_instance(install_dir, **create_kwargs(fake))
+
+    data_env = paths.data_env_path(install_dir).read_text()
+    assert data_env.count("TRUST_PROXY=") == 1  # never duplicated
+    assert "TRUST_PROXY=0" in data_env  # the operator's explicit value survives
+    assert result.env_appended == []
+
+
+def test_adopt_preserves_existing_host_ports(fake, tmp_path):
+    install_dir = _write_legacy_install(tmp_path / "install", app_port=8123, mcp_port=9123)
+
+    result = lc.adopt_instance(install_dir, **create_kwargs(fake))
+
+    assert result.instance.app_port == 8123
+    assert result.instance.mcp_port == 9123
+    compose_env = paths.compose_env_path(install_dir).read_text()
+    assert "APP_HOST_PORT=8123" in compose_env
+    assert "MCP_HOST_PORT=9123" in compose_env
+
+
+def test_adopt_writes_compose_files_without_touching_data_env_contents(fake, tmp_path):
+    install_dir = _write_legacy_install(tmp_path / "install")
+    before = paths.data_env_path(install_dir).read_text()
+
+    lc.adopt_instance(install_dir, **create_kwargs(fake))
+
+    assert paths.compose_path(install_dir).exists()
+    assert paths.compose_env_path(install_dir).exists()
+    after = paths.data_env_path(install_dir).read_text()
+    # Only the two additive lines were appended -- every original line
+    # (in the original order) is still there untouched.
+    for line in before.splitlines():
+        assert line in after
+
+
+def test_adopt_rejects_a_directory_with_no_data_env(fake, tmp_path):
+    empty_dir = tmp_path / "not-an-install"
+    empty_dir.mkdir()
+    with pytest.raises(lc.NotALegacyInstallError):
+        lc.adopt_instance(empty_dir, **create_kwargs(fake))
+
+
+def test_adopt_rejects_a_data_env_with_no_secret_key(fake, tmp_path):
+    install_dir = tmp_path / "install"
+    (install_dir / "data").mkdir(parents=True)
+    (install_dir / "data" / ".env").write_text("INSTANCE_NAME=castelo\n")
+    with pytest.raises(lc.NotALegacyInstallError):
+        lc.adopt_instance(install_dir, **create_kwargs(fake))
+
+
+def test_adopt_rejects_name_collision(fake, data_root, tmp_path):
+    lc.create_instance(name="castelo", mode="local", data_root=data_root, **create_kwargs(fake))
+    install_dir = _write_legacy_install(tmp_path / "install", instance_name="castelo")
+    with pytest.raises(reg.NameCollisionError):
+        lc.adopt_instance(install_dir, **create_kwargs(fake))
+
+
+def test_adopt_rejects_port_collision_with_another_registered_instance(fake, data_root, tmp_path):
+    lc.create_instance(name="one", mode="local", data_root=data_root, **create_kwargs(fake))
+    used_port = reg.get_instance("one").app_port
+    install_dir = _write_legacy_install(tmp_path / "install", instance_name="two", app_port=used_port)
+    with pytest.raises(lc.LifecycleError, match="already used"):
+        lc.adopt_instance(install_dir, **create_kwargs(fake))
+
+
+def test_adopt_rejects_shared_network_topology(fake, tmp_path):
+    install_dir = _write_legacy_install(tmp_path / "install", extra_lines=["SWAG_NETWORK=proxynet"])
+    with pytest.raises(lc.LifecycleError, match="shared-Docker-network"):
+        lc.adopt_instance(install_dir, **create_kwargs(fake))
+
+
+def test_adopt_name_override_does_not_change_the_derived_cookie_name(fake, tmp_path):
+    """--name only affects the registry slug -- the cookie the *app* will
+    actually emit is still governed by the untouched INSTANCE_NAME in
+    data/.env, so the two must be allowed to diverge."""
+    install_dir = _write_legacy_install(tmp_path / "install", instance_name="castelo")
+    result = lc.adopt_instance(install_dir, name="renamed", **create_kwargs(fake))
+    assert result.instance.name == "renamed"
+    assert result.cookie_name == "castelo_session"
+
+
+def test_adopt_with_bring_up_starts_the_single_container_and_reports_health(fake, tmp_path):
+    install_dir = _write_legacy_install(tmp_path / "install")
+    result = lc.adopt_instance(install_dir, bring_up=True, **create_kwargs(fake))
+    assert result.health["Status"] == "running"
+    assert fake.containers["job-squire-castelo"]["Status"] == "running"
+
+
+def test_adopt_with_bring_up_refuses_while_legacy_container_still_running(fake, tmp_path):
+    install_dir = _write_legacy_install(tmp_path / "install", instance_name="castelo")
+    # Simulate the old three-container stack's `container_name: castelo`
+    # still up (docker-compose.yml).
+    fake.containers["castelo"] = {"Status": "running"}
+
+    with pytest.raises(lc.LifecycleError, match="still running"):
+        lc.adopt_instance(install_dir, bring_up=True, **create_kwargs(fake))
+
+    # Registration still happened -- only the bring-up step refused.
+    assert reg.get_instance("castelo") is not None
+    assert "job-squire-castelo" not in fake.containers
+
+
+def test_adopt_without_bring_up_does_not_start_anything(fake, tmp_path):
+    install_dir = _write_legacy_install(tmp_path / "install")
+    result = lc.adopt_instance(install_dir, bring_up=False, **create_kwargs(fake))
+    assert result.health is None
+    assert "job-squire-castelo" not in fake.containers
+
+
+def test_lifecycle_commands_find_an_adopted_instance_by_its_registered_data_dir(fake, tmp_path, monkeypatch):
+    """Regression test: start/stop/update/remove must resolve an existing
+    instance's directory from the registry's own `data_dir`, not by
+    re-deriving `<default_data_root>/<name>` from the name -- those two
+    only coincide for a `create`-made instance. `adopt_instance` registers
+    a directory that lives wherever the operator's install already was
+    (here, well outside the default data root), so calling `update`/
+    `start`/`stop` with *no* `data_root` override -- exactly how the real
+    CLI invokes them -- must still find the right place.
+    """
+    # Redirect the default data root somewhere that must NOT be touched by
+    # this test, so a wrong resolution back to instance_root(name) would
+    # write/read there instead of failing loudly.
+    monkeypatch.setenv("JOB_SQUIRE_HOME", str(tmp_path / "unrelated-default-root"))
+
+    install_dir = _write_legacy_install(tmp_path / "somewhere" / "else" / "castelo-data")
+    lc.adopt_instance(install_dir, bring_up=True, **create_kwargs(fake))
+
+    wrong_root = tmp_path / "unrelated-default-root" / "castelo"
+    assert not wrong_root.exists()
+
+    result = lc.update_instance(
+        "castelo", version="0.7.0", run=fake.run, sleep=lambda _s: None,
+    )
+    assert result.new_image == "ghcr.io/dellipse/job-squire:0.7.0"
+    assert compose.read_image(install_dir) == "ghcr.io/dellipse/job-squire:0.7.0"
+    assert not wrong_root.exists()  # never touched the wrong location
+
+    lc.stop_instance("castelo", run=fake.run)
+    state = lc.start_instance("castelo", run=fake.run, sleep=lambda _s: None)
+    assert state["Status"] == "running"

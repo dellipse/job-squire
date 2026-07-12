@@ -113,3 +113,124 @@ def test_create_surfaces_guard_failure_lines_on_stderr(runner, monkeypatch, tmp_
     assert result.exit_code == 1
     assert "FATAL: PUBLIC_URL" in result.output
     assert "Traceback" not in result.output
+
+
+# ── update / rollback (Prompt C7) ────────────────────────────────────────
+
+
+def test_update_unregistered_instance_fails_cleanly(runner):
+    result = runner.invoke(main, ["update", "ghost"])
+    assert result.exit_code == 1
+    assert "No instance named 'ghost'" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_update_reports_the_image_move(runner, monkeypatch):
+    captured = {}
+
+    def fake_update_instance(name, *, version):
+        captured["name"] = name
+        captured["version"] = version
+        return lc.UpdateResult(
+            instance=None, previous_image="ghcr.io/dellipse/job-squire:latest",
+            new_image="ghcr.io/dellipse/job-squire:0.7.0", health={"Status": "running"},
+        )
+
+    monkeypatch.setattr(lc, "update_instance", fake_update_instance)
+    result = runner.invoke(main, ["update", "castelo", "--version", "0.7.0"])
+    assert result.exit_code == 0
+    assert captured == {"name": "castelo", "version": "0.7.0"}
+    assert "latest -> " in result.output and "0.7.0" in result.output
+
+
+def test_update_defaults_version_to_latest(runner, monkeypatch):
+    captured = {}
+
+    def fake_update_instance(name, *, version):
+        captured["version"] = version
+        return lc.UpdateResult(instance=None, previous_image="a", new_image="b", health=None)
+
+    monkeypatch.setattr(lc, "update_instance", fake_update_instance)
+    result = runner.invoke(main, ["update", "castelo"])
+    assert result.exit_code == 0
+    assert captured["version"] == "latest"
+
+
+def test_update_rollback_flag_calls_rollback_not_update(runner, monkeypatch):
+    calls = []
+    monkeypatch.setattr(lc, "update_instance", lambda *a, **k: calls.append(("update", a, k)))
+    monkeypatch.setattr(
+        lc, "rollback_instance",
+        lambda name: lc.UpdateResult(instance=None, previous_image="new", new_image="old", health=None),
+    )
+    result = runner.invoke(main, ["update", "castelo", "--rollback"])
+    assert result.exit_code == 0
+    assert calls == []  # update_instance never called
+    assert "rolled back" in result.output
+
+
+def test_update_rejects_version_and_rollback_together(runner):
+    result = runner.invoke(main, ["update", "castelo", "--version", "0.7.0", "--rollback"])
+    assert result.exit_code == 1
+    assert "not both" in result.output
+
+
+def test_update_surfaces_lifecycle_error_cleanly(runner, monkeypatch):
+    def fake_update_instance(name, *, version):
+        raise lc.LifecycleError("Failed to pull 'ghcr.io/dellipse/job-squire:bogus': not found")
+
+    monkeypatch.setattr(lc, "update_instance", fake_update_instance)
+    result = runner.invoke(main, ["update", "castelo", "--version", "bogus"])
+    assert result.exit_code == 1
+    assert "Failed to pull" in result.output
+    assert "Traceback" not in result.output
+
+
+# ── adopt (Prompt C7) ────────────────────────────────────────────────────
+
+
+def test_adopt_missing_install_dir_fails_cleanly(runner, tmp_path):
+    result = runner.invoke(main, ["adopt", str(tmp_path / "does-not-exist")])
+    assert result.exit_code != 0
+    assert "Traceback" not in result.output
+
+
+def test_adopt_reports_success_and_env_changes(runner, monkeypatch, tmp_path):
+    captured = {}
+
+    def fake_adopt_instance(install_dir, *, name, image, bring_up, confirm):
+        captured.update(install_dir=install_dir, name=name, bring_up=bring_up)
+        inst = reg.Instance(
+            name="castelo", mode="local", runtime="docker", data_dir=str(install_dir),
+            app_port=8080, mcp_port=9000, cookie_name="castelo_session",
+            public_url="http://localhost:8080", created="2026-07-11",
+        )
+        return lc.AdoptResult(
+            instance=inst, cookie_name="castelo_session",
+            env_appended=["TRUST_PROXY=1"], env_backup=tmp_path / "install" / "data" / ".env.bak.x",
+            health=None,
+        )
+
+    monkeypatch.setattr(lc, "adopt_instance", fake_adopt_instance)
+    install_dir = tmp_path / "install"
+    install_dir.mkdir()
+    result = runner.invoke(main, ["adopt", str(install_dir), "--no-up"])
+    assert result.exit_code == 0
+    assert captured["bring_up"] is False
+    assert "adopted from" in result.output
+    assert "castelo_session" in result.output
+    assert "TRUST_PROXY=1" in result.output
+    assert "Not brought up yet" in result.output
+
+
+def test_adopt_surfaces_not_a_legacy_install_error_cleanly(runner, monkeypatch, tmp_path):
+    def fake_adopt_instance(install_dir, *, name, image, bring_up, confirm):
+        raise lc.NotALegacyInstallError(f"No data/.env found at {install_dir}/data/.env")
+
+    monkeypatch.setattr(lc, "adopt_instance", fake_adopt_instance)
+    install_dir = tmp_path / "install"
+    install_dir.mkdir()
+    result = runner.invoke(main, ["adopt", str(install_dir), "--no-up"])
+    assert result.exit_code == 1
+    assert "No data/.env found" in result.output
+    assert "Traceback" not in result.output

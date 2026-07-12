@@ -15,21 +15,26 @@
 Prompt C1 settled the full grammar and shipped every command as a
 structural stub. Prompt C5 made `create`, `start`, `stop`, `restart`,
 `status`, `list`, and `remove` real, wired to ops/lifecycle.py. Prompt C6
-(this file, as of `configure` below) makes MCP authentication real too:
-`update`, `backup`, and `restore` stay stubs until C7-C8. Every real
-command here is a thin click adapter: it does the interactive prompting
-and prints results, and delegates every actual decision to ops/lifecycle.py
-(or, for `configure`, ops/mcp_token.py and query/config.py), which take no
-click objects and are directly unit-testable on their own.
+made MCP authentication real too (`configure`). Prompt C7 (this file, as
+of `update` and `adopt` below) makes version movement and adopting an
+existing install real; `backup` and `restore` stay stubs until C8. `adopt`
+is a new verb not in C1's original grammar table (docs/job-squire-cli.md)
+-- C1 deliberately deferred it, along with update/rollback's exact shape,
+to this dedicated prompt; see that doc's updated table. Every real command
+here is a thin click adapter: it does the interactive prompting and prints
+results, and delegates every actual decision to ops/lifecycle.py (or, for
+`configure`, ops/mcp_token.py and query/config.py), which take no click
+objects and are directly unit-testable on their own.
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import NoReturn
 from urllib.parse import urlparse
 
 import click
 
-from . import lifecycle, mcp_token, paths, secrets_copy
+from . import lifecycle, mcp_token, secrets_copy
 from .compose import DEFAULT_IMAGE
 from .registry import (
     Instance,
@@ -43,7 +48,6 @@ from .registry import (
 from ..query import config as query_config
 
 _STUB_SPECS = [
-    ("update", "Update an instance to a new image version, with rollback.", "C7"),
     ("backup", "Create a passphrase-encrypted backup archive.", "C8"),
     ("restore", "Restore an instance from a backup archive.", "C8"),
 ]
@@ -215,6 +219,32 @@ def restart(name):
     click.echo(f"Instance {name!r} restarted.")
 
 
+# ── update / rollback (Prompt C7) ────────────────────────────────────────
+
+
+@click.command(help="Update an instance to a new image version, or roll back to its previous one.")
+@click.argument("name")
+@click.option("--version", default=None,
+              help="Image tag to move to (default: latest). Accepts a bare tag or a full image ref.")
+@click.option("--rollback", "do_rollback", is_flag=True, default=False,
+              help="Move back to the image this instance was running before its last update, "
+                   "instead of moving forward. Cannot be combined with --version.")
+def update(name, version, do_rollback):
+    if do_rollback and version is not None:
+        _fail("Choose either --version or --rollback, not both.")
+    try:
+        if do_rollback:
+            result = lifecycle.rollback_instance(name)
+        else:
+            result = lifecycle.update_instance(name, version=version or "latest")
+    except lifecycle.LifecycleError as exc:
+        _handle_lifecycle_error(exc)
+    verb = "rolled back" if do_rollback else "updated"
+    click.echo(f"Instance {name!r} {verb}: {result.previous_image} -> {result.new_image}")
+    if result.health is not None:
+        click.echo(f"  Health: {result.health.get('Health', {}).get('Status') or result.health.get('Status')}")
+
+
 # ── status / list ─────────────────────────────────────────────────────────
 
 
@@ -266,6 +296,51 @@ def remove(name, keep_data, assume_yes):
     click.echo(f"Data directory {'kept' if result.data_kept else 'deleted'}: {result.data_dir}")
 
 
+# ── adopt (Prompt C7) ────────────────────────────────────────────────────
+
+
+@click.command(help="Register an existing (three-container) install as a single-container instance.")
+@click.argument("install_dir", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--name", default=None,
+              help="Registry name to use (default: derived from the install's own INSTANCE_NAME).")
+@click.option("--image", default=DEFAULT_IMAGE, show_default=True)
+@click.option("--up/--no-up", "bring_up", default=None,
+              help="Bring the instance up on the single-container image immediately after adopting. "
+                   "Without this flag, prompts interactively (skipped entirely with --yes, which "
+                   "then defaults to not bringing it up).")
+@click.option("--yes", "assume_yes", is_flag=True, default=False,
+              help="Don't ask before installing a container runtime or bringing the instance up.")
+def adopt(install_dir, name, image, bring_up, assume_yes):
+    if bring_up is None:
+        bring_up = False if assume_yes else click.confirm(
+            "Bring the instance up on the single-container image now and verify health?", default=True,
+        )
+
+    confirm = (lambda _msg: True) if assume_yes else click.confirm
+
+    try:
+        result = lifecycle.adopt_instance(install_dir, name=name, image=image, bring_up=bring_up, confirm=confirm)
+    except (NameCollisionError, InvalidNameError, RegistryError) as exc:
+        _fail(str(exc))
+    except lifecycle.LifecycleError as exc:
+        _handle_lifecycle_error(exc)
+
+    inst = result.instance
+    click.echo(f"Instance {inst.name!r} adopted from {install_dir} ({inst.mode} mode, runtime={inst.runtime}).")
+    click.echo(f"  Cookie name: {result.cookie_name}")
+    click.echo(f"  data/.env backed up to: {result.env_backup}")
+    if result.env_appended:
+        click.echo(f"  Appended to data/.env: {', '.join(result.env_appended)}")
+    else:
+        click.echo("  No changes needed -- data/.env already set TRUST_PROXY and SESSION_COOKIE_SECURE explicitly.")
+    if result.health is not None:
+        click.echo(f"  Health: {result.health.get('Health', {}).get('Status') or result.health.get('Status')}")
+    elif bring_up:
+        click.echo("  Instance registered but did not come up cleanly -- see the error above.")
+    else:
+        click.echo(f"  Not brought up yet. Run `job-squire start {inst.name}` when you're ready.")
+
+
 # ── configure (MCP authentication + query-group token-config plumbing) ────
 # Prompt C6: docs/PLAN-deployment-modes.md Section 5 ("MCP authentication").
 # OAuth 2.0/PKCE stays the default, untouched MCP flow in every mode --
@@ -301,7 +376,11 @@ def _existing_or_derived_endpoint(instance: Instance) -> str:
 
 
 def _print_mcp_config(instance: Instance) -> None:
-    root = paths.instance_root(instance.name)
+    # Path(instance.data_dir), not paths.instance_root(instance.name):
+    # for an adopted instance (Prompt C7) those two disagree -- adopt
+    # registers whatever directory the operator's existing install already
+    # lived in, not the default per-user data root.
+    root = Path(instance.data_dir)
     click.echo(f"Instance: {instance.name}  (mode={instance.mode})")
     try:
         state = mcp_token.read_state(root)
@@ -366,7 +445,11 @@ def configure(name, mcp_token_action, ttl_hours, allow_network, manual_token, ma
         _print_mcp_config(instance)
         return
 
-    root = paths.instance_root(instance.name)
+    # Path(instance.data_dir), not paths.instance_root(instance.name):
+    # for an adopted instance (Prompt C7) those two disagree -- adopt
+    # registers whatever directory the operator's existing install already
+    # lived in, not the default per-user data root.
+    root = Path(instance.data_dir)
 
     if allow_network is not None and mcp_token_action is None:
         try:
@@ -456,7 +539,9 @@ def configure(name, mcp_token_action, ttl_hours, allow_network, manual_token, ma
 
 def register_ops_commands(group: click.Group) -> None:
     """Attach the flat deployment/lifecycle verbs directly onto `group`."""
-    for command in (create, start, stop, restart, status, list_instances_cmd, remove, configure):
+    for command in (
+        create, start, stop, restart, update, status, list_instances_cmd, remove, adopt, configure,
+    ):
         group.add_command(command)
     for name, summary, prompt in _STUB_SPECS:
         group.add_command(_make_stub_command(name, summary, prompt))

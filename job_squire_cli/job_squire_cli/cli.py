@@ -15,7 +15,7 @@
 Command grammar (settled in docs/job-squire-cli.md):
 
   job-squire create|start|stop|restart|status|list|update|remove|
-             configure|backup|restore          -- deployment/lifecycle group,
+             adopt|configure|backup|restore    -- deployment/lifecycle group,
                                                    flat at the top level.
   job-squire query health|list|pipeline|contacts|job|contact|followups
                                                 -- query group, namespaced so

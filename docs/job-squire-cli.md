@@ -15,15 +15,16 @@ job_squire_cli/
   pyproject.toml
   job_squire_cli/
     cli.py            # top-level click group; wires ops + lazy query group
-    ops/commands.py    # deployment/lifecycle click commands (C5); C6-C8 stubs remain
+    ops/commands.py    # deployment/lifecycle click commands (C5-C7); backup/restore stubs remain (C8)
     ops/runtime.py     # container runtime detection and per-OS install (Prompt C3)
     ops/registry.py    # cross-platform instance registry (Prompt C4)
     ops/paths.py       # per-instance directory layout (Prompt C5)
     ops/ports.py       # local-mode port pair allocation (Prompt C5)
-    ops/compose.py     # compose/env rendering + runtime-driven compose invocations (C5)
+    ops/compose.py     # compose/env rendering + runtime-driven compose invocations (C5/C7)
+    ops/dotenv.py      # line-preserving .env read/append/set helpers (Prompt C7)
     ops/crypto_mirror.py  # HKDF-SHA256 -> Fernet derivation mirrored from app/crypto.py (C5/C6)
     ops/secrets_copy.py  # Fernet-aware settings import between instances (Prompt C5)
-    ops/lifecycle.py   # create/start/stop/restart/status/list/remove orchestration (C5)
+    ops/lifecycle.py   # create/start/stop/restart/status/list/remove/update/adopt orchestration (C5/C7)
     ops/mcp_token.py   # jsq_mcp_ static token generate/rotate/revoke (Prompt C6)
     query/
       commands.py      # health, list, pipeline, contacts, job, contact, followups
@@ -51,13 +52,54 @@ own subcommand:
 
 | Group | Invocation | Commands |
 |---|---|---|
-| Deployment/lifecycle | `job-squire <cmd>` (flat, top level) | `create`, `start`, `stop`, `restart`, `status`, `list`, `update`, `remove`, `configure`, `backup`, `restore` |
+| Deployment/lifecycle | `job-squire <cmd>` (flat, top level) | `create`, `start`, `stop`, `restart`, `status`, `list`, `update`, `remove`, `adopt`, `configure`, `backup`, `restore` |
 | Query | `job-squire query <cmd>` | `health`, `list`, `pipeline`, `contacts`, `job`, `contact`, `followups` |
 
 The deployment group is new in this fold-in; its commands are structural
 placeholders as of Prompt C1 (grammar and `--help` text are real, behavior
 is not) and land incrementally in Prompts C2-C11 of
-`docs/PROMPTS-deployment-cli.md`.
+`docs/PROMPTS-deployment-cli.md`. `adopt` wasn't part of C1's original
+table -- C1 deliberately deferred its exact shape (along with `update`'s
+rollback design) to Prompt C7, the dedicated session for version movement
+and adopting existing data (PLAN Section 8).
+
+### Update and rollback (Prompt C7)
+
+```
+job-squire update NAME                    # move to the latest published image
+job-squire update NAME --version 0.7.0    # move to a pinned tag (or a full image ref)
+job-squire update NAME --rollback         # move back to the image running before the last update
+```
+
+The new image is pulled *before* the running container is touched -- a
+failed pull changes nothing. Only then is the container stopped
+(`compose stop`, a graceful SIGTERM that s6 forwards so the app
+checkpoints its SQLite WAL before exiting), the image swapped, and the
+container recreated. The image the instance was running is recorded in
+its compose-level `.env` (`PREVIOUS_IMAGE`) before the swap, which is what
+`--rollback` reads; each rollback swaps current and previous again, so
+rolling back twice returns to where you started.
+
+### Adopting an existing install (Prompt C7)
+
+```
+job-squire adopt /path/to/existing/install [--name NAME] [--up]
+```
+
+Wraps `scripts/adopt-single-container.sh`'s exact logic (`docs/
+adopt-single-container.md`) as a first-class command: given an existing
+three-container install's directory (it already has `data/.env` right
+where the CLI's own per-instance layout expects it), derive the instance
+name and cookie name from the current `INSTANCE_NAME`, back up and
+additively patch `data/.env` (only `TRUST_PROXY=1` and
+`SESSION_COOKIE_SECURE=true` if not already set -- never `SECRET_KEY` or
+anything else), write `docker-compose.single.yml` and a compose-level
+`.env` alongside it, and register it. `--up` (or the interactive prompt)
+then offers to bring it up on the single-container image and verify
+health, refusing if the old three-container stack still looks like it's
+running so nothing writes to the database while the image switches.
+Scoped to the documented standalone/host-port topology; a shared-Docker-
+network (SWAG) install isn't adopted automatically today.
 
 The query group is the old `jobsquire-cli` project's command set, moved
 over with its observable behavior unchanged, with two grammar changes

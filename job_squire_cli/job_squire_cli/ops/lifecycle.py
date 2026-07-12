@@ -30,10 +30,11 @@ import shutil
 import subprocess
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
-from . import compose, ports, runtime as runtime_mod, secrets_copy
+from . import compose, dotenv, paths, ports, runtime as runtime_mod, secrets_copy
 from .paths import instance_root
 from .registry import (
     Drift,
@@ -92,6 +93,12 @@ def generate_secret_key() -> str:
 
 def generate_password(length: int = 20) -> str:
     return secrets.token_urlsafe(length)
+
+
+def _utc_stamp() -> str:
+    """`YYYYMMDDTHHMMSSZ`, matching scripts/adopt-single-container.sh's own
+    `data/.env.bak.<timestamp>` naming."""
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
 # ── Waiting for the container to report healthy ─────────────────────────
@@ -233,7 +240,7 @@ def create_instance(
 
     extra_env: dict[str, str] = {}
     if source is not None:
-        extra_env = secrets_copy.read_schedule_env(instance_root(source.name, data_root))
+        extra_env = secrets_copy.read_schedule_env(_instance_root(source, data_root))
 
     env = compose.InstanceEnv(
         secret_key=secret_key,
@@ -290,8 +297,8 @@ def _import_settings(
     Stopping first is what keeps this from racing the app's own writes to
     the same file -- the same WAL-safety concern the plan's backup design
     calls out for touching a live instance's database directly."""
-    dest_root = instance_root(dest.name, data_root)
-    source_root = instance_root(source.name, data_root)
+    dest_root = _instance_root(dest, data_root)
+    source_root = _instance_root(source, data_root)
 
     compose.compose_stop(runtime, dest_root, container_name, run=run)
     try:
@@ -318,10 +325,28 @@ def _require_instance(name: str) -> Instance:
     return instance
 
 
+def _instance_root(instance: Instance, data_root: Path | None) -> Path:
+    """Resolve an *already-registered* instance's own directory.
+
+    An explicit `data_root` still wins (matching every lifecycle
+    function's own `data_root` parameter -- mainly how tests redirect
+    where instances live). Otherwise this is the registry's own recorded
+    `data_dir`, not re-derived from `instance_root(name)`: for a
+    `create`-made instance the two always agree (create registers exactly
+    the root it just wrote), but `adopt_instance` (Prompt C7) registers an
+    instance whose directory is wherever the operator's existing install
+    already lived, which is not necessarily under the default per-user
+    data root at all.
+    """
+    if data_root is not None:
+        return instance_root(instance.name, data_root)
+    return Path(instance.data_dir)
+
+
 def start_instance(name: str, *, data_root: Path | None = None, run: Runner = subprocess.run,
                     sleep: Sleep = time.sleep) -> dict | None:
     instance = _require_instance(name)
-    root = instance_root(instance.name, data_root)
+    root = _instance_root(instance, data_root)
     container_name = derive_compose_project(instance.name)
     result = compose.compose_start(instance.runtime, root, container_name, run=run)
     if result.returncode != 0:
@@ -334,7 +359,7 @@ def start_instance(name: str, *, data_root: Path | None = None, run: Runner = su
 
 def stop_instance(name: str, *, data_root: Path | None = None, run: Runner = subprocess.run) -> None:
     instance = _require_instance(name)
-    root = instance_root(instance.name, data_root)
+    root = _instance_root(instance, data_root)
     container_name = derive_compose_project(instance.name)
     result = compose.compose_stop(instance.runtime, root, container_name, run=run)
     if result.returncode != 0:
@@ -344,7 +369,7 @@ def stop_instance(name: str, *, data_root: Path | None = None, run: Runner = sub
 def restart_instance(name: str, *, data_root: Path | None = None, run: Runner = subprocess.run,
                       sleep: Sleep = time.sleep) -> dict | None:
     instance = _require_instance(name)
-    root = instance_root(instance.name, data_root)
+    root = _instance_root(instance, data_root)
     container_name = derive_compose_project(instance.name)
     result = compose.compose_restart(instance.runtime, root, container_name, run=run)
     if result.returncode != 0:
@@ -353,6 +378,91 @@ def restart_instance(name: str, *, data_root: Path | None = None, run: Runner = 
     if state is not None and state.get("Status") == "exited":
         _raise_for_failed_state(instance.runtime, container_name, state, run=run)
     return state
+
+
+# ── update / rollback (Prompt C7) ────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class UpdateResult:
+    instance: Instance
+    previous_image: str
+    new_image: str
+    health: dict | None
+
+
+def update_instance(
+    name: str, *, version: str = "latest", image_repo: str | None = None,
+    data_root: Path | None = None, run: Runner = subprocess.run, sleep: Sleep = time.sleep,
+) -> UpdateResult:
+    """Move `name` to `version` (default `latest`; also accepts a pinned
+    tag or a full image ref) and recreate its container.
+
+    Order matters for the "never kills the container mid-write" guarantee
+    (PLAN Section 7 "Update"): the new image is pulled *first*, with the
+    old container still running and untouched -- if the pull fails,
+    nothing about the instance has changed. Only once the pull succeeds is
+    the container stopped, which is the same `compose stop` (graceful
+    SIGTERM, forwarded through s6 to the app so it checkpoints its SQLite
+    WAL before exiting) every other lifecycle command already uses for a
+    running instance. The image swap only happens after that stop
+    succeeds, and the previous image is recorded before the swap so
+    `rollback_instance` can undo it.
+    """
+    instance = _require_instance(name)
+    root = _instance_root(instance, data_root)
+    container_name = derive_compose_project(instance.name)
+
+    current_image = compose.read_image(root)
+    new_image = compose.resolve_image(version, repo=image_repo)
+
+    pull_result = compose.pull_image(instance.runtime, new_image, run=run)
+    if pull_result.returncode != 0:
+        raise LifecycleError(
+            f"Failed to pull {new_image!r}: {(pull_result.stderr or pull_result.stdout).strip()}"
+        )
+
+    stop_result = compose.compose_stop(instance.runtime, root, container_name, run=run)
+    if stop_result.returncode != 0:
+        raise LifecycleError(
+            f"Failed to stop {instance.name!r} before updating -- left running on {current_image!r}: "
+            f"{(stop_result.stderr or stop_result.stdout).strip()}"
+        )
+
+    compose.set_compose_env_value(root, "PREVIOUS_IMAGE", current_image)
+    compose.write_image(root, new_image)
+
+    up_result = compose.compose_up(
+        instance.runtime, root, container_name, run=run, extra_args=["--force-recreate"],
+    )
+    if up_result.returncode != 0:
+        _raise_for_failed_state(instance.runtime, container_name, None, run=run)
+
+    health = wait_for_state(instance.runtime, container_name, run=run, sleep=sleep)
+    if health is not None and health.get("Status") == "exited":
+        _raise_for_failed_state(instance.runtime, container_name, health, run=run)
+
+    return UpdateResult(instance=instance, previous_image=current_image, new_image=new_image, health=health)
+
+
+def rollback_instance(
+    name: str, *, data_root: Path | None = None, run: Runner = subprocess.run, sleep: Sleep = time.sleep,
+) -> UpdateResult:
+    """Move `name` back to the image it was running before its last
+    `update_instance` call, recorded as `PREVIOUS_IMAGE` in the instance's
+    compose-level `.env`. Each rollback swaps current and previous again,
+    so rolling back twice in a row returns to where it started.
+    """
+    instance = _require_instance(name)
+    root = _instance_root(instance, data_root)
+    previous = compose.read_compose_env_value(root, "PREVIOUS_IMAGE")
+    if not previous:
+        raise LifecycleError(
+            f"No previous image recorded for {instance.name!r} -- nothing to roll back to yet "
+            f"(an instance only gets one after its first `job-squire update`). Use "
+            f"`job-squire update {instance.name} --version <tag>` to move to a specific version instead."
+        )
+    return update_instance(instance.name, version=previous, data_root=data_root, run=run, sleep=sleep)
 
 
 # ── remove ────────────────────────────────────────────────────────────────
@@ -378,7 +488,7 @@ def remove_instance(
     here than convenience.
     """
     instance = _require_instance(name)
-    root = instance_root(instance.name, data_root)
+    root = _instance_root(instance, data_root)
     container_name = derive_compose_project(instance.name)
 
     compose.compose_down(instance.runtime, root, container_name, run=run)
@@ -394,6 +504,196 @@ def remove_instance(
         shutil.rmtree(root, ignore_errors=True)
 
     return RemoveResult(name=instance.name, data_dir=root, data_kept=keep_data)
+
+
+# ── adopt (Prompt C7) ────────────────────────────────────────────────────
+# Wraps scripts/adopt-single-container.sh's exact logic (docs/
+# adopt-single-container.md) as a first-class command: turn an existing
+# three-container install's data directory into a registered,
+# single-container CLI instance, in place, additively. See PLAN Section 8
+# "Adopting existing data".
+
+
+class NotALegacyInstallError(LifecycleError):
+    """Raised when `install_dir` doesn't look like an existing Job Squire
+    install (no `data/.env`, or no `SECRET_KEY` in it)."""
+
+
+# The exact two lines scripts/adopt-single-container.sh appends, and why:
+# the pre-single-container app always trusted the reverse proxy's
+# X-Forwarded-* headers unconditionally (no DEPLOY_MODE/TRUST_PROXY
+# existed to turn it off), and defaulted SESSION_COOKIE_SECURE to true
+# when unset. Both replicate old behavior exactly; neither is set if the
+# instance's data/.env already has that key.
+_LEGACY_ADDITIVE_ENV = (
+    (
+        "TRUST_PROXY", "1",
+        "# Added by job-squire adopt: the pre-single-container app always trusted\n"
+        "# the reverse proxy's X-Forwarded-* headers unconditionally. TRUST_PROXY=1\n"
+        "# replicates that exactly, regardless of DEPLOY_MODE. Safe to change to 0\n"
+        "# if this instance has never actually sat behind a reverse proxy.",
+    ),
+    (
+        "SESSION_COOKIE_SECURE", "true",
+        "# Added by job-squire adopt: the pre-single-container app defaulted\n"
+        "# SESSION_COOKIE_SECURE to true when unset. This line preserves that.",
+    ),
+)
+
+
+def legacy_cookie_name(instance_name: str) -> str:
+    """Exactly mirrors app/__init__.py's own SESSION_COOKIE_NAME default
+    derivation from INSTANCE_NAME (lowercase; both `-` and ` ` -> `_`; "jt"
+    if that leaves nothing). adopt_instance never writes SESSION_COOKIE_NAME
+    itself (data/.env is left otherwise untouched), so this is what the
+    running app will actually derive -- registry.derive_cookie_name is the
+    wrong function here, since it keeps hyphens for a freshly-chosen CLI
+    slug rather than reproducing the app's existing legacy formula.
+    """
+    slug = instance_name.strip().lower().replace("-", "_").replace(" ", "_") or "jt"
+    return f"{slug}_session"
+
+
+@dataclass(frozen=True)
+class AdoptResult:
+    instance: Instance
+    cookie_name: str
+    env_appended: list[str]
+    env_backup: Path
+    health: dict | None = None
+
+
+def _legacy_container_running(runtime: str, raw_instance_name: str, *, run: Runner) -> bool:
+    state = compose.inspect_state(runtime, raw_instance_name, run=run)
+    return state is not None and state.get("Status") == "running"
+
+
+def adopt_instance(
+    install_dir: Path,
+    *,
+    name: str | None = None,
+    image: str = compose.DEFAULT_IMAGE,
+    bring_up: bool = False,
+    run: Runner = subprocess.run,
+    which: Which = shutil.which,
+    sleep: Sleep = time.sleep,
+    confirm: Confirm = lambda _msg: True,
+    prefer_orbstack: bool = False,
+    prefer_docker_desktop: bool = False,
+) -> AdoptResult:
+    """Turn an existing three-container install at `install_dir` into a
+    registered, single-container instance, in place.
+
+    `install_dir` already has `data/.env` exactly where ops/paths.py
+    expects it (`<root>/data/.env`), so nothing is moved: `install_dir`
+    becomes the instance's own root, and only docker-compose.single.yml
+    and a compose-level `.env` are added alongside the existing `data/`.
+    `data/.env` itself is never rewritten -- only the two lines in
+    `_LEGACY_ADDITIVE_ENV` are appended if not already present, after a
+    timestamped backup, exactly like scripts/adopt-single-container.sh.
+    `SECRET_KEY` (and everything else already in the file) is never
+    touched, so every stored secret still decrypts.
+
+    Scoped to the documented standalone/host-port topology (loopback
+    APP_HOST_PORT/MCP_HOST_PORT, docs/adopt-single-container.md) -- an
+    install running behind a shared Docker network (`SWAG_NETWORK` set,
+    no published host ports) isn't something this command can adopt
+    without changing its exposure, so it refuses rather than guess.
+    """
+    install_dir = Path(install_dir)
+    data_env_path = paths.data_env_path(install_dir)
+    if not data_env_path.exists():
+        raise NotALegacyInstallError(
+            f"No data/.env found at {data_env_path} -- doesn't look like an existing Job Squire install."
+        )
+
+    existing_env = dotenv.parse(data_env_path)
+    if "SECRET_KEY" not in existing_env:
+        raise NotALegacyInstallError(
+            f"{data_env_path} has no SECRET_KEY -- doesn't look like an existing Job Squire install."
+        )
+    if "SWAG_NETWORK" in existing_env:
+        raise LifecycleError(
+            f"{install_dir} looks like a shared-Docker-network install (SWAG_NETWORK is set in data/.env). "
+            f"`job-squire adopt` only supports the standalone/host-port topology today -- see "
+            f"docs/adopt-single-container.md for the manual runbook."
+        )
+
+    raw_instance_name = existing_env.get("INSTANCE_NAME", "jt").strip() or "jt"
+    slug = sanitize_slug(name or raw_instance_name)
+    if get_instance(slug) is not None:
+        raise NameCollisionError(f"An instance named {slug!r} is already registered.")
+
+    registered = list_instances()
+    existing_ports = {i.app_port for i in registered} | {i.mcp_port for i in registered}
+    app_port = int(existing_env.get("APP_HOST_PORT") or ports.DEFAULT_APP_PORT)
+    mcp_port = int(existing_env.get("MCP_HOST_PORT") or ports.DEFAULT_MCP_PORT)
+    if app_port in existing_ports or mcp_port in existing_ports:
+        raise LifecycleError(
+            f"Port {app_port if app_port in existing_ports else mcp_port} is already used by another "
+            f"registered instance. Stop/remove that instance first, or set a different "
+            f"APP_HOST_PORT/MCP_HOST_PORT in {data_env_path} before adopting."
+        )
+
+    cookie_name = legacy_cookie_name(raw_instance_name)
+    container_name = derive_compose_project(slug)
+    public_url = existing_env.get("PUBLIC_URL") or f"http://localhost:{app_port}"
+    mode = "network" if public_url.startswith("https://") else "local"
+
+    chosen_runtime = runtime_mod.ensure_runtime(
+        confirm=confirm, prefer_orbstack=prefer_orbstack,
+        prefer_docker_desktop=prefer_docker_desktop, run=run, which=which,
+    )
+
+    # Back up data/.env before touching it, same as scripts/
+    # adopt-single-container.sh -- then append only what's missing.
+    backup_path = data_env_path.with_name(f"{data_env_path.name}.bak.{_utc_stamp()}")
+    shutil.copy2(data_env_path, backup_path)
+    appended = []
+    for key, value, comment in _LEGACY_ADDITIVE_ENV:
+        if dotenv.append_if_absent(data_env_path, key, value, comment=comment):
+            appended.append(f"{key}={value}")
+
+    puid = int(existing_env.get("PUID") or 1000)
+    pgid = int(existing_env.get("PGID") or 1000)
+    umask = existing_env.get("UMASK") or "022"
+    data_host_dir = existing_env.get("DATA_HOST_DIR") or str(paths.data_dir(install_dir))
+
+    # Loopback-only, matching docker-compose.yml's own hardcoded
+    # "127.0.0.1:${APP_HOST_PORT}" binding for this topology exactly --
+    # not derived from `mode`, which here is only an informational label
+    # (PLAN Section 8 deliberately leaves DEPLOY_MODE unset on adopt).
+    compose.write_compose_files(
+        install_dir, container_name=container_name, image=image, loopback_only=True,
+        app_port=app_port, mcp_port=mcp_port, puid=puid, pgid=pgid, umask=umask,
+        data_host_dir=data_host_dir,
+    )
+
+    instance = add_instance(
+        name=slug, mode=mode, runtime=chosen_runtime, data_dir=str(install_dir),
+        public_url=public_url, app_port=app_port, mcp_port=mcp_port, cookie_name=cookie_name,
+    )
+
+    health = None
+    if bring_up:
+        if _legacy_container_running(chosen_runtime, raw_instance_name, run=run):
+            raise LifecycleError(
+                f"A container named {raw_instance_name!r} is still running -- stop the old three-container "
+                f"stack first so nothing writes to the database while the image switches:\n"
+                f"  cd {install_dir} && {' '.join(compose.compose_binary(chosen_runtime))} "
+                f"--env-file data/.env -f docker-compose.yml down"
+            )
+        up_result = compose.compose_up(chosen_runtime, install_dir, container_name, run=run)
+        if up_result.returncode != 0:
+            _raise_for_failed_state(chosen_runtime, container_name, None, run=run)
+        health = wait_for_state(chosen_runtime, container_name, run=run, sleep=sleep)
+        if health is not None and health.get("Status") == "exited":
+            _raise_for_failed_state(chosen_runtime, container_name, health, run=run)
+
+    return AdoptResult(
+        instance=instance, cookie_name=cookie_name, env_appended=appended,
+        env_backup=backup_path, health=health,
+    )
 
 
 # ── status / list ─────────────────────────────────────────────────────────

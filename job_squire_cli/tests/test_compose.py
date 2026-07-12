@@ -233,3 +233,114 @@ def test_extract_fatal_lines_filters_to_fatal_prefix():
 
 def test_extract_fatal_lines_empty_when_none_present():
     assert compose.extract_fatal_lines("INFO: all good\n") == []
+
+
+# ── update / rollback support (Prompt C7) ────────────────────────────────
+
+
+def test_pull_image_invokes_runtime_pull(tmp_path):
+    run = fake_run()
+    compose.pull_image("docker", "ghcr.io/dellipse/job-squire:0.7.0", run=run)
+    assert run.calls[0]["args"] == ("docker", "pull", "ghcr.io/dellipse/job-squire:0.7.0")
+
+
+def test_pull_image_uses_podman_binary():
+    run = fake_run()
+    compose.pull_image("podman", "ghcr.io/dellipse/job-squire:0.7.0", run=run)
+    assert run.calls[0]["args"][0] == "podman"
+
+
+@pytest.mark.parametrize("version,expected", [
+    ("latest", "ghcr.io/dellipse/job-squire:latest"),
+    ("0.7.0", "ghcr.io/dellipse/job-squire:0.7.0"),
+    ("sha-abc1234", "ghcr.io/dellipse/job-squire:sha-abc1234"),
+    ("ghcr.io/someone-else/job-squire:1.2.3", "ghcr.io/someone-else/job-squire:1.2.3"),
+])
+def test_resolve_image(version, expected):
+    assert compose.resolve_image(version) == expected
+
+
+def test_resolve_image_respects_custom_repo():
+    assert compose.resolve_image("0.7.0", repo="ghcr.io/mine/job-squire") == "ghcr.io/mine/job-squire:0.7.0"
+
+
+def test_read_image_and_write_image_round_trip(tmp_path):
+    root = tmp_path / "castelo"
+    compose.write_compose_files(
+        root, container_name="job-squire-castelo", image="ghcr.io/dellipse/job-squire:latest",
+        loopback_only=True, app_port=8080, mcp_port=9000,
+    )
+    assert compose.read_image(root) == "ghcr.io/dellipse/job-squire:latest"
+
+    compose.write_image(root, "ghcr.io/dellipse/job-squire:0.7.0")
+    assert compose.read_image(root) == "ghcr.io/dellipse/job-squire:0.7.0"
+
+    # Nothing else in the file moved -- container_name and ports untouched.
+    yaml_text = paths.compose_path(root).read_text()
+    assert "job-squire-castelo" in yaml_text
+    assert '"127.0.0.1:${APP_HOST_PORT:-8080}:8000"' in yaml_text
+
+
+def test_read_image_raises_when_no_image_line(tmp_path):
+    root = tmp_path / "castelo"
+    root.mkdir()
+    paths.compose_path(root).write_text("services:\n  job-squire:\n    container_name: x\n")
+    with pytest.raises(compose.ComposeError):
+        compose.read_image(root)
+
+
+def test_compose_env_value_round_trip(tmp_path):
+    root = tmp_path / "castelo"
+    compose.write_compose_files(
+        root, container_name="job-squire-castelo", image=compose.DEFAULT_IMAGE,
+        loopback_only=True, app_port=8080, mcp_port=9000,
+    )
+    assert compose.read_compose_env_value(root, "PREVIOUS_IMAGE") is None
+    compose.set_compose_env_value(root, "PREVIOUS_IMAGE", "ghcr.io/dellipse/job-squire:0.6.0")
+    assert compose.read_compose_env_value(root, "PREVIOUS_IMAGE") == "ghcr.io/dellipse/job-squire:0.6.0"
+    # PUID/ports untouched by the targeted set.
+    assert compose.read_compose_env_value(root, "APP_HOST_PORT") == "8080"
+
+
+def test_compose_up_passes_through_extra_args(tmp_path):
+    root = tmp_path / "castelo"
+    root.mkdir()
+    run = fake_run()
+    compose.compose_up("docker", root, "job-squire-castelo", run=run, extra_args=["--force-recreate"])
+    assert run.calls[0]["args"][-3:] == ("up", "-d", "--force-recreate")
+
+
+# ── write_compose_files (adopt, Prompt C7) ────────────────────────────────
+
+
+def test_write_compose_files_never_touches_data_env(tmp_path):
+    """adopt_instance's whole point is that data/.env is pre-existing and
+    must be left alone -- write_compose_files must not create or write it,
+    unlike write_instance_files (which owns a fresh instance's data/.env)."""
+    root = tmp_path / "existing-install"
+    root.mkdir()
+    data_dir = root / "data"
+    data_dir.mkdir()
+    (data_dir / ".env").write_text("SECRET_KEY=untouched\n")
+
+    compose.write_compose_files(
+        root, container_name="job-squire-castelo", image=compose.DEFAULT_IMAGE,
+        loopback_only=True, app_port=8080, mcp_port=9000, data_host_dir=str(data_dir),
+    )
+
+    assert (data_dir / ".env").read_text() == "SECRET_KEY=untouched\n"
+    assert paths.compose_path(root).exists()
+    assert paths.compose_env_path(root).exists()
+
+
+def test_write_compose_files_preserves_custom_puid_pgid_and_data_host_dir(tmp_path):
+    root = tmp_path / "existing-install"
+    compose.write_compose_files(
+        root, container_name="job-squire-castelo", image=compose.DEFAULT_IMAGE,
+        loopback_only=True, app_port=8080, mcp_port=9000,
+        puid=2000, pgid=2001, data_host_dir="/srv/job-squire/data",
+    )
+    env_text = paths.compose_env_path(root).read_text()
+    assert "PUID=2000" in env_text
+    assert "PGID=2001" in env_text
+    assert "DATA_HOST_DIR=/srv/job-squire/data" in env_text
