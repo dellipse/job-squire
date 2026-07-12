@@ -22,6 +22,7 @@ import click.testing
 import pytest
 
 from job_squire_cli.cli import main
+from job_squire_cli.ops import backup as bk
 from job_squire_cli.ops import lifecycle as lc
 from job_squire_cli.ops import registry as reg
 from job_squire_cli.query import config as query_config_module
@@ -234,3 +235,218 @@ def test_adopt_surfaces_not_a_legacy_install_error_cleanly(runner, monkeypatch, 
     assert result.exit_code == 1
     assert "No data/.env found" in result.output
     assert "Traceback" not in result.output
+
+
+# ── backup / restore (Prompt C8) ─────────────────────────────────────────
+# ops/backup.py's own behavior (real encryption, real files) is covered in
+# tests/test_backup.py; these only prove the click adapter's argument
+# parsing, prompting, and error rendering, with ops/backup.py stubbed out.
+
+
+def test_backup_requires_name_or_all(runner):
+    result = runner.invoke(main, ["backup"])
+    assert result.exit_code == 1
+    assert "Specify an instance NAME" in result.output
+
+
+def test_backup_rejects_name_and_all_together(runner):
+    result = runner.invoke(main, ["backup", "castelo", "--all"])
+    assert result.exit_code == 1
+    assert "not both" in result.output
+
+
+def test_backup_unregistered_instance_fails_cleanly(runner):
+    result = runner.invoke(main, ["backup", "ghost"])
+    assert result.exit_code == 1
+    assert "No instance named 'ghost'" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_backup_prompts_for_passphrase_with_confirmation_and_warns_it_cannot_be_recovered(
+    runner, monkeypatch, tmp_path,
+):
+    reg.add_instance(
+        name="castelo", mode="local", runtime="docker", data_dir=str(tmp_path),
+        public_url="http://localhost:8080", app_port=8080, mcp_port=9000,
+    )
+    captured = {}
+
+    def fake_create_backup(instance, *, dest_dir, passphrase, ext):
+        captured.update(name=instance.name, passphrase=passphrase, ext=ext)
+        return bk.BackupResult(instance_name=instance.name, archive_path=tmp_path / "archive.tgz", manifest={})
+
+    monkeypatch.setattr(bk, "create_backup", fake_create_backup)
+    result = runner.invoke(main, ["backup", "castelo"], input="s3cr3t!\ns3cr3t!\n")
+    assert result.exit_code == 0
+    assert captured == {"name": "castelo", "passphrase": "s3cr3t!", "ext": "tgz"}
+    assert "lost passphrase means a lost backup" in result.output
+    assert "backed up to" in result.output
+
+
+def test_backup_passphrase_flag_skips_the_prompt(runner, monkeypatch, tmp_path):
+    reg.add_instance(
+        name="castelo", mode="local", runtime="docker", data_dir=str(tmp_path),
+        public_url="http://localhost:8080", app_port=8080, mcp_port=9000,
+    )
+    captured = {}
+    monkeypatch.setattr(
+        bk, "create_backup",
+        lambda instance, *, dest_dir, passphrase, ext: captured.update(passphrase=passphrase)
+        or bk.BackupResult(instance_name=instance.name, archive_path=tmp_path / "a.tgz", manifest={}),
+    )
+    result = runner.invoke(main, ["backup", "castelo", "--passphrase", "pw-from-flag"])
+    assert result.exit_code == 0
+    assert captured["passphrase"] == "pw-from-flag"
+
+
+def test_backup_all_backs_up_every_registered_instance(runner, monkeypatch, tmp_path):
+    reg.add_instance(
+        name="one", mode="local", runtime="docker", data_dir=str(tmp_path / "one"),
+        public_url="http://localhost:8080", app_port=8080, mcp_port=9000,
+    )
+    reg.add_instance(
+        name="two", mode="local", runtime="docker", data_dir=str(tmp_path / "two"),
+        public_url="http://localhost:8081", app_port=8081, mcp_port=9001,
+    )
+    seen = []
+    monkeypatch.setattr(
+        bk, "create_backup",
+        lambda instance, *, dest_dir, passphrase, ext: seen.append(instance.name)
+        or bk.BackupResult(instance_name=instance.name, archive_path=tmp_path / f"{instance.name}.tgz", manifest={}),
+    )
+    result = runner.invoke(main, ["backup", "--all", "--passphrase", "pw"])
+    assert result.exit_code == 0
+    assert sorted(seen) == ["one", "two"]
+
+
+def test_restore_wrong_passphrase_fails_cleanly(runner, monkeypatch, tmp_path):
+    archive = tmp_path / "archive.tgz"
+    archive.write_bytes(b"stand-in archive bytes")
+
+    def fake_open_backup(path, passphrase):
+        raise bk.WrongPassphraseError("Wrong passphrase, or the archive is corrupted or was tampered with.")
+
+    monkeypatch.setattr(bk, "open_backup", fake_open_backup)
+    result = runner.invoke(main, ["restore", str(archive)], input="wrong-pw\n")
+    assert result.exit_code == 1
+    assert "Wrong passphrase" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_restore_no_collision_skips_the_rename_prompt(runner, monkeypatch, tmp_path):
+    archive = tmp_path / "archive.tgz"
+    archive.write_bytes(b"stand-in")
+
+    def fake_open_backup(path, passphrase):
+        return bk.OpenedBackup(
+            archive_path=path, payload=b"", container_format=0,
+            manifest={"instance": {"name": "castelo"}, "checksums": {}},
+        )
+
+    captured = {}
+
+    def fake_restore_instance(opened, *, target_name, overwrite, image, bring_up, confirm):
+        captured.update(target_name=target_name, overwrite=overwrite)
+        inst = reg.Instance(
+            name="castelo", mode="local", runtime="docker", data_dir=str(tmp_path / "restored"),
+            app_port=8080, mcp_port=9000, cookie_name="castelo_session",
+            public_url="http://localhost:8080", created="2026-07-11",
+        )
+        return bk.RestoreResult(instance=inst, data_dir=tmp_path / "restored", health={"Status": "running"})
+
+    monkeypatch.setattr(bk, "open_backup", fake_open_backup)
+    monkeypatch.setattr(bk, "restore_instance", fake_restore_instance)
+    result = runner.invoke(main, ["restore", str(archive)], input="s3cr3t!\n")
+    assert result.exit_code == 0
+    assert captured == {"target_name": None, "overwrite": False}
+    assert "castelo" in result.output
+    assert "already registered" not in result.output
+
+
+def test_restore_collision_prompts_rename_and_passes_new_name_through(runner, monkeypatch, tmp_path):
+    reg.add_instance(
+        name="castelo", mode="local", runtime="docker", data_dir=str(tmp_path / "existing"),
+        public_url="http://localhost:8080", app_port=8080, mcp_port=9000,
+    )
+    archive = tmp_path / "archive.tgz"
+    archive.write_bytes(b"stand-in")
+
+    def fake_open_backup(path, passphrase):
+        return bk.OpenedBackup(
+            archive_path=path, payload=b"", container_format=0,
+            manifest={"instance": {"name": "castelo"}, "checksums": {}},
+        )
+
+    captured = {}
+
+    def fake_restore_instance(opened, *, target_name, overwrite, image, bring_up, confirm):
+        captured.update(target_name=target_name, overwrite=overwrite)
+        inst = reg.Instance(
+            name=target_name, mode="local", runtime="docker", data_dir=str(tmp_path / "restored"),
+            app_port=8081, mcp_port=9001, cookie_name=f"{target_name}_session",
+            public_url="http://localhost:8081", created="2026-07-11",
+        )
+        return bk.RestoreResult(instance=inst, data_dir=tmp_path / "restored", health={"Status": "running"})
+
+    monkeypatch.setattr(bk, "open_backup", fake_open_backup)
+    monkeypatch.setattr(bk, "restore_instance", fake_restore_instance)
+    result = runner.invoke(main, ["restore", str(archive)], input="s3cr3t!\nrename\ncastelo-2\n")
+    assert result.exit_code == 0
+    assert "already registered" in result.output
+    assert captured == {"target_name": "castelo-2", "overwrite": False}
+    assert "castelo-2" in result.output
+
+
+def test_restore_collision_prompts_overwrite(runner, monkeypatch, tmp_path):
+    reg.add_instance(
+        name="castelo", mode="local", runtime="docker", data_dir=str(tmp_path / "existing"),
+        public_url="http://localhost:8080", app_port=8080, mcp_port=9000,
+    )
+    archive = tmp_path / "archive.tgz"
+    archive.write_bytes(b"stand-in")
+
+    def fake_open_backup(path, passphrase):
+        return bk.OpenedBackup(
+            archive_path=path, payload=b"", container_format=0,
+            manifest={"instance": {"name": "castelo"}, "checksums": {}},
+        )
+
+    captured = {}
+
+    def fake_restore_instance(opened, *, target_name, overwrite, image, bring_up, confirm):
+        captured.update(target_name=target_name, overwrite=overwrite)
+        inst = reg.Instance(
+            name="castelo", mode="local", runtime="docker", data_dir=str(tmp_path / "restored"),
+            app_port=8080, mcp_port=9000, cookie_name="castelo_session",
+            public_url="http://localhost:8080", created="2026-07-11",
+        )
+        return bk.RestoreResult(instance=inst, data_dir=tmp_path / "restored", health={"Status": "running"})
+
+    monkeypatch.setattr(bk, "open_backup", fake_open_backup)
+    monkeypatch.setattr(bk, "restore_instance", fake_restore_instance)
+    result = runner.invoke(main, ["restore", str(archive)], input="s3cr3t!\noverwrite\n")
+    assert result.exit_code == 0
+    assert captured == {"target_name": None, "overwrite": True}
+
+
+def test_restore_collision_prompts_abort(runner, monkeypatch, tmp_path):
+    reg.add_instance(
+        name="castelo", mode="local", runtime="docker", data_dir=str(tmp_path / "existing"),
+        public_url="http://localhost:8080", app_port=8080, mcp_port=9000,
+    )
+    archive = tmp_path / "archive.tgz"
+    archive.write_bytes(b"stand-in")
+
+    def fake_open_backup(path, passphrase):
+        return bk.OpenedBackup(
+            archive_path=path, payload=b"", container_format=0,
+            manifest={"instance": {"name": "castelo"}, "checksums": {}},
+        )
+
+    restore_called = []
+    monkeypatch.setattr(bk, "open_backup", fake_open_backup)
+    monkeypatch.setattr(bk, "restore_instance", lambda *a, **k: restore_called.append(1))
+    result = runner.invoke(main, ["restore", str(archive)], input="s3cr3t!\nabort\n")
+    assert result.exit_code == 1
+    assert "cancelled" in result.output
+    assert restore_called == []

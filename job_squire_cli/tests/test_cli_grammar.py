@@ -20,15 +20,14 @@ Prompt C5 made create/start/stop/restart/status/list/remove real (see
 ops/lifecycle.py and tests/test_lifecycle.py, tests/test_ops_commands.py
 for their behavior). Prompt C6 made `configure` real too (see
 tests/test_configure.py). Prompt C7 made `update` and `adopt` real (see
-tests/test_lifecycle.py and tests/test_ops_commands.py); `backup`/
-`restore` remain C8 stubs, so only that remaining set is exercised here
-as "not implemented yet".
+tests/test_lifecycle.py and tests/test_ops_commands.py). Prompt C8 made
+`backup`/`restore` real too (see tests/test_backup.py) -- every deployment
+verb is real as of this prompt, so there is no longer a stub set here.
 """
 import subprocess
 import sys
 
 import click.testing
-import pytest
 
 from job_squire_cli.cli import main
 
@@ -36,8 +35,6 @@ DEPLOYMENT_COMMANDS = [
     "create", "start", "stop", "restart", "status", "list",
     "update", "remove", "adopt", "configure", "backup", "restore",
 ]
-
-STUB_COMMANDS = ["backup", "restore"]
 
 
 def test_top_level_lists_deployment_commands_and_query_group():
@@ -47,14 +44,6 @@ def test_top_level_lists_deployment_commands_and_query_group():
     for name in DEPLOYMENT_COMMANDS:
         assert name in result.output
     assert "query" in result.output
-
-
-@pytest.mark.parametrize("name", STUB_COMMANDS)
-def test_deployment_stub_exits_nonzero(name):
-    runner = click.testing.CliRunner()
-    result = runner.invoke(main, [name])
-    assert result.exit_code == 1
-    assert "not implemented yet" in result.output
 
 
 def test_lazy_import_in_subprocess_never_touches_query_stack():
@@ -70,12 +59,17 @@ def test_lazy_import_in_subprocess_never_touches_query_stack():
     already cached regardless of whether lazy-loading works. Only a
     separate process proves the claim.
     """
+    # 'status' with no NAME lists registered instances and needs no
+    # instance to exist (an empty registry just prints "No instances
+    # registered."), so it's a real deployment command that never touches
+    # the query stack and never prompts -- exactly what this test needs.
     script = (
-        "import sys\n"
+        "import sys, tempfile, os\n"
+        "os.environ['XDG_CONFIG_HOME'] = tempfile.mkdtemp()\n"
         "from click.testing import CliRunner\n"
         "from job_squire_cli.cli import main\n"
-        "result = CliRunner().invoke(main, ['backup'])\n"
-        "assert result.exit_code == 1, result.output\n"
+        "result = CliRunner().invoke(main, ['status'])\n"
+        "assert result.exit_code == 0, result.output\n"
         "assert 'rich' not in sys.modules, 'rich should not be imported for a deployment command'\n"
         "assert 'mcp' not in sys.modules, 'mcp should not be imported for a deployment command'\n"
         "assert 'job_squire_cli.query.commands' not in sys.modules\n"
@@ -86,13 +80,6 @@ def test_lazy_import_in_subprocess_never_touches_query_stack():
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "OK" in proc.stdout
-
-
-def test_deployment_stub_accepts_arbitrary_args_and_flags():
-    runner = click.testing.CliRunner()
-    result = runner.invoke(main, ["backup", "some-instance", "--mode", "local", "--whatever"])
-    assert result.exit_code == 1
-    assert "not implemented yet" in result.output
 
 
 def test_version_flag_reports_unified_scheme():

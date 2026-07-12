@@ -15,16 +15,18 @@
 Prompt C1 settled the full grammar and shipped every command as a
 structural stub. Prompt C5 made `create`, `start`, `stop`, `restart`,
 `status`, `list`, and `remove` real, wired to ops/lifecycle.py. Prompt C6
-made MCP authentication real too (`configure`). Prompt C7 (this file, as
-of `update` and `adopt` below) makes version movement and adopting an
-existing install real; `backup` and `restore` stay stubs until C8. `adopt`
-is a new verb not in C1's original grammar table (docs/job-squire-cli.md)
--- C1 deliberately deferred it, along with update/rollback's exact shape,
-to this dedicated prompt; see that doc's updated table. Every real command
-here is a thin click adapter: it does the interactive prompting and prints
-results, and delegates every actual decision to ops/lifecycle.py (or, for
-`configure`, ops/mcp_token.py and query/config.py), which take no click
-objects and are directly unit-testable on their own.
+made MCP authentication real too (`configure`). Prompt C7 made version
+movement and adopting an existing install real (`update`/`adopt`). Prompt
+C8 (this file, as of `backup`/`restore` below) makes passphrase-encrypted
+backup and restore real, wired to ops/backup.py. `adopt` is a new verb not
+in C1's original grammar table (docs/job-squire-cli.md) -- C1 deliberately
+deferred it, along with update/rollback's exact shape, to its own prompt;
+see that doc's updated table. Every real command here is a thin click
+adapter: it does the interactive prompting and prints results, and
+delegates every actual decision to ops/lifecycle.py (or, for `configure`,
+ops/mcp_token.py and query/config.py; for `backup`/`restore`,
+ops/backup.py), which take no click objects and are directly
+unit-testable on their own.
 """
 from __future__ import annotations
 
@@ -34,7 +36,7 @@ from urllib.parse import urlparse
 
 import click
 
-from . import lifecycle, mcp_token, secrets_copy
+from . import backup, lifecycle, mcp_token, secrets_copy
 from .compose import DEFAULT_IMAGE
 from .registry import (
     Instance,
@@ -46,35 +48,6 @@ from .registry import (
     sanitize_slug,
 )
 from ..query import config as query_config
-
-_STUB_SPECS = [
-    ("backup", "Create a passphrase-encrypted backup archive.", "C8"),
-    ("restore", "Restore an instance from a backup archive.", "C8"),
-]
-
-
-def _make_stub_command(name: str, summary: str, prompt: str) -> click.Command:
-    help_text = (
-        f"{summary}\n\n"
-        f"Not implemented yet -- lands in Prompt {prompt} of "
-        f"docs/PROMPTS-deployment-cli.md."
-    )
-
-    @click.command(
-        name=name,
-        help=help_text,
-        context_settings={"ignore_unknown_options": True},
-    )
-    @click.argument("_args", nargs=-1, type=click.UNPROCESSED)
-    def _cmd(_args):
-        click.echo(
-            f"job-squire {name}: not implemented yet "
-            f"(Prompt {prompt} of docs/PROMPTS-deployment-cli.md).",
-            err=True,
-        )
-        raise SystemExit(1)
-
-    return _cmd
 
 
 # ── Shared error handling ────────────────────────────────────────────────
@@ -534,6 +507,123 @@ def configure(name, mcp_token_action, ttl_hours, allow_network, manual_token, ma
         click.echo(f"Updated MCP config for {instance.name!r}: {', '.join(parts)}.")
 
 
+# ── backup / restore (Prompt C8) ─────────────────────────────────────────
+# docs/PLAN-deployment-modes.md Section 7 ("Backup and restore"). Every
+# archive is mandatory-encrypted (ops/backup_crypto.py, Argon2id +
+# AES-256-GCM) -- this command layer only ever handles the passphrase as a
+# hidden-input prompt (or an explicit --passphrase for scripted use, which
+# the help text warns against on a shared shell history) and never prints
+# or logs it.
+
+
+def _require_instance(name: str) -> Instance:
+    instance = get_instance(name)
+    if instance is None:
+        _fail(f"No instance named {name!r} is registered.")
+    return instance
+
+
+@click.command(name="backup", help="Create a passphrase-encrypted backup archive of an instance.")
+@click.argument("name", required=False)
+@click.option("--all", "all_instances", is_flag=True, default=False,
+              help="Back up every registered instance instead of one NAME.")
+@click.option("--dest", "dest_dir", type=click.Path(file_okay=False, path_type=Path), default=None,
+              help="Directory to write the archive(s) into (default: your home folder).")
+@click.option("--format", "archive_format", type=click.Choice(["tgz", "zip"]), default="tgz", show_default=True)
+@click.option("--passphrase", default=None,
+              help="Backup passphrase. Omit to be prompted (recommended -- avoids leaving it in shell history).")
+def backup_cmd(name, all_instances, dest_dir, archive_format, passphrase):
+    if all_instances and name:
+        _fail("Choose either an instance NAME or --all, not both.")
+    if not all_instances and not name:
+        _fail("Specify an instance NAME, or pass --all to back up every registered instance.")
+
+    targets = list_instances() if all_instances else [_require_instance(name)]
+    if not targets:
+        _fail("No instances are registered -- nothing to back up.")
+
+    if passphrase is None:
+        passphrase = click.prompt("Backup passphrase", hide_input=True, confirmation_prompt=True)
+    click.echo(
+        "This archive is encrypted with the passphrase above and cannot be restored without it "
+        "-- there is no recovery. Write it down somewhere safe; a lost passphrase means a lost backup."
+    )
+
+    for instance in targets:
+        try:
+            result = backup.create_backup(instance, dest_dir=dest_dir, passphrase=passphrase, ext=archive_format)
+        except lifecycle.LifecycleError as exc:
+            _handle_lifecycle_error(exc)
+        click.echo(f"Instance {instance.name!r} backed up to {result.archive_path}")
+
+
+@click.command(name="restore", help="Restore an instance from a passphrase-encrypted backup archive.")
+@click.argument("archive_path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--rename-to", default=None, help="Register the restored instance under a different name.")
+@click.option("--overwrite", is_flag=True, default=False,
+              help="Replace an existing instance of the same (or --rename-to) name instead of prompting.")
+@click.option("--passphrase", default=None,
+              help="Backup passphrase. Omit to be prompted (recommended -- avoids leaving it in shell history).")
+@click.option("--image", default=None,
+              help="Bring the restored instance up on this image instead of the one recorded in the backup.")
+@click.option("--up/--no-up", "bring_up", default=True, show_default=True,
+              help="Bring the restored instance up immediately after registering it.")
+@click.option("--yes", "assume_yes", is_flag=True, default=False,
+              help="Don't ask before installing a container runtime.")
+def restore_cmd(archive_path, rename_to, overwrite, passphrase, image, bring_up, assume_yes):
+    if passphrase is None:
+        passphrase = click.prompt("Backup passphrase", hide_input=True)
+
+    try:
+        opened = backup.open_backup(archive_path, passphrase)
+    except backup.WrongPassphraseError:
+        _fail("Wrong passphrase (or the archive is corrupted) -- could not decrypt the backup.")
+    except backup.RestoreError as exc:
+        _fail(str(exc))
+
+    target_name = rename_to
+    if not overwrite:
+        candidate = target_name or opened.instance_name
+        try:
+            candidate_slug = sanitize_slug(candidate)
+        except InvalidNameError as exc:
+            _fail(str(exc))
+        if get_instance(candidate_slug) is not None:
+            click.echo(f"An instance named {candidate_slug!r} is already registered.")
+            choice = click.prompt(
+                "Rename the restored instance, overwrite the existing one, or abort?",
+                type=click.Choice(["rename", "overwrite", "abort"]), default="rename",
+            )
+            if choice == "abort":
+                _fail("Restore cancelled.")
+            elif choice == "overwrite":
+                overwrite = True
+            else:
+                target_name = click.prompt("New instance name")
+
+    confirm = (lambda _msg: True) if assume_yes else click.confirm
+
+    try:
+        result = backup.restore_instance(
+            opened, target_name=target_name, overwrite=overwrite, image=image, bring_up=bring_up, confirm=confirm,
+        )
+    except (NameCollisionError, InvalidNameError, RegistryError) as exc:
+        _fail(str(exc))
+    except lifecycle.LifecycleError as exc:
+        _handle_lifecycle_error(exc)
+
+    inst = result.instance
+    click.echo(f"Instance {inst.name!r} restored from {archive_path} ({inst.mode} mode, runtime={inst.runtime}).")
+    click.echo(f"  Data dir: {result.data_dir}")
+    click.echo(f"  Web: {inst.public_url}")
+    if result.health is not None:
+        click.echo(f"  Health: {result.health.get('Health', {}).get('Status') or result.health.get('Status')}")
+    elif bring_up:
+        click.echo("  Instance registered but did not come up cleanly -- see the error above.")
+    else:
+        click.echo(f"  Not brought up yet. Run `job-squire start {inst.name}` when you're ready.")
+
+
 # ── registration ─────────────────────────────────────────────────────────
 
 
@@ -541,7 +631,6 @@ def register_ops_commands(group: click.Group) -> None:
     """Attach the flat deployment/lifecycle verbs directly onto `group`."""
     for command in (
         create, start, stop, restart, update, status, list_instances_cmd, remove, adopt, configure,
+        backup_cmd, restore_cmd,
     ):
         group.add_command(command)
-    for name, summary, prompt in _STUB_SPECS:
-        group.add_command(_make_stub_command(name, summary, prompt))
