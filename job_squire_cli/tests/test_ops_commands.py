@@ -24,6 +24,7 @@ import pytest
 from job_squire_cli.cli import main
 from job_squire_cli.ops import backup as bk
 from job_squire_cli.ops import lifecycle as lc
+from job_squire_cli.ops import proxy as proxy_ops
 from job_squire_cli.ops import registry as reg
 from job_squire_cli.query import config as query_config_module
 
@@ -450,3 +451,72 @@ def test_restore_collision_prompts_abort(runner, monkeypatch, tmp_path):
     assert result.exit_code == 1
     assert "cancelled" in result.output
     assert restore_called == []
+
+
+# ── proxy (Prompt C9) ────────────────────────────────────────────────────
+# Thin adapter tests only, same philosophy as backup/restore above:
+# ops/proxy.py's own behavior is covered exhaustively in test_proxy.py with
+# a fully injected fake runtime, so `provision_instance_proxy` is stubbed
+# here rather than re-driven through a fake subprocess at this layer.
+
+
+def test_proxy_unregistered_instance_fails_cleanly(runner):
+    result = runner.invoke(main, ["proxy", "ghost"])
+    assert result.exit_code == 1
+    assert "No instance named 'ghost'" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_proxy_rejects_local_mode_instance(runner, tmp_path):
+    reg.add_instance(
+        name="castelo", mode="local", runtime="docker", data_dir=str(tmp_path),
+        public_url="http://localhost:8080", app_port=8080, mcp_port=9000,
+    )
+    result = runner.invoke(main, ["proxy", "castelo"])
+    assert result.exit_code == 1
+    assert "local" in result.output
+    assert "only applies to network-mode instances" in result.output
+
+
+def test_proxy_happy_path_prints_result(runner, monkeypatch, tmp_path):
+    reg.add_instance(
+        name="castelo", mode="network", runtime="docker", data_dir=str(tmp_path),
+        public_url="https://squire.example.com", app_port=None, mcp_port=None,
+    )
+    captured = {}
+
+    def fake_provision(instance, *, root, proxy_container, config_dir, network, install_if_missing,
+                        swag_timezone, swag_url, swag_validation, confirm):
+        captured.update(name=instance.name, network=network, install_if_missing=install_if_missing)
+        target = proxy_ops.ProxyTarget(config_dir=tmp_path / "swag-config", container_name="swag", kind="swag")
+        return proxy_ops.ProxyProvisionResult(
+            proxy=target, network=network,
+            web_conf_path=tmp_path / "web.conf", mcp_conf_path=tmp_path / "mcp.conf",
+            installed_swag=False,
+        )
+
+    monkeypatch.setattr(proxy_ops, "provision_instance_proxy", fake_provision)
+    result = runner.invoke(main, ["proxy", "castelo"])
+    assert result.exit_code == 0
+    assert captured == {"name": "castelo", "network": proxy_ops.DEFAULT_PROXY_NETWORK, "install_if_missing": True}
+    assert "provisioned for 'castelo'" in result.output
+    assert "Proxy reloaded." in result.output
+
+
+def test_proxy_no_install_flag_disables_swag_fallback(runner, monkeypatch, tmp_path):
+    reg.add_instance(
+        name="castelo", mode="network", runtime="docker", data_dir=str(tmp_path),
+        public_url="https://squire.example.com", app_port=None, mcp_port=None,
+    )
+    captured = {}
+
+    def fake_provision(instance, *, root, proxy_container, config_dir, network, install_if_missing,
+                        swag_timezone, swag_url, swag_validation, confirm):
+        captured["install_if_missing"] = install_if_missing
+        raise proxy_ops.ProxyError("no proxy available")
+
+    monkeypatch.setattr(proxy_ops, "provision_instance_proxy", fake_provision)
+    result = runner.invoke(main, ["proxy", "castelo", "--no-install"])
+    assert result.exit_code == 1
+    assert captured == {"install_if_missing": False}
+    assert "no proxy available" in result.output

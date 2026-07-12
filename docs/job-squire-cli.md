@@ -26,6 +26,9 @@ job_squire_cli/
     ops/secrets_copy.py  # Fernet-aware settings import between instances (Prompt C5)
     ops/lifecycle.py   # create/start/stop/restart/status/list/remove/update/adopt orchestration (C5/C7)
     ops/mcp_token.py   # jsq_mcp_ static token generate/rotate/revoke (Prompt C6)
+    ops/backup.py      # backup/restore orchestration (Prompt C8)
+    ops/backup_crypto.py  # Argon2id + AES-256-GCM archive encryption (Prompt C8)
+    ops/proxy.py       # reverse-proxy provisioning: detect/install SWAG, nginx confs (Prompt C9)
     query/
       commands.py      # health, list, pipeline, contacts, job, contact, followups
       mcp_client.py     # self-contained MCP client (Streamable HTTP, no Hermes)
@@ -52,16 +55,18 @@ own subcommand:
 
 | Group | Invocation | Commands |
 |---|---|---|
-| Deployment/lifecycle | `job-squire <cmd>` (flat, top level) | `create`, `start`, `stop`, `restart`, `status`, `list`, `update`, `remove`, `adopt`, `configure`, `backup`, `restore` |
+| Deployment/lifecycle | `job-squire <cmd>` (flat, top level) | `create`, `start`, `stop`, `restart`, `status`, `list`, `update`, `remove`, `adopt`, `configure`, `backup`, `restore`, `proxy` |
 | Query | `job-squire query <cmd>` | `health`, `list`, `pipeline`, `contacts`, `job`, `contact`, `followups` |
 
 The deployment group is new in this fold-in; its commands are structural
 placeholders as of Prompt C1 (grammar and `--help` text are real, behavior
 is not) and land incrementally in Prompts C2-C11 of
-`docs/PROMPTS-deployment-cli.md`. `adopt` wasn't part of C1's original
-table -- C1 deliberately deferred its exact shape (along with `update`'s
-rollback design) to Prompt C7, the dedicated session for version movement
-and adopting existing data (PLAN Section 8).
+`docs/PROMPTS-deployment-cli.md`. `adopt` and `proxy` weren't part of C1's
+original table either -- C1 deliberately deferred `adopt`'s exact shape
+(along with `update`'s rollback design) to Prompt C7, the dedicated session
+for version movement and adopting existing data (PLAN Section 8), and
+deferred `proxy` to Prompt C9, the dedicated session for reverse-proxy
+provisioning (PLAN Section 5).
 
 ### Update and rollback (Prompt C7)
 
@@ -371,6 +376,75 @@ data directory; if nothing asks (no `confirm_delete`, no explicit
 `keep_data`), the default is to keep the data -- PLAN Section 4's rule
 that removing an instance must never silently destroy someone's
 job-search history.
+
+## Reverse-proxy provisioning (Prompt C9)
+
+```
+job-squire proxy NAME                       # detect an existing proxy, or offer to install SWAG
+job-squire proxy NAME --container swag2     # use a specific proxy container instead of auto-detecting one
+job-squire proxy NAME --config-dir /path    # a bare (non-containerized) nginx install's config directory
+job-squire proxy NAME --no-install          # fail instead of installing SWAG if none is detected
+job-squire proxy NAME --yes                 # don't prompt before installing SWAG
+```
+
+Only applies to a `network`-mode instance (PLAN Section 5: local modes use
+loopback only and need no proxy). `ops/proxy.py` covers the two cases from
+"Optional proxy provisioning":
+
+- **An existing proxy.** `detect_existing_proxy` looks for a running
+  container that looks like SWAG (name/image containing `swag`) or bare
+  nginx, and reads its `/config` (or `/etc/nginx/conf.d`) bind mount via
+  `docker/podman inspect` to find the host directory to drop confs into.
+  No second proxy is ever installed.
+- **No proxy.** `install_swag` writes a small standalone compose file at
+  `~/job-squire/_proxy/` (sibling to, but not one of, the per-instance
+  directories in `ops/paths.py` -- it's never registered as an instance)
+  and brings up a LinuxServer SWAG container. DNS/certificate validation
+  (DuckDNS, Cloudflare DNS-01, ...) is Prompt C10's job, not this one --
+  `--url`/`--validation` here are just SWAG's own required env vars,
+  passed through as-is or left as placeholders C10 fills in later.
+
+**The nginx conf templates are hand-rolled in `ops/proxy.py`, not read from
+`examples/nginx/` at runtime**, for the same reason `ops/compose.py`
+doesn't read the repo's own `docker-compose.single.yml`: this package is
+`pip install`-able with no repo checkout on disk, and `pyproject.toml`
+only ships the `job_squire_cli` package itself. `_WEB_CONF_TEMPLATE`/
+`_MCP_CONF_TEMPLATE` mirror `examples/nginx/job-squire.subdomain.conf` and
+`mcp-squire.subdomain.conf` by hand, adapted for the single-container
+image: both examples originally named two different upstream containers
+from the old three-container topology (`job-squire` on 8000,
+`job-squire-mcp` on 9000); here both point at the *same* container (this
+CLI only ever creates one), just on two different ports, and the
+generated filenames are namespaced per instance
+(`job-squire-<name>.subdomain.conf`, `mcp-job-squire-<name>.subdomain.conf`)
+so more than one CLI-managed instance can share a proxy.
+
+**Two upstream forms**, chosen by whether the proxy is itself a container:
+
+- **Containerized** (SWAG or any proxy container): the instance's
+  container joins the proxy's Docker network (`resolve_shared_network`
+  reuses the proxy's existing custom network if it has one, otherwise
+  creates `--network`'s value and attaches both sides to it), and the conf
+  resolves the instance by container name over Docker's embedded DNS
+  (`resolver 127.0.0.11`) -- the same pattern the app repo's own
+  `docker-compose.swag.yml` already documents for the legacy
+  three-container topology, just for one container instead of three. The
+  instance's `docker-compose.single.yml` is rewritten in place with the
+  new `networks:` block (`compose.write_compose_files`'s `proxy_network`
+  parameter) and the container is recreated to pick it up -- additive to
+  the existing host-port publish, not a replacement for it, so direct
+  host-port access for troubleshooting still works.
+- **Bare nginx on the host** (`--config-dir` with no matching container):
+  no Docker network exists to join, so the conf proxies straight to the
+  instance's published host ports (`proxy_pass http://127.0.0.1:<port>;`),
+  matching the fallback the example conf's own comments already document.
+
+Either way, the proxy stays a separate, independently maintained component
+-- nothing here is baked into the Job Squire image, and TLS still
+terminates at the proxy. Network mode is still not considered configured
+without a working proxy in front, which the app's own startup guard
+(PLAN Section 3) already enforces regardless of whether `job-squire proxy`
+was ever run.
 
 ## Versioning
 

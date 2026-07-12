@@ -33,7 +33,7 @@ from job_squire_cli.cli import main
 
 DEPLOYMENT_COMMANDS = [
     "create", "start", "stop", "restart", "status", "list",
-    "update", "remove", "adopt", "configure", "backup", "restore",
+    "update", "remove", "adopt", "configure", "backup", "restore", "proxy",
 ]
 
 

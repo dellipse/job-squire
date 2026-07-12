@@ -81,6 +81,20 @@ def test_render_compose_yaml_network_mode_binds_all_interfaces():
         container_name="job-squire-castelo", image="ghcr.io/dellipse/job-squire:latest", loopback_only=False,
     )
     assert '"0.0.0.0:${APP_HOST_PORT:-8080}:8000"' in yaml_text
+    assert "networks:" not in yaml_text
+
+
+def test_render_compose_yaml_proxy_network_adds_networks_block_without_dropping_ports():
+    """Prompt C9: attaching a network-mode instance to a reverse proxy's
+    shared Docker network is additive -- host-port publishing (still
+    useful for direct/troubleshooting access) stays exactly as it was."""
+    yaml_text = compose.render_compose_yaml(
+        container_name="job-squire-castelo", image="ghcr.io/dellipse/job-squire:latest",
+        loopback_only=False, proxy_network="job-squire-proxy",
+    )
+    assert '"0.0.0.0:${APP_HOST_PORT:-8080}:8000"' in yaml_text
+    assert "    networks:\n      - job-squire-proxy" in yaml_text
+    assert "networks:\n  job-squire-proxy:\n    external: true" in yaml_text
 
 
 def test_render_compose_env_includes_hostports_when_given():

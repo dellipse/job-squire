@@ -37,6 +37,7 @@ from urllib.parse import urlparse
 import click
 
 from . import backup, lifecycle, mcp_token, secrets_copy
+from . import proxy as proxy_ops
 from .compose import DEFAULT_IMAGE
 from .registry import (
     Instance,
@@ -624,6 +625,73 @@ def restore_cmd(archive_path, rename_to, overwrite, passphrase, image, bring_up,
         click.echo(f"  Not brought up yet. Run `job-squire start {inst.name}` when you're ready.")
 
 
+# ── proxy (Prompt C9) ────────────────────────────────────────────────────
+# docs/PLAN-deployment-modes.md Section 5 ("Optional proxy provisioning").
+# For a network-mode instance: generate its web/MCP nginx confs into an
+# existing SWAG/nginx proxy and reload it, or -- if none is running --
+# install a LinuxServer SWAG container first. Every actual decision lives
+# in ops/proxy.py; this is a thin adapter, same as every other command here.
+
+
+@click.command(name="proxy", help="Provision a reverse proxy (existing SWAG/nginx, or install SWAG) "
+                                   "for a network-mode instance.")
+@click.argument("name")
+@click.option("--container", "proxy_container", default=None,
+              help="Name of an existing proxy container to use, instead of auto-detecting one by "
+                   "name/image (e.g. a SWAG container not named 'swag').")
+@click.option("--config-dir", "config_dir", type=click.Path(file_okay=False, path_type=Path), default=None,
+              help="Manually specify the proxy's host config directory instead of auto-detecting one "
+                   "(needed for a bare, non-containerized nginx install).")
+@click.option("--network", default=proxy_ops.DEFAULT_PROXY_NETWORK, show_default=True,
+              help="Shared Docker network the instance and a containerized proxy join for name resolution.")
+@click.option("--no-install", "no_install", is_flag=True, default=False,
+              help="Fail instead of installing SWAG if no existing reverse proxy is detected.")
+@click.option("--timezone", "swag_timezone", default="Etc/UTC", show_default=True,
+              help="TZ for a freshly installed SWAG container.")
+@click.option("--url", "swag_url", default="",
+              help="SWAG URL env var, if a fresh SWAG install is needed. DNS/TLS validation is "
+                   "`job-squire`'s own separate DNS/TLS setup -- this can be left blank for now.")
+@click.option("--validation", "swag_validation", type=click.Choice(["http", "dns"]), default="http",
+              show_default=True, help="SWAG VALIDATION env var, if a fresh SWAG install is needed.")
+@click.option("--yes", "assume_yes", is_flag=True, default=False,
+              help="Don't ask before installing SWAG if no reverse proxy is detected.")
+def proxy_cmd(name, proxy_container, config_dir, network, no_install, swag_timezone, swag_url,
+              swag_validation, assume_yes):
+    instance = _require_instance(name)
+    if instance.mode != "network":
+        _fail(
+            f"Instance {name!r} is in {instance.mode!r} mode -- reverse-proxy provisioning only "
+            f"applies to network-mode instances (local modes use loopback only)."
+        )
+
+    confirm = (lambda _msg: True) if assume_yes else click.confirm
+    # Path(instance.data_dir), not paths.instance_root(instance.name): same
+    # reason as _print_mcp_config above -- an adopted instance's data_dir
+    # doesn't necessarily live under the default per-user data root.
+    root = Path(instance.data_dir)
+
+    try:
+        result = proxy_ops.provision_instance_proxy(
+            instance, root=root, proxy_container=proxy_container, config_dir=config_dir,
+            network=network, install_if_missing=not no_install, swag_timezone=swag_timezone,
+            swag_url=swag_url, swag_validation=swag_validation, confirm=confirm,
+        )
+    except proxy_ops.ProxyError as exc:
+        _fail(str(exc))
+
+    click.echo(f"Reverse proxy provisioned for {instance.name!r} ({result.proxy.kind}).")
+    if result.installed_swag:
+        click.echo(f"  Installed a new SWAG container (config at {result.proxy.config_dir}).")
+        click.echo(
+            "  DNS/TLS validation isn't fully configured yet -- network mode is not considered "
+            "configured without a working proxy in front of it."
+        )
+    click.echo(f"  Shared network: {result.network}")
+    click.echo(f"  Web conf installed: {result.web_conf_path}")
+    click.echo(f"  MCP conf installed: {result.mcp_conf_path}")
+    click.echo("  Proxy reloaded.")
+
+
 # ── registration ─────────────────────────────────────────────────────────
 
 
@@ -631,6 +699,6 @@ def register_ops_commands(group: click.Group) -> None:
     """Attach the flat deployment/lifecycle verbs directly onto `group`."""
     for command in (
         create, start, stop, restart, update, status, list_instances_cmd, remove, adopt, configure,
-        backup_cmd, restore_cmd,
+        backup_cmd, restore_cmd, proxy_cmd,
     ):
         group.add_command(command)

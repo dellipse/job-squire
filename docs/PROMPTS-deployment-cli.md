@@ -38,9 +38,9 @@
 - [x] Prompt C4: cross-platform instance registry
 - [x] Prompt C5: instance lifecycle core (create, start, stop, status, remove)
 - [x] Prompt C6: MCP authentication and token-config plumbing
-- [ ] Prompt C7: update, rollback, and adopt existing data
-- [ ] Prompt C8: passphrase-encrypted backup and restore
-- [ ] Prompt C9: reverse-proxy provisioning (SWAG / nginx)
+- [x] Prompt C7: update, rollback, and adopt existing data
+- [x] Prompt C8: passphrase-encrypted backup and restore
+- [x] Prompt C9: reverse-proxy provisioning (SWAG / nginx)
 - [ ] Prompt C10: DNS and TLS (DuckDNS auto, Cloudflare semi, others documented)
 - [ ] Prompt C11: Tailscale Serve for private remote access
 - [ ] Prompt C12: docs supersession, user setup guide rewrite, full verification
