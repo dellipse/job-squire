@@ -43,29 +43,19 @@ every instance gets its own independently random SECRET_KEY (PLAN Section
 4 "Keys and secrets are always independent"), copying an *encrypted*
 column verbatim would not decrypt at the destination -- so opting in
 decrypts with the source instance's SECRET_KEY and re-encrypts with the
-destination's, using the exact same HKDF-SHA256 -> Fernet derivation as
-app/crypto.py (mirrored here, not imported, for the same host/container
-dependency-boundary reason as above; the derivation is small, stable
-(labelled with its own version string), and covered by tests against
-known vectors so drift from app/crypto.py would be caught).
+destination's, using the HKDF-SHA256 -> Fernet derivation mirrored from
+app/crypto.py in ops/crypto_mirror.py (shared with ops/mcp_token.py,
+Prompt C6, so that mirrored contract lives in one place -- see that
+module's docstring for why it isn't imported from app/crypto.py directly).
 """
 from __future__ import annotations
 
-import base64
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from cryptography.fernet import Fernet, InvalidToken
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-
 from . import paths
-
-# Must stay byte-for-byte identical to app/crypto.py's _PREFIX/_HKDF_INFO --
-# these values, not the code, are the actual compatibility contract.
-_ENC_PREFIX = "enc:"
-_HKDF_INFO = b"job-squire/secret-encryption/v1"
+from .crypto_mirror import decrypt as _mirror_decrypt, encrypt as _mirror_encrypt
 
 _SCHEDULE_ENV_KEYS = (
     "SCHEDULE_TZ", "SCHEDULE_WEEKDAY_HOURS", "SCHEDULE_WEEKEND_HOURS", "SCHEDULE_MINUTE",
@@ -110,35 +100,18 @@ class ImportSummary:
     secrets_copied: bool = False
 
 
-# ── Fernet, mirrored from app/crypto.py (see module docstring) ──────────
-
-
-def _fernet(secret_key: str) -> Fernet:
-    hk = HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=_HKDF_INFO)
-    key = hk.derive(secret_key.encode("utf-8"))
-    return Fernet(base64.urlsafe_b64encode(key))
+# ── Fernet, delegated to ops/crypto_mirror.py (see module docstring) ────
+# Kept as these exact private names -- _decrypt/_encrypt -- because
+# tests/test_secrets_copy.py exercises the derivation through them
+# directly (including the cross-check against the real app/crypto.py).
 
 
 def _decrypt(secret_key: str, stored: str) -> str | None:
-    """None means "could not decrypt" (wrong key, or not our scheme) --
-    distinct from "" (a genuinely empty stored secret), so the caller can
-    tell the difference and warn instead of silently writing an empty
-    value over whatever the destination had.
-    """
-    if not stored:
-        return ""
-    if not stored.startswith(_ENC_PREFIX):
-        return stored  # legacy/plaintext value, same tolerance as app/crypto.py
-    try:
-        return _fernet(secret_key).decrypt(stored[len(_ENC_PREFIX):].encode("utf-8")).decode("utf-8")
-    except InvalidToken:
-        return None
+    return _mirror_decrypt(secret_key, stored)
 
 
 def _encrypt(secret_key: str, plaintext: str) -> str:
-    if not plaintext:
-        return ""
-    return _ENC_PREFIX + _fernet(secret_key).encrypt(plaintext.encode("utf-8")).decode("utf-8")
+    return _mirror_encrypt(secret_key, plaintext)
 
 
 def reencrypt(value: str, *, source_secret_key: str, dest_secret_key: str) -> str | None:

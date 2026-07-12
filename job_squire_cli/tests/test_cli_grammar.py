@@ -18,8 +18,9 @@ the whole point of the lazy group is defeated.
 
 Prompt C5 made create/start/stop/restart/status/list/remove real (see
 ops/lifecycle.py and tests/test_lifecycle.py, tests/test_ops_commands.py
-for their behavior); update/configure/backup/restore remain C6-C8 stubs,
-so only that second set is exercised here as "not implemented yet".
+for their behavior). Prompt C6 made `configure` real too (see
+tests/test_configure.py); `update`/`backup`/`restore` remain C7-C8 stubs,
+so only that remaining set is exercised here as "not implemented yet".
 """
 import subprocess
 import sys
@@ -34,7 +35,7 @@ DEPLOYMENT_COMMANDS = [
     "update", "remove", "configure", "backup", "restore",
 ]
 
-STUB_COMMANDS = ["update", "configure", "backup", "restore"]
+STUB_COMMANDS = ["update", "backup", "restore"]
 
 
 def test_top_level_lists_deployment_commands_and_query_group():

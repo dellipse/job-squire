@@ -21,8 +21,10 @@ job_squire_cli/
     ops/paths.py       # per-instance directory layout (Prompt C5)
     ops/ports.py       # local-mode port pair allocation (Prompt C5)
     ops/compose.py     # compose/env rendering + runtime-driven compose invocations (C5)
+    ops/crypto_mirror.py  # HKDF-SHA256 -> Fernet derivation mirrored from app/crypto.py (C5/C6)
     ops/secrets_copy.py  # Fernet-aware settings import between instances (Prompt C5)
     ops/lifecycle.py   # create/start/stop/restart/status/list/remove orchestration (C5)
+    ops/mcp_token.py   # jsq_mcp_ static token generate/rotate/revoke (Prompt C6)
     query/
       commands.py      # health, list, pipeline, contacts, job, contact, followups
       mcp_client.py     # self-contained MCP client (Streamable HTTP, no Hermes)
@@ -84,18 +86,34 @@ existing muscle memory and scripts keep working. Both are installed by
 The query group needs an MCP endpoint and (usually) a bearer token for a
 running instance. It reads these from, in order:
 
-1. `JOB_SQUIRE_MCP_URL` / `JOB_SQUIRE_MCP_TOKEN` environment variables.
+1. `JOB_SQUIRE_MCP_URL` / `JOB_SQUIRE_MCP_TOKEN` environment variables
+   (useful for smoke-testing and CI, and for overriding the file without
+   editing it).
 2. A JSON file at the per-OS, per-user config directory (the same one the
    instance registry from `PLAN-deployment-modes.md` Section 4 uses):
    `~/.config/job-squire/mcp.json` (Linux, honoring `XDG_CONFIG_HOME`),
    `~/Library/Application Support/job-squire/mcp.json` (macOS),
-   `%APPDATA%\job-squire\mcp.json` (Windows). Shape:
-   `{"endpoint": "http://localhost:9000", "token": "jsq_mcp_..."}`.
+   `%APPDATA%\job-squire\mcp.json` (Windows), keyed by instance name so one
+   machine with several registered instances can hold an endpoint/token
+   per instance:
 
-Prompt C6 replaces the second source with real `job-squire configure`
-plumbing (generate/rotate/revoke, multi-instance support, the loopback-
-reachability rule); the location and shape above are expected to grow to
-match what C6 builds, not to be replaced by something unrelated.
+   ```json
+   {
+     "version": 1,
+     "default": "castelo",
+     "instances": {
+       "castelo": {"endpoint": "http://localhost:9000", "token": "jsq_mcp_..."}
+     }
+   }
+   ```
+
+   `--instance/-i` on `job-squire query` selects which entry to use;
+   omitted, it falls back to `default`, or the sole entry if only one is
+   configured, or a clear error listing what's configured if the choice is
+   ambiguous. The file is written with `0600` permissions since it usually
+   holds a plaintext bearer token (this file, unlike the app's own
+   `AIConfig.mcp_api_key_enc`, has to hold the plaintext -- it's what gets
+   sent as the `Authorization: Bearer ...` header).
 
 **No Hermes involvement, in either direction.** The query group does not
 read `~/.hermes/`, does not import or vendor any Hermes code, and does not
@@ -104,6 +122,63 @@ require Hermes to be installed. It talks Streamable HTTP directly to
 server itself depends on. Hermes (or any other MCP host) can still use the
 Job Squire MCP server by reading its published MCP documentation; that
 coupling runs one way, through docs, never through shared code.
+
+## MCP authentication (Prompt C6)
+
+OAuth 2.0/PKCE stays the default, untouched MCP flow in every mode --
+`job-squire configure` generates nothing for it. Where a browser flow is
+available, `job-squire configure NAME --token <oauth-access-token>
+[--endpoint URL]` wires an OAuth access token obtained elsewhere into the
+query group's config, without the CLI implementing the OAuth dance itself.
+OAuth is preferred whenever an instance is reachable beyond the one
+machine (network mode, or a Tailscale-Serve-fronted local instance --
+Prompt C11).
+
+The one sanctioned alternative is the local `jsq_mcp_` static bearer
+token, matching the settled spec in `PLAN-deployment-modes.md` Section 5:
+256 bits of URL-safe base64, Fernet-encrypted at rest, constant-time
+compared, loopback-only unless explicitly enabled. `app/mcp_auth.py` and
+`app/main.py`'s `settings_mcp_api_key()` route implement the app side
+(Prompt 6 of `PROMPTS-deployment-modes.md`), reachable only from an
+authenticated, CSRF-protected browser session -- there is no Flask CLI
+command or admin API route to call into instead. So `job_squire_cli/ops/
+mcp_token.py` writes the same `AIConfig` columns directly with the stdlib
+`sqlite3` module, mirroring the app's token shape and its HKDF-SHA256 ->
+Fernet derivation (`ops/crypto_mirror.py`, shared with `ops/
+secrets_copy.py`) rather than importing the app package -- exactly the
+precedent `ops/secrets_copy.py` already established for the app's other
+Fernet-encrypted columns. A write lands on the very next MCP request with
+no restart needed, since `app/mcp_server.py` re-fetches `AIConfig` fresh
+on every call.
+
+```
+job-squire configure NAME --mcp-token generate [--ttl-hours N] [--allow-network]
+job-squire configure NAME --mcp-token rotate     # replaces the active token
+job-squire configure NAME --mcp-token revoke     # clears it everywhere
+job-squire configure NAME --show                 # print current MCP auth state; the default with no flags
+```
+
+`generate` and `rotate` both mint a fresh token (the app only ever keeps
+one active, so overwriting *is* rotation -- there's no separate rotate
+code path on either side); `generate` refuses to clobber an existing
+active token, `rotate` requires one to already exist, and `revoke` clears
+the app-side columns and the query group's stored copy together. Every
+successful generate/rotate also records the derived MCP endpoint (local
+mode: `http://localhost:<mcp_port>` from the registry; network mode: the
+registry has no `public_mcp_host` field, so it falls back to the same
+`mcp-<hostname>` convention `create --mcp-hostname` defaults to, correctable
+with `--endpoint`) and the plaintext token into `mcp.json`, and makes the
+instance the query group's default if none is set yet (`--set-default`/
+`--no-set-default` to control this explicitly).
+
+**Reachability rule.** The static token is refused for a network-mode
+instance unless `--allow-network` is passed explicitly (`--allow-network`
+alone, without `--mcp-token`, just toggles the opt-in without minting a
+token) -- it is never enabled implicitly, matching
+`app/mcp_auth.py`'s `is_static_token_allowed()` and the resolved
+`DEPLOY_MODE` posture from the app set (the registry's `Instance.mode` is
+that same value by construction, since `create` writes
+`DEPLOY_MODE=mode` verbatim into the instance's `data/.env`).
 
 ## Container runtime detection and install
 
@@ -159,8 +234,10 @@ container runtime or a real `PATH`.
 ## Instance lifecycle core (Prompt C5)
 
 `create`, `start`, `stop`, `restart`, `status`, `list`, and `remove` are
-real as of Prompt C5, wired to `ops/lifecycle.py`; `update`, `configure`,
-`backup`, and `restore` remain structural stubs until C6-C8. Every real
+real as of Prompt C5, wired to `ops/lifecycle.py` (`configure` followed in
+Prompt C6, wired to `ops/mcp_token.py` and `query/config.py` -- see "MCP
+authentication" below); `update`, `backup`, and `restore` remain
+structural stubs until C7-C8. Every real
 command follows the same shape as `ops/runtime.py`: `ops/commands.py` is a
 thin click adapter (prompting, printing, mapping exceptions to a clean
 `exit(1)`), and `ops/lifecycle.py` takes no click objects at all -- every

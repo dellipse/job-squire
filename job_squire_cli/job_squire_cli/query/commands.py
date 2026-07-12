@@ -41,6 +41,7 @@ ACTIVE_STATUSES = {"Saved", "Applied", "Phone Screen", "Interview", "Final Inter
 @dataclass
 class _QueryState:
     json_output: bool = False
+    instance: str | None = None
 
 
 _state = _QueryState()
@@ -58,7 +59,7 @@ def _call(name: str, args: dict | None = None):
     subclasses, so callers wrapped in _safe_run get a clean one-line error
     either way without needing to distinguish the two here.
     """
-    cfg = load_query_config()
+    cfg = load_query_config(_state.instance)
     return mcp_client.call_tool(cfg.endpoint, cfg.token, name, args or {})
 
 
@@ -273,7 +274,7 @@ def cmd_contact_detail(contact_id: int):
 
 def cmd_health():
     try:
-        cfg = load_query_config()
+        cfg = load_query_config(_state.instance)
     except QueryConfigError as e:
         console.print(f"[red]FAIL[/red] — {e}")
         raise SystemExit(1)
@@ -300,9 +301,13 @@ def cmd_health():
 @click.group(name="query")
 @click.option("--json", "json_output", is_flag=True, default=False,
               help="Output raw JSON (pipe into jq, etc.)")
-def query(json_output):
+@click.option("--instance", "-i", "instance", default=None,
+              help="Which registered instance to query (default: the instance set with "
+                   "`job-squire configure <name> --set-default`, or the sole configured one).")
+def query(json_output, instance):
     """Query a running job-squire instance over MCP."""
     _state.json_output = json_output
+    _state.instance = instance
 
 
 @query.command()

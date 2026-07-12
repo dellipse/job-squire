@@ -30,7 +30,7 @@ from job_squire_cli.query.config import QueryConfig
 def fake_config(monkeypatch):
     monkeypatch.setattr(
         commands, "load_query_config",
-        lambda: QueryConfig(endpoint="http://localhost:9000", token="jsq_mcp_test"),
+        lambda instance=None: QueryConfig(endpoint="http://localhost:9000", token="jsq_mcp_test"),
     )
 
 
@@ -139,7 +139,7 @@ def test_health_fails_cleanly_when_server_down(monkeypatch):
 def test_no_config_gives_actionable_error_not_traceback(monkeypatch):
     from job_squire_cli.query.config import QueryConfigError
 
-    def _raise():
+    def _raise(instance=None):
         raise QueryConfigError("No MCP endpoint configured. Set JOB_SQUIRE_MCP_URL ...")
     monkeypatch.setattr(commands, "load_query_config", _raise)
     runner = click.testing.CliRunner()

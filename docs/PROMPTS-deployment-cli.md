@@ -37,7 +37,7 @@
 - [x] Prompt C3: container runtime detection and install
 - [x] Prompt C4: cross-platform instance registry
 - [x] Prompt C5: instance lifecycle core (create, start, stop, status, remove)
-- [ ] Prompt C6: MCP authentication and token-config plumbing
+- [x] Prompt C6: MCP authentication and token-config plumbing
 - [ ] Prompt C7: update, rollback, and adopt existing data
 - [ ] Prompt C8: passphrase-encrypted backup and restore
 - [ ] Prompt C9: reverse-proxy provisioning (SWAG / nginx)
