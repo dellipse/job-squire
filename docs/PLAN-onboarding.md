@@ -1,6 +1,6 @@
 # PLAN: First-Run Onboarding (Getting Started)
 
-**Status:** Plan of record — agreed 2026-07-12. Phase 1 not yet started.
+**Status:** Phase 1 SHIPPED 2026-07-12 (`app/onboarding.py`). Phase 2 (AI resume interview) not started. Deviation from plan: `/setup` kept as the routines redirect (actively linked from the dashboard); the checklist got its own nav entry instead.
 **Problem:** A fresh install drops the user on an empty Dashboard with no guidance. Nothing tells them to add a resume, set search targets, configure AI, or connect job boards.
 
 ---

@@ -90,6 +90,10 @@ def _request(method, url, **kwargs):
     return last
 
 
+# Boards that return remote-only listings and ignore location/radius entirely.
+# Skipped by search runs when SearchConfig.include_remote is off.
+REMOTE_ONLY_PROVIDERS = {"jobicy"}
+
 # UI metadata: what each provider needs and where to sign up.
 PROVIDERS = {
     "dice": {

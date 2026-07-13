@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Getting Started · JobSquire{% endblock %}
+{% block content %}
+<h1>Getting Started</h1>
+
+<section class="card">
+  <p class="muted">
+    Set up Job Squire step by step. Nothing here is one-shot — skip anything and
+    come back to it whenever you like. Steps check themselves off as the real
+    configuration lands, so this list always reflects where you actually are.
+  </p>
+
+  {% set done_count = checklist | selectattr('status', 'equalto', 'done') | list | length %}
+  <p><strong>{{ done_count }}</strong> of {{ checklist | length }} steps done.</p>
+
+  <ol class="gs-checklist">
+    {% for item in checklist %}
+    <li class="gs-item gs-{{ item.status }}">
+      <span class="gs-status">
+        {% if item.status == 'done' %}&#10003;{% elif item.status == 'skipped' %}&#8722;{% else %}&#9675;{% endif %}
+      </span>
+      <div class="gs-body">
+        <a href="{{ url_for('onboarding.step', step=item.key) }}"><strong>{{ item.title }}</strong></a>
+        <span class="muted small">{{ item.blurb }}
+          {%- if item.status == 'skipped' %} (skipped — click to revisit){% endif %}</span>
+      </div>
+    </li>
+    {% endfor %}
+  </ol>
+
+  <div class="actions" style="margin-top:1rem">
+    {% if next_step %}
+    <a class="btn btn-primary" href="{{ url_for('onboarding.step', step=next_step) }}">Continue setup</a>
+    {% else %}
+    <a class="btn btn-primary" href="{{ url_for('main.dashboard') }}">All done — go to Dashboard</a>
+    {% endif %}
+    {% if not state.dismissed %}
+    <form method="post" action="{{ url_for('onboarding.dismiss') }}" style="display:inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="btn btn-outline" type="submit">Hide from dashboard</button>
+    </form>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

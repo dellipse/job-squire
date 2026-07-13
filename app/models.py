@@ -266,6 +266,8 @@ class SearchConfig(db.Model):
     # non-empty location string. See app/timezones.py and app/providers.py
     # (ADZUNA_COUNTRIES) for where this actually changes provider behavior.
     country = db.Column(db.String(2), default="US")
+    # Include remote-only job boards (Jobicy) and remote listings in searches.
+    include_remote = db.Column(db.Boolean, default=True)
     radius_miles = db.Column(db.Integer, default=40)
     min_salary = db.Column(db.Integer, nullable=True)
     max_age_days = db.Column(db.Integer, default=14)
@@ -276,6 +278,39 @@ class SearchConfig(db.Model):
     @property
     def title_list(self):
         return [t.strip() for t in (self.titles or "").splitlines() if t.strip()]
+
+
+class OnboardingState(db.Model):
+    """Singleton row (id=1) tracking the Getting Started walkthrough.
+
+    Most step completion is *derived* from real data (a resume exists, search
+    targets are set, a search has run) so the checklist reflects reality and
+    can never drift. This row only stores what can't be derived: the persona
+    answer, explicit skips/answers, and whether the dashboard card was
+    dismissed. See docs/PLAN-onboarding.md.
+    """
+    __tablename__ = "onboarding_state"
+
+    id = db.Column(db.Integer, primary_key=True)
+    persona = db.Column(db.String(10), default="")   # "" | "self" | "helper"
+    steps_json = db.Column(db.Text, default="{}")     # step key -> "skipped" | "answered" | "no_ai"
+    dismissed = db.Column(db.Boolean, default=False)  # hide the dashboard card
+    completed_at = db.Column(db.DateTime, nullable=True)
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    @property
+    def steps(self) -> dict:
+        import json as _json
+        try:
+            return _json.loads(self.steps_json or "{}")
+        except ValueError:
+            return {}
+
+    def set_step(self, key: str, value: str) -> None:
+        import json as _json
+        data = self.steps
+        data[key] = value
+        self.steps_json = _json.dumps(data)
 
 
 class KitConfig(db.Model):

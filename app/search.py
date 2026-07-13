@@ -24,7 +24,7 @@ from .crypto import decrypt
 from .extensions import db
 from .models import Job, ProviderCredential, SearchConfig, SearchRun, SmtpConfig, User
 from .notify import build_digest, build_error_report, send_email
-from .providers import PROVIDERS, search_provider
+from .providers import PROVIDERS, REMOTE_ONLY_PROVIDERS, search_provider
 
 log = logging.getLogger(__name__)
 
@@ -225,6 +225,8 @@ def _run_search_locked(trigger="manual"):
         "min_salary": cfg_row.min_salary,
         "max_age_days": cfg_row.max_age_days or 14,
         "results_per_query": cfg_row.results_per_query or 25,
+        # NULL (pre-migration rows) must behave like the default: True.
+        "include_remote": cfg_row.include_remote is not False,
     }
 
     enabled = ProviderCredential.query.filter_by(enabled=True).all()
@@ -241,6 +243,10 @@ def _run_search_locked(trigger="manual"):
     all_items, notes = [], []
     for pc in enabled:
         if pc.provider not in PROVIDERS:
+            continue
+        if pc.provider in REMOTE_ONLY_PROVIDERS and not cfg.get("include_remote", True):
+            notes.append(f"{pc.provider}: remote-only board skipped (remote jobs are "
+                         "turned off in search settings)")
             continue
         if _in_cooldown(cooldowns, pc.provider):
             until = cooldowns[pc.provider]

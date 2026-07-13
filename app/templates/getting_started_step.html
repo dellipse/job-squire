@@ -1,0 +1,343 @@
+{% extends "base.html" %}
+{% block title %}{{ item.title }} · Getting Started · JobSquire{% endblock %}
+{% block content %}
+
+<p class="muted small">
+  <a href="{{ url_for('onboarding.overview') }}">&larr; Getting Started</a>
+  &nbsp;&middot;&nbsp;
+  {% for s in checklist %}
+    {% if s.key == step_key %}<strong>{{ s.title }}</strong>{% else %}<a class="muted" href="{{ url_for('onboarding.step', step=s.key) }}">{{ s.title }}</a>{% endif %}
+    {%- if not loop.last %} &rsaquo; {% endif %}
+  {% endfor %}
+</p>
+
+<h1>{{ item.title }}</h1>
+
+{% if item.status == 'done' %}
+<div class="mode-info-box" style="margin-bottom:1rem">
+  <strong>&#10003; This step is complete.</strong> You can still make changes below,
+  or {% if next_step %}<a href="{{ url_for('onboarding.step', step=next_step) }}">continue to the next step</a>{% else %}<a href="{{ url_for('onboarding.overview') }}">return to the checklist</a>{% endif %}.
+</div>
+{% endif %}
+
+{# ══════════════ persona ══════════════ #}
+{% if step_key == 'persona' %}
+<section class="card">
+  <p>Welcome to Job Squire. One question shapes the rest of the setup:</p>
+  <form method="post" action="{{ url_for('onboarding.save_persona') }}" class="form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="form-grid">
+      <div class="field field-wide">
+        <label>
+          <input type="radio" name="persona" value="self"
+                 {% if state.persona == 'self' %}checked{% endif %}>
+          <strong>I'm looking for a job myself</strong>
+        </label>
+        <span class="muted small">The most common setup — you run everything from this one account.</span>
+      </div>
+      <div class="field field-wide">
+        <label>
+          <input type="radio" name="persona" value="helper"
+                 {% if state.persona == 'helper' %}checked{% endif %}>
+          <strong>I'm helping someone else with their job search</strong>
+        </label>
+        <span class="muted small">You configure and coach from this admin account; the job seeker gets
+          their own sign-in in the next step.</span>
+      </div>
+    </div>
+    <div class="actions" style="margin-top:1rem">
+      <button class="btn btn-primary" type="submit">Save and continue</button>
+    </div>
+  </form>
+</section>
+
+{# ══════════════ accounts ══════════════ #}
+{% elif step_key == 'accounts' %}
+<section class="card">
+  {% if second_account %}
+  <p>A second account already exists: <strong>{{ second_account.display_name or second_account.username }}</strong>
+    (<code>{{ second_account.username }}</code>). Nothing more to do here.</p>
+  {% else %}
+  {% if state.persona == 'helper' %}
+  <p>Create the job seeker's sign-in. They'll see the same pipeline, jobs, and
+    documents — without the admin-only settings pages.</p>
+  {% else %}
+  <p>Want to give someone else access — a spouse, coach, or friend helping with
+    your search? Create a second sign-in for them. Entirely optional.</p>
+  {% endif %}
+  <form method="post" action="{{ url_for('onboarding.save_accounts') }}" class="form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="form-grid">
+      <div class="field"><label>Username</label>
+        <input type="text" name="username" placeholder="e.g. jordan" pattern="[a-z0-9_.\-]{3,40}"></div>
+      <div class="field"><label>Display name</label>
+        <input type="text" name="display_name" placeholder="e.g. Jordan"></div>
+      <div class="field"><label>Password <span class="muted">(min 8 characters)</span></label>
+        <input type="password" name="password" minlength="8"></div>
+      <div class="field"><label>Confirm password</label>
+        <input type="password" name="confirm" minlength="8"></div>
+    </div>
+    <div class="actions" style="margin-top:1rem">
+      <button class="btn btn-primary" type="submit">Create account</button>
+      <button class="btn btn-outline" type="submit" name="action" value="just_me">
+        {% if state.persona == 'helper' %}Not now{% else %}Just me, thanks{% endif %}
+      </button>
+    </div>
+  </form>
+  {% endif %}
+</section>
+
+{# ══════════════ ai ══════════════ #}
+{% elif step_key == 'ai' %}
+<section class="card">
+  <p>AI powers Job Squire's best features: scoring new jobs against your profile,
+    tailoring resumes and cover letters per application, drafting follow-up
+    emails, and weekly strategy reviews. Three ways to get it, in order of privacy:</p>
+
+  <div class="mode-info-box" style="margin:0.75rem 0">
+    <strong>1. Local AI (most private).</strong> Run <a href="https://ollama.com" target="_blank" rel="noopener">Ollama</a>
+    on your own machine — your data never leaves it. Needs a reasonably capable
+    computer (16 GB+ memory recommended). Add it under
+    <a href="{{ url_for('main.settings', _anchor='tab-claude') }}">Settings &rarr; AI &rarr; Providers</a>
+    with provider type "Ollama (local)".
+  </div>
+  <div class="mode-info-box" style="margin:0.75rem 0">
+    <strong>2. Cloud AI with free tiers.</strong>
+    <a href="https://aistudio.google.com" target="_blank" rel="noopener">Google Gemini</a>,
+    <a href="https://console.groq.com" target="_blank" rel="noopener">Groq</a>, and
+    <a href="https://openrouter.ai" target="_blank" rel="noopener">OpenRouter</a> all offer
+    free API tiers that work well here. Your identifiers are automatically replaced
+    with placeholders before anything is sent (see
+    <a href="{{ url_for('main.settings', _anchor='tab-claude') }}">Privacy settings</a>).
+    Add keys under Settings &rarr; AI &rarr; Providers.
+  </div>
+  <div class="mode-info-box" style="margin:0.75rem 0">
+    <strong>3. A Claude subscription (Pro/Max).</strong> Connect Claude directly to Job Squire
+    as a live connector — Claude reads your pipeline and writes analyses, kits, and
+    drafts back on its own. Set up under
+    <a href="{{ url_for('main.settings', _anchor='tab-claude') }}">Settings &rarr; AI &rarr; Connectors</a>.
+    Also have a ChatGPT, Gemini, or Nous subscription? Their API keys work via the
+    Providers tab too.
+  </div>
+
+  {% if enabled_ai_providers %}
+  <p><strong>&#10003; Configured providers:</strong>
+    {% for p in enabled_ai_providers %}{{ p.display_name or p.provider }}{% if not loop.last %}, {% endif %}{% endfor %}</p>
+  {% endif %}
+
+  <form method="post" action="{{ url_for('onboarding.save_ai') }}" class="form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="actions" style="margin-top:1rem">
+      <a class="btn btn-primary" href="{{ url_for('main.settings', _anchor='tab-claude') }}">Open AI settings</a>
+      <button class="btn btn-outline" type="submit">I've set up AI — continue</button>
+      <button class="btn btn-outline" type="submit" name="action" value="no_ai">Continue without AI</button>
+    </div>
+  </form>
+  <p class="muted small" style="margin-top:0.75rem">Without AI: search, tracking, funnel
+    metrics, and follow-up reminders all work normally. Scoring, tailored documents, and
+    reviews stay off until a provider is added — or use Manual mode (copy/paste into any
+    free AI chat) from the AI analysis page.</p>
+</section>
+
+{# ══════════════ profile ══════════════ #}
+{% elif step_key == 'profile' %}
+<section class="card">
+  <h2>Your resume</h2>
+  {% if assets %}
+  <p><strong>&#10003; Uploaded documents:</strong></p>
+  <ul>
+    {% for a in assets %}<li>{{ a.kind }} — {{ a.display_name }} <span class="muted small">({{ a.size_kb }} KB)</span></li>{% endfor %}
+  </ul>
+  {% endif %}
+  <p>Upload your current resume — it becomes the base for tailored versions per
+    application. Certifications, recommendation letters, and portfolio samples
+    help too: the AI mines them for specifics.</p>
+  <form method="post" action="{{ url_for('main.settings_asset_upload') }}"
+        enctype="multipart/form-data" class="form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="next" value="{{ back_url }}">
+    <div class="form-grid">
+      <div class="field"><label>Document type</label>{{ asset_form.kind(class="form-control") }}</div>
+      <div class="field"><label>Label <span class="muted">(optional)</span></label>
+        {{ asset_form.label(class="form-control", placeholder='e.g. "Resume 2026"') }}</div>
+      <div class="field"><label>File <span class="muted">(PDF, DOCX, TXT, MD)</span></label>
+        {{ asset_form.file(class="form-control") }}</div>
+    </div>
+    <div class="actions" style="margin-top:0.75rem">
+      <button class="btn btn-primary" type="submit">Upload</button>
+    </div>
+  </form>
+
+  <div class="mode-info-box" style="margin-top:1rem">
+    <strong>Don't have a resume yet?</strong> A guided, interview-style resume builder is
+    coming in a future release. For now: upload anything you have (even rough), or start
+    from a plain document — the tailoring features will improve it per application.
+  </div>
+</section>
+
+<section class="card">
+  <h2>Online profiles</h2>
+  <p>LinkedIn or similar profiles you want referenced in applications
+    {% if profile_exists %}<span class="muted small">(your candidate profile already has content —
+    these are appended)</span>{% endif %}:</p>
+  <form method="post" action="{{ url_for('onboarding.save_profile_links') }}" class="form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="field field-wide">
+      <textarea name="links" rows="3" placeholder="https://www.linkedin.com/in/your-name&#10;https://github.com/your-name"></textarea>
+    </div>
+    <div class="actions" style="margin-top:0.75rem">
+      <button class="btn btn-primary" type="submit">Save links</button>
+    </div>
+  </form>
+</section>
+
+{# ══════════════ search ══════════════ #}
+{% elif step_key == 'search' %}
+<section class="card">
+  <p>What should Job Squire look for? Be specific with titles — each line is a
+    separate search query.</p>
+  <form method="post" action="{{ url_for('main.settings_search') }}" class="form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="next" value="{{ back_url }}">
+    <input type="hidden" name="max_age_days" value="{{ search_cfg.max_age_days or 14 }}">
+    <input type="hidden" name="results_per_query" value="{{ search_cfg.results_per_query or 25 }}">
+    <div class="form-grid">
+      <div class="field field-wide">
+        <label>Job titles / keywords <span class="muted">(one per line)</span></label>
+        <textarea name="titles" rows="5" placeholder="Operations Manager&#10;Supply Chain Analyst">{{ search_cfg.titles }}</textarea>
+      </div>
+      <div class="field">
+        <label>Country <span class="muted">(2-letter code)</span></label>
+        <input type="text" name="country" value="{{ search_cfg.country or 'US' }}" maxlength="2"
+               style="text-transform:uppercase" pattern="[A-Za-z]{2}" required>
+      </div>
+      <div class="field">
+        <label>Location <span class="muted">(City, ST)</span></label>
+        <input type="text" name="location" value="{{ search_cfg.location }}" placeholder="Henderson, NV" required>
+        <span class="muted small">US format is "City, ST". ZIP codes aren't supported — use radius instead.</span>
+      </div>
+      <div class="field"><label>Radius (miles)</label>
+        <input type="text" name="radius_miles" value="{{ search_cfg.radius_miles or 40 }}"></div>
+      <div class="field"><label>Target salary (minimum, blank = no filter)</label>
+        <input type="text" name="min_salary" value="{{ search_cfg.min_salary or '' }}" placeholder="e.g. 85000">
+        <span class="muted small">Postings below this get filtered out where boards report salary.</span></div>
+      <div class="field">
+        <label><input type="checkbox" name="include_remote" {% if search_cfg.include_remote %}checked{% endif %}> Include remote jobs</label>
+        <span class="muted small">Adds remote-only boards to your searches.</span>
+      </div>
+      <div class="field">
+        <label><input type="checkbox" name="enabled" {% if search_cfg.enabled %}checked{% endif %}> Automated search (3&times;/day on weekdays)</label>
+      </div>
+    </div>
+    <div class="actions" style="margin-top:1rem">
+      <button class="btn btn-primary" type="submit">Save search targets</button>
+    </div>
+  </form>
+</section>
+
+{# ══════════════ providers ══════════════ #}
+{% elif step_key == 'providers' %}
+<section class="card">
+  <h2>Works immediately — no API key</h2>
+  <p>These boards need no sign-up. Enable them now and your first search will
+    return real results:</p>
+  {% for p in keyless_providers %}
+  <form method="post" action="{{ url_for('main.settings_provider', provider=p.name) }}" class="form" style="margin-bottom:0.75rem">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="next" value="{{ back_url }}">
+    <label>
+      <input type="checkbox" name="enabled" {% if p.enabled %}checked{% endif %}
+             onchange="this.form.submit()">
+      <strong>{{ p.meta.label }}</strong>{% if p.remote_only %} <span class="badge">remote only</span>{% endif %}
+      {% if p.enabled %}<span class="badge admin">enabled</span>{% endif %}
+    </label>
+    <span class="muted small" style="display:block;margin-left:1.5rem">{{ p.meta.note }}</span>
+  </form>
+  {% endfor %}
+</section>
+
+<section class="card">
+  <h2>Free with an API key</h2>
+  <p>These need a (free) key from the board. Each takes a few minutes to sign up
+    for; add keys under
+    <a href="{{ url_for('main.settings', _anchor='tab-sources') }}">Settings &rarr; Sources</a>.</p>
+  <ul>
+    {% for p in keyed_providers %}
+    <li>
+      <strong>{{ p.meta.label }}</strong>
+      {% if p.enabled %}<span class="badge admin">enabled</span>{% endif %}
+      — <a href="{{ p.meta.signup_url }}" target="_blank" rel="noopener">sign up ↗</a>
+      <span class="muted small" style="display:block">{{ p.meta.note }}</span>
+    </li>
+    {% endfor %}
+  </ul>
+  <p class="muted small">Recommended starter set: the keyless boards above plus
+    <strong>Adzuna</strong> (broad coverage, free) and <strong>Google Jobs via SerpApi</strong>
+    (the widest aggregator, 250 free searches/month).</p>
+</section>
+
+{# ══════════════ first_search ══════════════ #}
+{% elif step_key == 'first_search' %}
+<section class="card">
+  {% if last_run %}
+  <p><strong>&#10003; Your first search has run.</strong></p>
+  {% endif %}
+  <p>Ready when you are:</p>
+  <ul>
+    <li>Search targets:
+      {% if search_cfg and search_cfg.titles.strip() and search_cfg.location.strip() %}
+        <strong>{{ search_cfg.title_list | length }} title(s)</strong> near <strong>{{ search_cfg.location }}</strong> &#10003;
+      {% else %}
+        <a href="{{ url_for('onboarding.step', step='search') }}">not set yet — set them first</a>
+      {% endif %}
+    </li>
+    <li>Job boards enabled:
+      {% if enabled_providers %}
+        <strong>{% for pc in enabled_providers %}{{ pc.provider }}{% if not loop.last %}, {% endif %}{% endfor %}</strong> &#10003;
+      {% else %}
+        <a href="{{ url_for('onboarding.step', step='providers') }}">none yet — enable at least one</a>
+      {% endif %}
+    </li>
+  </ul>
+  {% if search_ready %}
+  <form method="post" action="{{ url_for('main.settings_run') }}" class="form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="next" value="{{ back_url }}">
+    <div class="actions">
+      <button class="btn btn-primary" type="submit">Run first search now</button>
+    </div>
+  </form>
+  <p class="muted small" style="margin-top:0.5rem">Runs in the background — refresh this
+    page after a few seconds to see the result.</p>
+  {% endif %}
+  {% if last_run %}
+  <div class="mode-info-box" style="margin-top:1rem">
+    <strong>Last run:</strong> status <em>{{ last_run.status }}</em> —
+    {{ last_run.found or 0 }} found, {{ last_run.created or 0 }} new job(s) added
+    (providers: {{ last_run.providers or "none" }}).
+    <br><strong>What's next:</strong>
+    review them under <a href="{{ url_for('main.jobs_list') }}">Jobs</a> and mark the ones
+    you'll pursue{% if ai_active %}; AI scoring will rank new finds for fit automatically —
+    check the fit scores before spending time on applications{% else %}. Tip: adding an AI
+    provider later gets each find scored 1&ndash;10 against your profile automatically{% endif %}.
+    As you apply, move each job's status forward so the funnel metrics on your
+    <a href="{{ url_for('main.dashboard') }}">Dashboard</a> stay honest.
+  </div>
+  {% endif %}
+</section>
+{% endif %}
+
+{# ══════════════ footer nav ══════════════ #}
+<div class="actions" style="margin-top:1.5rem">
+  {% if item.status != 'done' %}
+  <form method="post" action="{{ url_for('onboarding.skip', step=step_key) }}" style="display:inline">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button class="btn btn-outline" type="submit">Skip for now</button>
+  </form>
+  {% endif %}
+  {% if next_step %}
+  <a class="btn btn-outline" href="{{ url_for('onboarding.step', step=next_step) }}">Next step &rarr;</a>
+  {% endif %}
+  <a class="btn btn-outline" href="{{ url_for('onboarding.overview') }}">Back to checklist</a>
+</div>
+{% endblock %}

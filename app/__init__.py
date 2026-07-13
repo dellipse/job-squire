@@ -145,6 +145,8 @@ def create_app():
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(main_bp)
+    from .onboarding import onboarding_bp
+    app.register_blueprint(onboarding_bp)
 
     # --- Template filter: convert naive UTC datetime to local time ---------
     # Timezone resolution order: SCHEDULE_TZ env var → search location in DB
@@ -356,6 +358,9 @@ def _run_migrations():
         "ALTER TABLE ai_config ADD COLUMN redaction_enabled BOOLEAN DEFAULT 1",
         "ALTER TABLE ai_config ADD COLUMN redact_strict BOOLEAN DEFAULT 0",
         "ALTER TABLE ai_config ADD COLUMN redact_local BOOLEAN DEFAULT 0",
+        # Onboarding: remote-jobs toggle for search (docs/PLAN-onboarding.md).
+        # Defaults ON so existing installs keep their current provider behavior.
+        "ALTER TABLE search_config ADD COLUMN include_remote BOOLEAN DEFAULT 1",
     ]
     for stmt in migrations:
         try:

@@ -630,3 +630,16 @@ input.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-s
 }
 .ts-spinner.hidden { display: none; }
 @keyframes ts-spin { to { transform: rotate(360deg); } }
+
+/* ── Getting Started checklist (onboarding) ─────────────────────────── */
+.gs-checklist { list-style: none; padding: 0; margin: 0.5rem 0; }
+.gs-item { display: flex; gap: 0.6rem; align-items: baseline; padding: 0.45rem 0;
+           border-bottom: 1px solid var(--border, #e3e3e3); }
+.gs-item:last-child { border-bottom: none; }
+.gs-status { width: 1.4rem; text-align: center; flex: none; font-weight: 700; }
+.gs-done .gs-status { color: var(--success, #2e7d32); }
+.gs-skipped { opacity: 0.65; }
+.gs-todo .gs-status { color: var(--muted, #888); }
+.gs-body span { display: block; }
+.gs-compact { margin: 0.25rem 0 0; }
+.gs-compact .gs-item { padding: 0.25rem 0; border-bottom: none; }

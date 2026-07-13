@@ -339,6 +339,12 @@ def _worker_heartbeat_status(max_age_seconds=900):
 @main_bp.route("/")
 @login_required
 def dashboard():
+    # Getting Started card (admins only; hides itself once dismissed/complete).
+    onboarding_checklist = None
+    if current_user.is_admin:
+        from .onboarding import checklist_for_dashboard
+        onboarding_checklist = checklist_for_dashboard()
+
     jobs = Job.query.all()
     total = len(jobs)
     rows = db.session.query(Job.status, func.count(Job.id)).group_by(Job.status).all()
@@ -424,6 +430,7 @@ def dashboard():
 
     return render_template(
         "dashboard.html",
+        onboarding_checklist=onboarding_checklist,
         metrics=metrics,
         counts=counts,
         statuses=STATUSES,
@@ -2982,17 +2989,28 @@ def settings():
     )
 
 
+def _safe_next(default_url: str) -> str:
+    """Honor a relative `next` form field so onboarding pages can reuse settings
+    POST routes and return to the walkthrough. Relative paths only — anything
+    absolute (scheme or protocol-relative) is ignored to avoid open redirects."""
+    nxt = (request.form.get("next") or "").strip()
+    if nxt.startswith("/") and not nxt.startswith("//"):
+        return nxt
+    return default_url
+
+
 @main_bp.route("/settings/search", methods=["POST"])
 @login_required
 @admin_required
 def settings_search():
     cfg = _singleton(SearchConfig)
+    back = _safe_next(url_for("main.settings"))
     location = request.form.get("location", "").strip()
     country = (request.form.get("country") or "US").strip().upper()
     if len(country) != 2 or not country.isalpha():
         flash("Country must be a 2-letter code (ISO 3166-1 alpha-2), "
               "e.g. \"US\", \"GB\", \"DE\".", "danger")
-        return redirect(url_for("main.settings"))
+        return redirect(back)
     if country == "US":
         # Providers expect "City, ST" (a valid US state code). Reject anything else
         # so a ZIP or address doesn't silently return empty results, and so the
@@ -3004,10 +3022,10 @@ def settings_search():
                   "e.g. \"Boise, ID\". ZIP codes and street addresses are not "
                   "supported by the job sources; use the radius to widen the area.",
                   "danger")
-            return redirect(url_for("main.settings"))
+            return redirect(back)
     elif not location:
         flash("Location is required, e.g. \"Manchester\" or \"Manchester, UK\".", "danger")
-        return redirect(url_for("main.settings"))
+        return redirect(back)
     cfg.titles = request.form.get("titles", "").strip()
     cfg.location = location
     cfg.country = country
@@ -3016,9 +3034,10 @@ def settings_search():
     cfg.max_age_days = _int(request.form.get("max_age_days"), 14)
     cfg.results_per_query = max(1, min(50, _int(request.form.get("results_per_query"), 25)))
     cfg.enabled = request.form.get("enabled") == "on"
+    cfg.include_remote = request.form.get("include_remote") == "on"
     db.session.commit()
     flash("Search settings saved.", "success")
-    return redirect(url_for("main.settings"))
+    return redirect(back)
 
 
 @main_bp.route("/settings/kit", methods=["POST"])
@@ -3075,11 +3094,11 @@ def settings_provider(provider):
                 f"{missing_label} is required.",
                 "warning",
             )
-            return redirect(url_for("main.settings"))
+            return redirect(_safe_next(url_for("main.settings")))
     pc.enabled = wants_enabled
     db.session.commit()
     flash(f"{PROVIDERS[provider]['label']} settings saved.", "success")
-    return redirect(url_for("main.settings"))
+    return redirect(_safe_next(url_for("main.settings")))
 
 
 @main_bp.route("/settings/provider/<provider>/test", methods=["POST"])
@@ -3234,7 +3253,7 @@ def settings_run():
     t = threading.Thread(target=_bg_search, daemon=True)
     t.start()
     flash("Search started — check Run History in a moment for results.", "info")
-    return redirect(url_for("main.settings"))
+    return redirect(_safe_next(url_for("main.settings")))
 
 
 # --------------------------------------------------------------------------
@@ -3271,7 +3290,7 @@ def settings_asset_upload():
             msg = errs[0]
             break
         flash(msg, "danger")
-    return redirect(url_for("main.settings", _anchor="tab-documents"))
+    return redirect(_safe_next(url_for("main.settings", _anchor="tab-documents")))
 
 
 @main_bp.route("/assets/<int:asset_id>/download")

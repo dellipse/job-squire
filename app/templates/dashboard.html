@@ -3,6 +3,32 @@
 {% block content %}
 <h1>Dashboard</h1>
 
+{% if onboarding_checklist %}
+{% set gs_done = onboarding_checklist | selectattr('status', 'equalto', 'done') | list | length %}
+<section class="card">
+  <div class="card-head">
+    <h2>Getting started — {{ gs_done }}/{{ onboarding_checklist | length }} done</h2>
+    <a class="btn btn-outline" href="{{ url_for('onboarding.overview') }}">Open walkthrough</a>
+  </div>
+  <ol class="gs-checklist gs-compact">
+    {% for item in onboarding_checklist %}
+    <li class="gs-item gs-{{ item.status }}">
+      <span class="gs-status">
+        {% if item.status == 'done' %}&#10003;{% elif item.status == 'skipped' %}&#8722;{% else %}&#9675;{% endif %}
+      </span>
+      <div class="gs-body">
+        <a href="{{ url_for('onboarding.step', step=item.key) }}">{{ item.title }}</a>
+      </div>
+    </li>
+    {% endfor %}
+  </ol>
+  <form method="post" action="{{ url_for('onboarding.dismiss') }}" style="margin-top:0.5rem">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button class="btn btn-sm btn-outline" type="submit">Hide this card</button>
+  </form>
+</section>
+{% endif %}
+
 {% if unscored_count > 0 or overdue_followup_count > 0 or unkitted_count > 0 or stale_saved_count > 0 or stale_active_count > 0 or worker_stale %}
 <section class="card routine-status-widget">
   <div class="card-head">

@@ -58,6 +58,10 @@
         <div class="field"><label>Max posting age (days)</label><input type="text" name="max_age_days" value="{{ cfg.max_age_days }}"></div>
         <div class="field"><label>Results per query (1-50)</label><input type="text" name="results_per_query" value="{{ cfg.results_per_query }}"></div>
         <div class="field"><label><input type="checkbox" name="enabled" {% if cfg.enabled %}checked{% endif %}> Automated search enabled</label></div>
+        <div class="field">
+          <label><input type="checkbox" name="include_remote" {% if cfg.include_remote %}checked{% endif %}> Include remote jobs</label>
+          <span class="muted small">Off skips remote-only boards (Jobicy) entirely.</span>
+        </div>
       </div>
       <div class="actions"><button class="btn btn-primary" type="submit">Save search settings</button></div>
     </form>

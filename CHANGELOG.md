@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows the `VERSION` file at the repo root, displayed in the app
 footer as `<VERSION>-<build-sha>`.
 
+## [Unreleased]
+
+### Added
+
+- **Getting Started walkthrough** (`app/onboarding.py`, `docs/PLAN-onboarding.md`
+  Phase 1): fresh installs are no longer dropped on an empty Dashboard. A
+  persistent, re-entrant checklist (dashboard card + "Getting started" nav
+  entry) walks through setup: who the install is for, an optional second
+  account (now creatable in-app instead of env-vars only), AI setup with a
+  privacy-first framing (local Ollama → free cloud tiers → Claude connector,
+  or an explicit no-AI path), resume/document upload and online-profile links,
+  search targets including target salary, job boards with the zero-key trio
+  (Dice, The Muse, Jobicy) called out for instant results, and a guided first
+  search with next steps. Step completion is derived from real app state so
+  the checklist never drifts; every step is skippable and revisitable.
+- Search setting **"Include remote jobs"** (`SearchConfig.include_remote`,
+  default on): turning it off skips remote-only boards (Jobicy) in search runs.
+
 ## [0.7.3] - 2026-07-12
 
 ### Fixed
