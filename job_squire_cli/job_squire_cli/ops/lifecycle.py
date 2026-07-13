@@ -473,11 +473,41 @@ class RemoveResult:
     name: str
     data_dir: Path
     data_kept: bool
+    image: str | None = None
+    image_removed: bool = False
+    image_kept_reason: str | None = None
+
+
+def _image_still_in_use(image: str, *, data_root: Path | None) -> bool:
+    """True if any *other currently-registered* instance's compose file
+    still names `image`. Called only after the instance being removed has
+    already been dropped from the registry (see `remove_instance`), so
+    `list_instances()` here naturally excludes it -- no self-match to
+    guard against.
+
+    Conservative on read failure: an instance whose compose file can't be
+    read counts as "still in use" rather than risking `rmi` against an
+    image something else might depend on. This is why `remove_image` is
+    opt-in rather than the default -- a shared `ghcr.io/dellipse/job-
+    squire:latest` tag across instances (the common case: `create` writes
+    that same default for every instance unless `--image` overrides it)
+    must never be pulled out from under a sibling instance still running
+    it.
+    """
+    for other in list_instances():
+        try:
+            other_root = _instance_root(other, data_root)
+            if compose.read_image(other_root) == image:
+                return True
+        except (OSError, compose.ComposeError):
+            return True
+    return False
 
 
 def remove_instance(
     name: str, *, data_root: Path | None = None, run: Runner = subprocess.run,
     keep_data: bool | None = None, confirm_delete: Confirm | None = None,
+    remove_image: bool = False,
 ) -> RemoveResult:
     """Tear the container down, update the registry, and decide whether to
     keep or delete the data directory. `keep_data` set explicitly skips
@@ -486,6 +516,14 @@ def remove_instance(
     data, since "removing an instance never silently destroys someone's
     job-search history" (PLAN Section 4) is the one rule that matters more
     here than convenience.
+
+    `remove_image` (default False -- opt-in) additionally runs `rmi`
+    against the instance's image once the container is down, but only if
+    `_image_still_in_use` finds no other registered instance still
+    pointing at it. `compose down` alone never removes the image it was
+    running (that's a `docker compose down` default, not a job-squire
+    bug we introduced) -- without this flag an instance's image is left
+    on disk exactly as it always has been.
     """
     instance = _require_instance(name)
     root = _instance_root(instance, data_root)
@@ -496,7 +534,12 @@ def remove_instance(
     # runtime to tear down (subprocess.Popen fails outright if `cwd` doesn't
     # exist), so skip straight to clearing the registry entry rather than
     # raising ComposeError for a container that's already gone.
+    image: str | None = None
     if root.exists():
+        try:
+            image = compose.read_image(root)
+        except (OSError, compose.ComposeError):
+            image = None
         compose.compose_down(instance.runtime, root, container_name, run=run)
     _registry_remove(instance.name)
 
@@ -509,7 +552,24 @@ def remove_instance(
     if not keep_data:
         shutil.rmtree(root, ignore_errors=True)
 
-    return RemoveResult(name=instance.name, data_dir=root, data_kept=keep_data)
+    image_removed = False
+    image_kept_reason: str | None = None
+    if remove_image:
+        if image is None:
+            image_kept_reason = "couldn't determine the instance's image (no compose file to read)"
+        elif _image_still_in_use(image, data_root=data_root):
+            image_kept_reason = "still used by another registered instance"
+        else:
+            rmi_result = compose.remove_image(instance.runtime, image, run=run)
+            if rmi_result.returncode == 0:
+                image_removed = True
+            else:
+                image_kept_reason = (rmi_result.stderr or rmi_result.stdout or "rmi failed").strip()
+
+    return RemoveResult(
+        name=instance.name, data_dir=root, data_kept=keep_data,
+        image=image, image_removed=image_removed, image_kept_reason=image_kept_reason,
+    )
 
 
 # ── adopt (Prompt C7) ────────────────────────────────────────────────────

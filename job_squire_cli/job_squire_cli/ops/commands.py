@@ -308,26 +308,39 @@ def status(name):
 @click.argument("name")
 @click.option("--keep-data/--delete-data", "keep_data", default=None,
               help="Skip the prompt: force keep or delete the instance's data directory.")
+@click.option("--remove-image/--keep-image", "remove_image", default=False, show_default=True,
+              help="Also remove the instance's container image with 'rmi' -- but only if no other "
+                   "registered instance still references it. 'compose down' alone never removes "
+                   "the image it was running.")
 @click.option("--yes", "assume_yes", is_flag=True, default=False,
               help="Don't prompt; without --keep-data/--delete-data this keeps the data (the safe default).")
-def remove(name, keep_data, assume_yes):
+def remove(name, keep_data, remove_image, assume_yes):
     confirm_delete = None if (keep_data is not None or assume_yes) else click.confirm
     try:
-        result = lifecycle.remove_instance(name, keep_data=keep_data, confirm_delete=confirm_delete)
+        result = lifecycle.remove_instance(
+            name, keep_data=keep_data, confirm_delete=confirm_delete, remove_image=remove_image,
+        )
     except lifecycle.LifecycleError as exc:
         _handle_lifecycle_error(exc)
     click.echo(f"Instance {result.name!r} removed.")
     click.echo(f"Data directory {'kept' if result.data_kept else 'deleted'}: {result.data_dir}")
+    if remove_image:
+        if result.image_removed:
+            click.echo(f"Image removed: {result.image}")
+        elif result.image:
+            click.echo(f"Image kept ({result.image}): {result.image_kept_reason}")
 
 
 # ── uninstall ────────────────────────────────────────────────────────────
-# Removes every registered instance, then (opt-in) the container runtime
-# job-squire itself installed, then the CLI's own venv and PATH entry --
-# see ops/uninstall.py's module docstring for the full rationale. Not part
-# of the original C1-C12 grammar; added because getting job-squire *off* a
-# machine matters as much as getting it on, and the bootstrap scripts
-# already modify PATH and (via `create`) may have installed a runtime, so
-# the CLI should be able to fully reverse both, on request.
+# Removes every registered instance and, by default, each instance's
+# container image (unlike `remove`, where image cleanup stays opt-in --
+# see ops/uninstall.py's module docstring), then (opt-in) the container
+# runtime job-squire itself installed, then the CLI's own venv and PATH
+# entry. Not part of the original C1-C12 grammar; added because getting
+# job-squire *off* a machine matters as much as getting it on, and the
+# bootstrap scripts already modify PATH and (via `create`) may have
+# installed a runtime, so the CLI should be able to fully reverse both, on
+# request.
 
 
 @click.command(help="Uninstall job-squire: remove every registered instance, optionally the "
@@ -339,11 +352,19 @@ def remove(name, keep_data, assume_yes):
               help="Also uninstall the container runtime (Podman/OrbStack/Docker Desktop) -- but "
                    "only if job-squire installed it itself; a runtime that was already working on "
                    "this machine before job-squire is never touched.")
+@click.option("--remove-image/--keep-image", "remove_image", default=None,
+              help="Remove each instance's container image with 'rmi' once nothing else "
+                   "references it. This is the default for uninstall (unlike 'remove', which "
+                   "leaves images alone unless asked) -- 'compose down' alone never removes the "
+                   "image it was running, and an uninstall is normally a full teardown. Without "
+                   "either flag, you're asked whether to keep the image instead; the prompt "
+                   "defaults to No (remove).")
 @click.option("--yes", "assume_yes", is_flag=True, default=False,
               help="Don't prompt; without --keep-data/--delete-data this keeps every instance's "
-                   "data (the safe default), and without --remove-runtime the runtime is never "
-                   "removed even if job-squire installed it.")
-def uninstall(keep_data, remove_runtime, assume_yes):
+                   "data (the safe default), without --remove-runtime the runtime is never "
+                   "removed even if job-squire installed it, and without --keep-image every "
+                   "instance's image is removed (the default for uninstall).")
+def uninstall(keep_data, remove_runtime, remove_image, assume_yes):
     instances = list_instances()
     if instances:
         click.echo("This removes every registered instance: " + ", ".join(i.name for i in instances))
@@ -366,18 +387,39 @@ def uninstall(keep_data, remove_runtime, assume_yes):
     confirm_delete = None if (keep_data is not None or assume_yes) else click.confirm
     confirm_runtime = None if assume_yes else click.confirm
 
+    # Unlike keep_data/remove_runtime, an uninstall's default *is* to remove
+    # the image -- --remove-image/--keep-image on the command line wins
+    # outright; otherwise --yes proceeds with that same default (remove);
+    # otherwise ask, defaulting the prompt itself to "No" (don't keep, i.e.
+    # remove) so pressing Enter matches the stated default.
+    if remove_image is None:
+        remove_image = True if assume_yes else not click.confirm(
+            "Keep the container image(s) instead of removing them?", default=False,
+        )
+
     try:
         result = uninstall_ops.uninstall_everything(
             keep_data=keep_data, confirm_delete_data=confirm_delete,
             remove_runtime=remove_runtime, confirm_runtime=confirm_runtime,
+            remove_image=remove_image,
         )
     except lifecycle.LifecycleError as exc:
         _handle_lifecycle_error(exc)
     except uninstall_ops.UninstallError as exc:
         _fail(str(exc))
 
-    for name in result.instances_removed:
-        click.echo(f"  {name}: data {'kept' if result.data_kept[name] else 'deleted'}")
+    if remove_image:
+        for name in result.instances_removed:
+            line = f"  {name}: data {'kept' if result.data_kept[name] else 'deleted'}"
+            if result.image_removed.get(name):
+                line += ", image removed"
+            else:
+                reason = result.image_kept_reason.get(name)
+                line += f", image kept{f' ({reason})' if reason else ''}"
+            click.echo(line)
+    else:
+        for name in result.instances_removed:
+            click.echo(f"  {name}: data {'kept' if result.data_kept[name] else 'deleted'}, image kept")
 
     if result.runtime_removed:
         click.echo(f"Runtime removed: {result.runtime_removed}")

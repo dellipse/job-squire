@@ -264,6 +264,29 @@ def test_pull_image_uses_podman_binary():
     assert run.calls[0]["args"][0] == "podman"
 
 
+def test_remove_image_invokes_runtime_rmi():
+    run = fake_run()
+    compose.remove_image("docker", "ghcr.io/dellipse/job-squire:latest", run=run)
+    assert run.calls[0]["args"] == ("docker", "rmi", "ghcr.io/dellipse/job-squire:latest")
+
+
+def test_remove_image_uses_podman_binary():
+    run = fake_run()
+    compose.remove_image("podman", "ghcr.io/dellipse/job-squire:latest", run=run)
+    assert run.calls[0]["args"][0] == "podman"
+
+
+def test_remove_image_returns_nonzero_result_rather_than_raising_on_failure():
+    """A failed `rmi` (e.g. the image is still in use by something outside
+    job-squire's own registry) is reported back to the caller as a normal
+    CompletedProcess, not raised -- ops/lifecycle.py's remove_instance is
+    the one that decides whether that's fatal."""
+    run = fake_run(returncode=1, stderr="Error: image is in use")
+    result = compose.remove_image("docker", "ghcr.io/dellipse/job-squire:latest", run=run)
+    assert result.returncode == 1
+    assert "in use" in result.stderr
+
+
 @pytest.mark.parametrize("version,expected", [
     ("latest", "ghcr.io/dellipse/job-squire:latest"),
     ("0.7.0", "ghcr.io/dellipse/job-squire:0.7.0"),

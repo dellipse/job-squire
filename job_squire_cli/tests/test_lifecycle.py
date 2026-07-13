@@ -77,6 +77,8 @@ class FakeRuntime:
         self.fail_projects: set[str] = set()
         self.fail_pulls: set[str] = set()
         self.fail_stops: set[str] = set()
+        self.fail_rmi: set[str] = set()
+        self.removed_images: list[str] = []
         self.calls: list[tuple] = []
 
     def run(self, args, **kwargs):
@@ -90,6 +92,13 @@ class FakeRuntime:
             image = args[2]
             if image in self.fail_pulls:
                 return SimpleNamespace(returncode=1, stdout="", stderr=f"error pulling {image}")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        if len(args) == 3 and args[1] == "rmi":
+            image = args[2]
+            if image in self.fail_rmi:
+                return SimpleNamespace(returncode=1, stdout="", stderr=f"error removing {image}")
+            self.removed_images.append(image)
             return SimpleNamespace(returncode=0, stdout="", stderr="")
 
         if len(args) >= 2 and args[1] == "compose":
@@ -359,6 +368,100 @@ def test_remove_instance_with_already_missing_root_skips_compose_down(fake, data
     assert result.data_kept is True
     assert reg.get_instance("castelo") is None
     assert not any(call[-1] == "down" for call in fake.calls)
+
+
+# ── remove: --remove-image (opt-in image cleanup) ────────────────────────
+
+
+def test_remove_leaves_image_alone_by_default(fake, data_root):
+    """The bug this guards against: `compose down` never removes the
+    image, and until `remove_image=True` is passed explicitly, job-squire
+    must never call `rmi` either -- the image stays exactly as `compose
+    down` alone would leave it."""
+    lc.create_instance(name="castelo", mode="local", data_root=data_root, **create_kwargs(fake))
+
+    result = lc.remove_instance("castelo", data_root=data_root, run=fake.run, keep_data=True)
+
+    assert result.image_removed is False
+    assert result.image_kept_reason is None
+    assert fake.removed_images == []
+    assert not any(call[1] == "rmi" for call in fake.calls if len(call) > 1)
+
+
+def test_remove_image_removes_an_unshared_image(fake, data_root):
+    lc.create_instance(name="castelo", mode="local", data_root=data_root, **create_kwargs(fake))
+
+    result = lc.remove_instance(
+        "castelo", data_root=data_root, run=fake.run, keep_data=True, remove_image=True,
+    )
+
+    assert result.image_removed is True
+    assert result.image == "ghcr.io/dellipse/job-squire:latest"
+    assert result.image_kept_reason is None
+    assert fake.removed_images == ["ghcr.io/dellipse/job-squire:latest"]
+
+
+def test_remove_image_keeps_an_image_still_used_by_another_instance(fake, data_root):
+    """Two instances created from the same default image (the common
+    case): removing one must not `rmi` the tag the other is still
+    running."""
+    lc.create_instance(name="one", mode="local", data_root=data_root, **create_kwargs(fake))
+    lc.create_instance(name="two", mode="local", data_root=data_root, **create_kwargs(fake))
+
+    result = lc.remove_instance(
+        "one", data_root=data_root, run=fake.run, keep_data=True, remove_image=True,
+    )
+
+    assert result.image_removed is False
+    assert result.image_kept_reason == "still used by another registered instance"
+    assert fake.removed_images == []
+    # "two" is still registered and untouched.
+    assert reg.get_instance("two") is not None
+
+
+def test_remove_image_removes_the_last_instance_sharing_it(fake, data_root):
+    """Once every other instance sharing the image is gone, removing the
+    final one does trigger `rmi`."""
+    lc.create_instance(name="one", mode="local", data_root=data_root, **create_kwargs(fake))
+    lc.create_instance(name="two", mode="local", data_root=data_root, **create_kwargs(fake))
+
+    lc.remove_instance("one", data_root=data_root, run=fake.run, keep_data=True, remove_image=True)
+    result = lc.remove_instance("two", data_root=data_root, run=fake.run, keep_data=True, remove_image=True)
+
+    assert result.image_removed is True
+    assert fake.removed_images == ["ghcr.io/dellipse/job-squire:latest"]
+
+
+def test_remove_image_reports_rmi_failure_without_raising(fake, data_root):
+    lc.create_instance(name="castelo", mode="local", data_root=data_root, **create_kwargs(fake))
+    fake.fail_rmi.add("ghcr.io/dellipse/job-squire:latest")
+
+    result = lc.remove_instance(
+        "castelo", data_root=data_root, run=fake.run, keep_data=True, remove_image=True,
+    )
+
+    assert result.image_removed is False
+    assert "error removing" in result.image_kept_reason
+    # Removal of the instance itself still succeeded.
+    assert reg.get_instance("castelo") is None
+
+
+def test_remove_image_skipped_when_root_already_missing(fake, data_root):
+    """Mirrors test_remove_instance_with_already_missing_root_skips_compose_down:
+    with no compose file to read, there's no image to remove either --
+    remove_instance must not raise trying to find one."""
+    lc.create_instance(name="castelo", mode="local", data_root=data_root, **create_kwargs(fake))
+    root = paths.instance_root("castelo", data_root)
+    shutil.rmtree(root)
+
+    result = lc.remove_instance(
+        "castelo", data_root=data_root, run=fake.run, keep_data=True, remove_image=True,
+    )
+
+    assert result.image is None
+    assert result.image_removed is False
+    assert "couldn't determine" in result.image_kept_reason
+    assert fake.removed_images == []
 
 
 # ── status / list: health and drift ──────────────────────────────────────

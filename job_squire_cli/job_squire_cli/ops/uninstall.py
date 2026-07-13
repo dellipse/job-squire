@@ -21,7 +21,18 @@ its own opt-out so nothing is destroyed silently:
      (one call per instance) -- same keep-or-delete-data prompt and same
      safe "keep by default" fallback as `job-squire remove` uses for a
      single instance, so uninstalling everything never silently destroys a
-     job search's history any more than removing one instance would.
+     job search's history any more than removing one instance would. Each
+     call also takes the same `remove_image` flag `remove_instance` does --
+     `compose down` alone never removes the container image it was
+     running. `uninstall_everything` itself defaults this to False (an
+     opt-in library default, matching `remove_instance`'s own); it's the
+     `job-squire uninstall` *command* (ops/commands.py) that flips the
+     operator-facing default to "remove," on the reasoning that an
+     uninstall is normally a full teardown and `remove`'s per-instance
+     caution doesn't carry over. The command resolves its own default
+     before calling this function, prompting "Keep the image(s)?"
+     (defaulting that prompt to No) when neither `--remove-image` nor
+     `--keep-image` was given.
   2. The container runtime (Podman/OrbStack/Docker Desktop) -- but *only*
      if `ops/runtime.py` recorded that job-squire itself installed it
      (`runtime.json`'s `source == "installed"`), and only when the operator
@@ -46,7 +57,7 @@ import re
 import shutil
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
@@ -263,6 +274,8 @@ class UninstallResult:
     runtime_removed: str | None
     cli_removed: Path | None
     rc_files_updated: list[Path]
+    image_removed: dict[str, bool] = field(default_factory=dict)
+    image_kept_reason: dict[str, str | None] = field(default_factory=dict)
 
 
 def _default_rmtree(path: Path) -> None:
@@ -275,6 +288,7 @@ def uninstall_everything(
     confirm_delete_data: Confirm | None = None,
     remove_runtime: bool = False,
     confirm_runtime: Confirm | None = None,
+    remove_image: bool = False,
     run: Runner = subprocess.run,
     system: str | None = None,
     venv_dir: Path | None = None,
@@ -287,18 +301,34 @@ def uninstall_everything(
     own venv -- and is only overridable for tests; there is deliberately no
     way for an operator to point this at an arbitrary directory from the
     command line, since a wrong answer there would delete the wrong thing.
+
+    `remove_image` (opt-in, default False) is forwarded to each instance's
+    own `remove_instance` call unchanged, in registry order. Because each
+    call re-checks "is any *still-registered* instance using this image"
+    (ops/lifecycle.py's `_image_still_in_use`) against whatever's left in
+    the registry at that moment, instances sharing the default `:latest`
+    tag work out correctly without any special-casing here: the image is
+    kept while a sibling still needs it, and only the last instance
+    referencing it actually triggers `rmi`.
     """
     system = system or platform.system()
 
     instances_removed: list[str] = []
     data_kept: dict[str, bool] = {}
+    image_removed: dict[str, bool] = {}
+    image_kept_reason: dict[str, str | None] = {}
     for instance in list_instances():
         try:
-            result = remove_instance(instance.name, run=run, keep_data=keep_data, confirm_delete=confirm_delete_data)
+            result = remove_instance(
+                instance.name, run=run, keep_data=keep_data, confirm_delete=confirm_delete_data,
+                remove_image=remove_image,
+            )
         except LifecycleError:
             raise
         instances_removed.append(result.name)
         data_kept[result.name] = result.data_kept
+        image_removed[result.name] = result.image_removed
+        image_kept_reason[result.name] = result.image_kept_reason
 
     runtime_removed: str | None = None
     if remove_runtime:
@@ -342,6 +372,8 @@ def uninstall_everything(
         runtime_removed=runtime_removed,
         cli_removed=cli_removed,
         rc_files_updated=rc_files_updated,
+        image_removed=image_removed,
+        image_kept_reason=image_kept_reason,
     )
 
 

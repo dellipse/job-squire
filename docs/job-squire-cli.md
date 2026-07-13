@@ -403,14 +403,32 @@ data directory; if nothing asks (no `confirm_delete`, no explicit
 that removing an instance must never silently destroy someone's
 job-search history.
 
+**`compose down` never removes the image it was running -- `remove`
+leaves it alone by default; `uninstall` removes it by default.**
+`docker/podman compose down` only tears down the container and network;
+the pulled image is left on disk exactly as before. `job-squire remove
+NAME --remove-image` opts into cleaning that up too: after the container
+is down, `_image_still_in_use` checks every *other* currently-registered
+instance's own compose file for the same image ref before calling `rmi`,
+so a shared `ghcr.io/dellipse/job-squire:latest` tag (the default every
+`create`-made instance gets unless `--image` overrides it) is never
+pulled out from under a sibling instance still running it -- it's only
+removed once the last instance referencing it is gone. A failed `rmi`
+(e.g. something outside job-squire's own registry is still using the
+image) is reported, not raised, so it never blocks the rest of the
+removal. `uninstall` uses the exact same machinery but flips the
+operator-facing default to "remove" -- see below.
+
 ## Uninstalling (`ops/uninstall.py`)
 
 ```
-job-squire uninstall                          # prompts per instance, and before touching anything else
+job-squire uninstall                          # prompts: uninstall? then keep the image(s)? (default: remove)
 job-squire uninstall --keep-data              # force-keep every instance's data directory
 job-squire uninstall --delete-data            # force-delete every instance's data directory
 job-squire uninstall --remove-runtime         # also remove the container runtime, if job-squire installed it
-job-squire uninstall --yes                    # no prompts: keeps data, leaves the runtime alone
+job-squire uninstall --remove-image           # skip the keep-image prompt; remove (this is the default anyway)
+job-squire uninstall --keep-image             # skip the keep-image prompt; leave every image in place
+job-squire uninstall --yes                    # no prompts: keeps data, removes images, leaves the runtime alone
 ```
 
 Not part of the original C1-C12 set (`docs/PROMPTS-deployment-cli.md`) --
@@ -425,8 +443,19 @@ other things a full setup can leave behind:
 1. **Every registered instance**, via the exact same `remove_instance`
    (one call per instance) `remove` itself uses -- the same keep-or-
    delete-data prompt and the same safe keep-by-default fallback, so
-   uninstalling everything is never more destructive than removing one
-   instance at a time would be.
+   uninstalling everything is never more destructive to *data* than
+   removing one instance at a time would be. Image cleanup is the one
+   place `uninstall` is *more* aggressive than `remove` by default,
+   deliberately: an uninstall is normally a full teardown, so leaving
+   multi-hundred-MB images behind would surprise more people than it'd
+   protect. Without `--remove-image`/`--keep-image` on the command line,
+   `job-squire uninstall` asks "Keep the container image(s) instead of
+   removing them?" (default No -- Enter removes them); `--yes` skips
+   straight to that same default without asking. Either way the resolved
+   choice is forwarded to each instance's own `remove_instance` call
+   unchanged; instances are torn down in registry order, so a tag shared
+   across several instances is kept until the last one referencing it is
+   reached.
 2. **The container runtime** (Podman, OrbStack, or Docker Desktop) --
    opt-in only, via `--remove-runtime`, and even then only if
    `ops/runtime.py`'s `runtime.json` recorded `source: "installed"` (Prompt

@@ -21,6 +21,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from job_squire_cli.ops import compose
 from job_squire_cli.ops import registry as reg
 from job_squire_cli.ops import runtime as rt
 from job_squire_cli.ops import uninstall as un
@@ -369,3 +370,66 @@ def test_uninstall_everything_result_reports_data_kept_per_instance(tmp_config_d
     assert result.data_kept == {"a": False, "b": True}
     assert not a_dir.exists()
     assert b_dir.exists()
+
+
+# ── uninstall_everything: --remove-image opt-in ──────────────────────────
+
+
+def _register_with_image(name, root, image=compose.DEFAULT_IMAGE):
+    """Like _register, but with a real compose file so read_image has
+    something to find -- needed for the remove_image checks, which
+    _register's bare directory doesn't support."""
+    root.mkdir(parents=True, exist_ok=True)
+    compose.write_compose_files(
+        root, container_name=f"job-squire-{name}", image=image, loopback_only=True,
+        app_port=8080, mcp_port=9000,
+    )
+    _register(name, root)
+
+
+def test_uninstall_everything_leaves_images_alone_without_the_flag(tmp_config_dir, tmp_path):
+    root = tmp_path / "one"
+    _register_with_image("one", root)
+
+    run = fake_run(ok_prefixes=[("docker", "compose")])
+    result = un.uninstall_everything(keep_data=True, run=run, venv_dir=tmp_path / "not-a-venv")
+
+    assert result.image_removed == {"one": False}
+    assert not any(call[1] == "rmi" for call in run.calls if len(call) > 1)
+
+
+def test_uninstall_everything_removes_images_once_unshared(tmp_config_dir, tmp_path):
+    root = tmp_path / "one"
+    _register_with_image("one", root)
+
+    run = fake_run(ok_prefixes=[("docker", "compose"), ("docker", "rmi")])
+    result = un.uninstall_everything(
+        keep_data=True, remove_image=True, run=run, venv_dir=tmp_path / "not-a-venv",
+    )
+
+    assert result.image_removed == {"one": True}
+    assert result.image_kept_reason == {"one": None}
+    assert any(call[:2] == ("docker", "rmi") for call in run.calls)
+
+
+def test_uninstall_everything_keeps_a_shared_image_for_the_first_instance_then_removes_it_for_the_last(
+    tmp_config_dir, tmp_path,
+):
+    """Two instances sharing the default `:latest` tag -- uninstall_everything
+    tears them down in registry order, so the first removal must find the
+    image still in use and skip `rmi`, while the second (now the only one
+    left) actually removes it."""
+    one_root, two_root = tmp_path / "one", tmp_path / "two"
+    _register_with_image("one", one_root)
+    _register_with_image("two", two_root)
+
+    run = fake_run(ok_prefixes=[("docker", "compose"), ("docker", "rmi")])
+    result = un.uninstall_everything(
+        keep_data=True, remove_image=True, run=run, venv_dir=tmp_path / "not-a-venv",
+    )
+
+    assert result.image_removed == {"one": False, "two": True}
+    assert result.image_kept_reason["one"] == "still used by another registered instance"
+    assert result.image_kept_reason["two"] is None
+    rmi_calls = [call for call in run.calls if call[:2] == ("docker", "rmi")]
+    assert len(rmi_calls) == 1

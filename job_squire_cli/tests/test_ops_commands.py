@@ -122,6 +122,50 @@ def test_remove_reports_not_found_cleanly(runner):
     assert "No instance named 'ghost'" in result.output
 
 
+def test_remove_without_remove_image_flag_never_mentions_image(runner, monkeypatch):
+    """Default behavior (no --remove-image): the summary says nothing about
+    the image at all, matching what plain `compose down` has always done."""
+    monkeypatch.setattr(
+        lc, "remove_instance",
+        lambda name, **kwargs: lc.RemoveResult(name=name, data_dir="/data/castelo", data_kept=True),
+    )
+    result = runner.invoke(main, ["remove", "castelo", "--yes"])
+    assert result.exit_code == 0
+    assert "image" not in result.output.lower()
+
+
+def test_remove_image_flag_reports_when_image_was_removed(runner, monkeypatch):
+    captured = {}
+
+    def fake_remove_instance(name, **kwargs):
+        captured.update(kwargs)
+        return lc.RemoveResult(
+            name=name, data_dir="/data/castelo", data_kept=True,
+            image="ghcr.io/dellipse/job-squire:latest", image_removed=True, image_kept_reason=None,
+        )
+
+    monkeypatch.setattr(lc, "remove_instance", fake_remove_instance)
+    result = runner.invoke(main, ["remove", "castelo", "--yes", "--remove-image"])
+    assert result.exit_code == 0
+    assert captured["remove_image"] is True
+    assert "Image removed: ghcr.io/dellipse/job-squire:latest" in result.output
+
+
+def test_remove_image_flag_reports_the_kept_reason_when_shared(runner, monkeypatch):
+    monkeypatch.setattr(
+        lc, "remove_instance",
+        lambda name, **kwargs: lc.RemoveResult(
+            name=name, data_dir="/data/castelo", data_kept=True,
+            image="ghcr.io/dellipse/job-squire:latest", image_removed=False,
+            image_kept_reason="still used by another registered instance",
+        ),
+    )
+    result = runner.invoke(main, ["remove", "castelo", "--yes", "--remove-image"])
+    assert result.exit_code == 0
+    assert "Image kept (ghcr.io/dellipse/job-squire:latest): still used by another registered instance" \
+        in result.output
+
+
 # ── uninstall ─────────────────────────────────────────────────────────────
 
 
@@ -205,6 +249,9 @@ def test_uninstall_without_yes_declines_on_explicit_no(runner, monkeypatch):
 
 
 def test_uninstall_without_yes_proceeds_when_confirmed(runner, monkeypatch):
+    """Two prompts now stack without --yes: the top-level "Uninstall
+    job-squire?" confirmation, then "Keep the container image(s)...?" --
+    the second line of input answers that one (empty = its default, No)."""
     from job_squire_cli.ops import uninstall as un
     from job_squire_cli.ops import commands as cmds
     monkeypatch.setattr(
@@ -214,7 +261,7 @@ def test_uninstall_without_yes_proceeds_when_confirmed(runner, monkeypatch):
         ),
     )
 
-    result = runner.invoke(main, ["uninstall"], input="y\n")
+    result = runner.invoke(main, ["uninstall"], input="y\n\n")
     assert result.exit_code == 0
     assert "Aborted" not in result.output
 
@@ -226,6 +273,159 @@ def test_uninstall_yes_flag_skips_the_confirmation_prompt(runner):
     result = runner.invoke(main, ["uninstall", "--yes"])
     assert result.exit_code == 0
     assert "Uninstall job-squire?" not in result.output
+
+
+# ── uninstall: image removal defaults to on (unlike `remove`) ────────────
+
+
+def _fake_uninstall_result(**overrides):
+    from job_squire_cli.ops import uninstall as un
+    defaults = dict(
+        instances_removed=["castelo"], data_kept={"castelo": True},
+        runtime_removed=None, cli_removed=None, rc_files_updated=[],
+        image_removed={"castelo": False}, image_kept_reason={"castelo": None},
+    )
+    defaults.update(overrides)
+    return un.UninstallResult(**defaults)
+
+
+def test_uninstall_yes_flag_defaults_to_removing_the_image_without_prompting(runner, monkeypatch, tmp_path):
+    reg.add_instance(
+        name="castelo", mode="local", runtime="docker", data_dir=str(tmp_path),
+        public_url="http://localhost:8080", app_port=8080, mcp_port=9000,
+    )
+    captured = {}
+
+    def fake_uninstall_everything(**kwargs):
+        captured.update(kwargs)
+        return _fake_uninstall_result(image_removed={"castelo": True})
+
+    from job_squire_cli.ops import commands as cmds
+    monkeypatch.setattr(cmds.uninstall_ops, "uninstall_everything", fake_uninstall_everything)
+
+    result = runner.invoke(main, ["uninstall", "--yes"])
+    assert result.exit_code == 0
+    assert captured["remove_image"] is True
+    assert "Keep the container image" not in result.output  # --yes never prompts
+    assert "castelo: data kept, image removed" in result.output
+
+
+def test_uninstall_without_yes_prompts_to_keep_image_defaulting_to_no(runner, monkeypatch, tmp_path):
+    """Pressing Enter at the keep-image prompt (its default, No) must still
+    result in removal -- the prompt asks whether to *keep* the image, and
+    "No" to that means remove it, matching --remove-image being the
+    overall default for uninstall."""
+    reg.add_instance(
+        name="castelo", mode="local", runtime="docker", data_dir=str(tmp_path),
+        public_url="http://localhost:8080", app_port=8080, mcp_port=9000,
+    )
+    captured = {}
+
+    def fake_uninstall_everything(**kwargs):
+        captured.update(kwargs)
+        return _fake_uninstall_result(image_removed={"castelo": True})
+
+    from job_squire_cli.ops import commands as cmds
+    monkeypatch.setattr(cmds.uninstall_ops, "uninstall_everything", fake_uninstall_everything)
+
+    result = runner.invoke(main, ["uninstall"], input="y\n\n")
+    assert result.exit_code == 0
+    assert "Keep the container image" in result.output
+    assert captured["remove_image"] is True
+    assert "castelo: data kept, image removed" in result.output
+
+
+def test_uninstall_without_yes_keeps_the_image_when_answered_yes(runner, monkeypatch, tmp_path):
+    reg.add_instance(
+        name="castelo", mode="local", runtime="docker", data_dir=str(tmp_path),
+        public_url="http://localhost:8080", app_port=8080, mcp_port=9000,
+    )
+    captured = {}
+
+    def fake_uninstall_everything(**kwargs):
+        captured.update(kwargs)
+        return _fake_uninstall_result()  # image_removed False for castelo
+
+    from job_squire_cli.ops import commands as cmds
+    monkeypatch.setattr(cmds.uninstall_ops, "uninstall_everything", fake_uninstall_everything)
+
+    result = runner.invoke(main, ["uninstall"], input="y\ny\n")
+    assert result.exit_code == 0
+    assert captured["remove_image"] is False
+    assert "castelo: data kept, image kept" in result.output
+
+
+def test_uninstall_explicit_remove_image_flag_skips_the_keep_image_prompt(runner, monkeypatch, tmp_path):
+    reg.add_instance(
+        name="castelo", mode="local", runtime="docker", data_dir=str(tmp_path),
+        public_url="http://localhost:8080", app_port=8080, mcp_port=9000,
+    )
+    captured = {}
+
+    def fake_uninstall_everything(**kwargs):
+        captured.update(kwargs)
+        return _fake_uninstall_result(image_removed={"castelo": True})
+
+    from job_squire_cli.ops import commands as cmds
+    monkeypatch.setattr(cmds.uninstall_ops, "uninstall_everything", fake_uninstall_everything)
+
+    # Only one line of input (for the top-level confirm) -- if the
+    # keep-image prompt fired anyway, this would hit EOF and abort.
+    result = runner.invoke(main, ["uninstall", "--remove-image"], input="y\n")
+    assert result.exit_code == 0
+    assert "Keep the container image" not in result.output
+    assert captured["remove_image"] is True
+
+
+def test_uninstall_explicit_keep_image_flag_skips_the_keep_image_prompt(runner, monkeypatch, tmp_path):
+    reg.add_instance(
+        name="castelo", mode="local", runtime="docker", data_dir=str(tmp_path),
+        public_url="http://localhost:8080", app_port=8080, mcp_port=9000,
+    )
+    captured = {}
+
+    def fake_uninstall_everything(**kwargs):
+        captured.update(kwargs)
+        return _fake_uninstall_result()
+
+    from job_squire_cli.ops import commands as cmds
+    monkeypatch.setattr(cmds.uninstall_ops, "uninstall_everything", fake_uninstall_everything)
+
+    result = runner.invoke(main, ["uninstall", "--keep-image"], input="y\n")
+    assert result.exit_code == 0
+    assert "Keep the container image" not in result.output
+    assert captured["remove_image"] is False
+    assert "castelo: data kept, image kept" in result.output
+
+
+def test_uninstall_reports_kept_reason_for_a_shared_image_even_though_removal_is_the_default(
+    runner, monkeypatch, tmp_path,
+):
+    reg.add_instance(
+        name="one", mode="local", runtime="docker", data_dir=str(tmp_path / "one"),
+        public_url="http://localhost:8080", app_port=8080, mcp_port=9000,
+    )
+    reg.add_instance(
+        name="two", mode="local", runtime="docker", data_dir=str(tmp_path / "two"),
+        public_url="http://localhost:8081", app_port=8081, mcp_port=9001,
+    )
+
+    def fake_uninstall_everything(**kwargs):
+        from job_squire_cli.ops import uninstall as un
+        return un.UninstallResult(
+            instances_removed=["one", "two"], data_kept={"one": True, "two": True},
+            runtime_removed=None, cli_removed=None, rc_files_updated=[],
+            image_removed={"one": False, "two": True},
+            image_kept_reason={"one": "still used by another registered instance", "two": None},
+        )
+
+    from job_squire_cli.ops import commands as cmds
+    monkeypatch.setattr(cmds.uninstall_ops, "uninstall_everything", fake_uninstall_everything)
+
+    result = runner.invoke(main, ["uninstall", "--yes"])
+    assert result.exit_code == 0
+    assert "one: data kept, image kept (still used by another registered instance)" in result.output
+    assert "two: data kept, image removed" in result.output
 
 
 def test_uninstall_reports_when_no_path_entry_was_found_despite_cli_removal(runner, monkeypatch, tmp_path):

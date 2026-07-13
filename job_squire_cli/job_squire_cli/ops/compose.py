@@ -390,6 +390,26 @@ def pull_image(runtime: str, image: str, *, run: Runner = subprocess.run,
         raise ComposeError(f"Failed to pull {image}: {exc}") from exc
 
 
+def remove_image(runtime: str, image: str, *, run: Runner = subprocess.run,
+                  timeout: float = 60.0) -> "subprocess.CompletedProcess[str]":
+    """`docker/podman rmi <image>` directly. `compose down` (what
+    `remove`/`uninstall` already run) never removes the image itself, only
+    the container and network -- this is the only place in the CLI that
+    calls `rmi`. Only ever invoked by a caller (ops/lifecycle.py's
+    remove_instance/uninstall_everything) that has already confirmed no
+    *other* registered instance's compose file still references this
+    image, so a shared `:latest` tag used by a sibling instance is never
+    pulled out from under it. A nonzero exit here (e.g. something outside
+    job-squire's own registry is still using the image) is returned for
+    the caller to report, not raised -- a stubborn image should never
+    block the rest of a remove/uninstall."""
+    argv = [runtime_binary(runtime), "rmi", image]
+    try:
+        return run(argv, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ComposeError(f"Failed to remove image {image!r}: {exc}") from exc
+
+
 # ── Version movement (update / rollback, Prompt C7) ─────────────────────
 
 _IMAGE_LINE_RE = re.compile(r"^(\s*image:\s*)(\S+)\s*$", re.MULTILINE)
