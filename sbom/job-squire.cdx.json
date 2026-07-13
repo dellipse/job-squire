@@ -3610,7 +3610,7 @@
     }
   ],
   "metadata": {
-    "timestamp": "2026-07-12T22:56:15.236336+00:00",
+    "timestamp": "2026-07-13T01:14:56.403776+00:00",
     "tools": {
       "components": [
         {
@@ -3717,7 +3717,7 @@
       "bom-ref": "root-component",
       "type": "application",
       "name": "job-squire",
-      "version": "0.7.0",
+      "version": "0.7.1",
       "description": "Self-hosted, two-user job-search companion: automates job discovery, tracks applications through a hiring funnel, and integrates with Claude as an AI coach via MCP.",
       "licenses": [
         {
@@ -3734,7 +3734,7 @@
       ]
     }
   },
-  "serialNumber": "urn:uuid:d5f84c40-2ca8-4815-a746-2c5c9e5afa0b",
+  "serialNumber": "urn:uuid:04401bc8-4d51-433e-91a3-6997b215825c",
   "version": 1,
   "$schema": "http://cyclonedx.org/schema/bom-1.6.schema.json",
   "bomFormat": "CycloneDX",
