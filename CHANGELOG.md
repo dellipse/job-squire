@@ -6,6 +6,51 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows the `VERSION` file at the repo root, displayed in the app
 footer as `<VERSION>-<build-sha>`.
 
+## [0.7.5] - 2026-07-12
+
+### Fixed
+
+- Settings tabs (`app/static/app.js`) ignored the URL hash entirely and
+  always restored whichever tab was last saved in `localStorage` — so a
+  link or bookmark to e.g. `#tab-claude` landed on whatever tab you'd
+  last had open, not the AI tab the fragment names. The hash now takes
+  priority on load, is kept in sync as you switch tabs, and is followed
+  on `hashchange` (back/forward).
+- Several settings cards, including AI → Providers, referenced theme
+  variables (`--surface`, `--surface-alt`, `--border`, `--text-muted`,
+  `--danger`, `--success`, etc.) that were never defined in `style.css`,
+  so their hardcoded `var(..., #fallback)` colors always won regardless
+  of light/dark mode. Defined all of them as aliases onto the existing
+  `--panel`/`--line`/`--muted`/`--red`/`--green` tokens for both themes.
+- The Muse's API key field showed "(optional)" twice — once baked into
+  the field label in `app/providers.py`, once added again generically by
+  the template based on `required: False`.
+- Getting Started → "Job boards": each keyless-provider checkbox
+  auto-submitted its own form independently, so checking several in a
+  row could race against each other's page reload and silently drop a
+  change. They now save together via one form and an explicit Save
+  button (`main.settings_providers_keyless_save`).
+- Getting Started → "First search" required a manual page refresh to
+  see whether the background search had finished. The page now polls
+  itself every 5s while a `SearchRun` is in the `running` state, driven
+  by a `data-poll` attribute the server sets from actual run status.
+- Settings → Sources → "Pull now" (`settings_provider_pull`) saved new
+  jobs but never created a `SearchRun` row, so a pull that found results
+  never showed up in Settings → History. It now logs a run the same way
+  a scheduled/full search does.
+- Fit scores never got refreshed after a candidate profile edit —
+  `run_auto_triage()` only scores jobs with no score yet, by design, so
+  it silently skips everything already scored. Added a "Rescore all
+  Saved jobs" action (Candidate Profile card, `/ai/run/rescore`) that
+  clears existing Saved-job scores and re-runs triage against the
+  current profile.
+- Getting Started → "Resume & documents" marked itself done the moment
+  the seeded placeholder `candidate_profile.md` existed on disk, even
+  completely unedited — a plain non-empty check doesn't distinguish the
+  shipped template from a real profile. It now requires the text to
+  actually differ from the bundled template, have most of its bracket
+  placeholders replaced, and clear a minimum length.
+
 ## [0.7.4] - 2026-07-12
 
 ### Added
