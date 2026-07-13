@@ -175,6 +175,79 @@ def test_uninstall_reports_runtime_removed_when_the_orchestration_says_so(runner
     assert "Runtime removed: podman" in result.output
 
 
+def test_uninstall_without_yes_prompts_and_defaults_to_not_uninstalling(runner, monkeypatch):
+    """Pressing Enter at the confirmation prompt (empty input) must decline
+    -- uninstall_everything must never run, and nothing should look like it
+    was torn down."""
+    called = []
+    from job_squire_cli.ops import commands as cmds
+    monkeypatch.setattr(
+        cmds.uninstall_ops, "uninstall_everything", lambda **kwargs: called.append(kwargs),
+    )
+
+    result = runner.invoke(main, ["uninstall"], input="\n")
+    assert result.exit_code == 0
+    assert called == []
+    assert "Aborted -- nothing was uninstalled" in result.output
+
+
+def test_uninstall_without_yes_declines_on_explicit_no(runner, monkeypatch):
+    called = []
+    from job_squire_cli.ops import commands as cmds
+    monkeypatch.setattr(
+        cmds.uninstall_ops, "uninstall_everything", lambda **kwargs: called.append(kwargs),
+    )
+
+    result = runner.invoke(main, ["uninstall"], input="n\n")
+    assert result.exit_code == 0
+    assert called == []
+    assert "Aborted -- nothing was uninstalled" in result.output
+
+
+def test_uninstall_without_yes_proceeds_when_confirmed(runner, monkeypatch):
+    from job_squire_cli.ops import uninstall as un
+    from job_squire_cli.ops import commands as cmds
+    monkeypatch.setattr(
+        cmds.uninstall_ops, "uninstall_everything",
+        lambda **kwargs: un.UninstallResult(
+            instances_removed=[], data_kept={}, runtime_removed=None, cli_removed=None, rc_files_updated=[],
+        ),
+    )
+
+    result = runner.invoke(main, ["uninstall"], input="y\n")
+    assert result.exit_code == 0
+    assert "Aborted" not in result.output
+
+
+def test_uninstall_yes_flag_skips_the_confirmation_prompt(runner):
+    """--yes must still bypass the top-level confirmation -- covered
+    implicitly by every other --yes test in this file actually reaching
+    uninstall_everything, but asserted directly here too."""
+    result = runner.invoke(main, ["uninstall", "--yes"])
+    assert result.exit_code == 0
+    assert "Uninstall job-squire?" not in result.output
+
+
+def test_uninstall_reports_when_no_path_entry_was_found_despite_cli_removal(runner, monkeypatch, tmp_path):
+    """cli_removed can be truthy while rc_files_updated is empty -- e.g. the
+    venv layout matched but no rc file actually carried job-squire's PATH
+    line. The summary must not claim a PATH change happened in that case."""
+    from job_squire_cli.ops import uninstall as un
+    from job_squire_cli.ops import commands as cmds
+    monkeypatch.setattr(
+        cmds.uninstall_ops, "uninstall_everything",
+        lambda **kwargs: un.UninstallResult(
+            instances_removed=[], data_kept={}, runtime_removed=None,
+            cli_removed=tmp_path / "job-squire", rc_files_updated=[],
+        ),
+    )
+
+    result = runner.invoke(main, ["uninstall", "--yes"])
+    assert result.exit_code == 0
+    assert "No PATH entry was found to remove" in result.output
+    assert "Open a new terminal" not in result.output
+
+
 def test_create_surfaces_guard_failure_lines_on_stderr(runner, monkeypatch, tmp_path):
     """Wires a fake create_instance that raises StartupGuardFailure, to
     check the click layer's error rendering in isolation from the real

@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows the `VERSION` file at the repo root, displayed in the app
 footer as `<VERSION>-<build-sha>`.
 
+## [Unreleased]
+
+### Fixed
+
+- `job-squire uninstall` tore down every registered instance (and, when the
+  venv layout matched, the CLI itself and its PATH entry) with no top-level
+  confirmation -- only per-instance data-keep and runtime-removal prompts
+  existed, so the destructive part of the command ran unconditionally the
+  moment it was invoked. It now asks "Uninstall job-squire?" first, defaulting
+  to "no"; `--yes` still bypasses it for scripted use, same as every other
+  prompt this command has.
+- `job-squire uninstall` could report `Open a new terminal for the PATH
+  change to take effect.` even when no PATH line was actually removed --
+  that message printed unconditionally whenever the CLI's own venv was
+  removed, regardless of whether `strip_path_line` found anything to strip.
+  It's now conditioned on an rc file actually having changed, with an
+  explicit "no PATH entry was found" message otherwise. Separately,
+  `strip_path_line`'s directory match (`bin_dir`, derived from
+  `sys.executable`) now falls back to comparing resolved paths, since
+  `sys.executable` can come back through a symlink's real target rather
+  than the literal path `bootstrap.sh` wrote -- the likely cause of the
+  silent no-op in the first place.
+
 ## [0.7.2] - 2026-07-12
 
 ### Fixed

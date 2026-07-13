@@ -42,6 +42,7 @@ its own opt-out so nothing is destroyed silently:
 from __future__ import annotations
 
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -183,17 +184,44 @@ def _candidate_rc_files(home: Path | None = None) -> list[Path]:
     return [home / ".zshrc", home / ".bashrc", home / ".profile"]
 
 
+_PATH_LINE_DIR_RE = re.compile(r'PATH="([^:"]+):')
+
+
 def strip_path_line(rc_file: Path, bin_dir: Path) -> bool:
     """Remove job-squire's PATH line -- and only that line -- from
     `rc_file`. Matches by *both* the bootstrap marker comment and
     `bin_dir`, so an unrelated PATH line an operator added by hand (even
     one naming the same directory, or carrying the same marker text for
     some other tool) is never touched. Returns True if the file changed.
+
+    The literal-string comparison is tried first; if it doesn't match, the
+    directory named in the line is parsed out and compared to `bin_dir`
+    after resolving both through `Path.resolve()`. This exists because
+    `bin_dir` here is always derived from `sys.executable` (the *running*
+    interpreter's own path), and on some platforms/Python builds that can
+    come back through a symlink's real target rather than the literal
+    `$HOME/.job-squire/cli/bin` string bootstrap.sh wrote -- a mismatch
+    that silently no-oped this function while `uninstall` still reported
+    the CLI itself as removed, leaving a stale PATH line with no error.
     """
     if not rc_file.is_file():
         return False
     lines = rc_file.read_text().splitlines(keepends=True)
-    kept = [ln for ln in lines if not (PATH_MARKER in ln and str(bin_dir) in ln)]
+
+    def _matches(ln: str) -> bool:
+        if PATH_MARKER not in ln:
+            return False
+        if str(bin_dir) in ln:
+            return True
+        match = _PATH_LINE_DIR_RE.search(ln)
+        if not match:
+            return False
+        try:
+            return Path(match.group(1)).resolve() == bin_dir.resolve()
+        except OSError:
+            return False
+
+    kept = [ln for ln in lines if not _matches(ln)]
     if len(kept) == len(lines):
         return False
     rc_file.write_text("".join(kept))

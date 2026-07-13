@@ -350,6 +350,19 @@ def uninstall(keep_data, remove_runtime, assume_yes):
     else:
         click.echo("No instances are registered.")
 
+    # This is the one prompt --yes can't skip past silently: it gates the
+    # whole operation, not just a single instance's data. Defaults to "no"
+    # -- pressing Enter must never uninstall anything -- and --yes is the
+    # explicit, opt-in way to bypass it for scripted use.
+    if not assume_yes and not click.confirm(
+        "Uninstall job-squire? This tears down every registered instance's container "
+        "(data is kept by default -- see --delete-data), and also removes the CLI itself "
+        "and its PATH entry if this looks like a bootstrap.sh/.ps1 install.",
+        default=False,
+    ):
+        click.echo("Aborted -- nothing was uninstalled.")
+        return
+
     confirm_delete = None if (keep_data is not None or assume_yes) else click.confirm
     confirm_runtime = None if assume_yes else click.confirm
 
@@ -377,7 +390,12 @@ def uninstall(keep_data, remove_runtime, assume_yes):
         click.echo(f"job-squire CLI removed from {result.cli_removed}")
         if result.rc_files_updated:
             click.echo("  PATH entry removed from: " + ", ".join(str(p) for p in result.rc_files_updated))
-        click.echo("Open a new terminal for the PATH change to take effect.")
+            click.echo("Open a new terminal for the PATH change to take effect.")
+        else:
+            click.echo(
+                "  No PATH entry was found to remove in ~/.zshrc, ~/.bashrc, or ~/.profile -- "
+                "if a job-squire line is still there, remove it by hand."
+            )
     else:
         click.echo(
             "job-squire's own files weren't removed automatically (this doesn't look like a "

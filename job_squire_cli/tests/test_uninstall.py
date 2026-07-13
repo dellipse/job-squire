@@ -190,6 +190,41 @@ def test_strip_path_line_missing_file_is_a_no_op(tmp_path):
     assert un.strip_path_line(tmp_path / "does-not-exist", tmp_path / "bin") is False
 
 
+def test_strip_path_line_matches_through_a_symlink_when_the_literal_path_differs(tmp_path):
+    """`bin_dir` is always derived from `sys.executable`, which can come
+    back through a symlink's real target on some platforms/Python builds
+    rather than the literal path bootstrap.sh wrote into the rc file. The
+    literal-string check alone would silently no-op here; the resolved-path
+    fallback must still catch it."""
+    real_bin_dir = tmp_path / "real" / ".job-squire" / "cli" / "bin"
+    real_bin_dir.mkdir(parents=True)
+    symlinked_bin_dir = tmp_path / "linked-bin"
+    symlinked_bin_dir.symlink_to(real_bin_dir)
+
+    rc_file = tmp_path / ".zshrc"
+    # bootstrap.sh wrote the *symlinked* path literally; sys.executable at
+    # uninstall time resolves to the real target instead.
+    rc_file.write_text(f'export PATH="{symlinked_bin_dir}:$PATH"  # added by job-squire bootstrap\n')
+
+    changed = un.strip_path_line(rc_file, real_bin_dir)
+    assert changed is True
+    assert "job-squire bootstrap" not in rc_file.read_text()
+
+
+def test_strip_path_line_resolved_fallback_still_requires_the_marker(tmp_path):
+    real_bin_dir = tmp_path / "real" / ".job-squire" / "cli" / "bin"
+    real_bin_dir.mkdir(parents=True)
+    symlinked_bin_dir = tmp_path / "linked-bin"
+    symlinked_bin_dir.symlink_to(real_bin_dir)
+
+    rc_file = tmp_path / ".profile"
+    rc_file.write_text(f'export PATH="{symlinked_bin_dir}:$PATH"  # added by hand, not bootstrap\n')
+
+    changed = un.strip_path_line(rc_file, real_bin_dir)
+    assert changed is False
+    assert "added by hand" in rc_file.read_text()
+
+
 # ── uninstall_everything: orchestration ─────────────────────────────────────
 
 
