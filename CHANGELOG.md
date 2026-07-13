@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows the `VERSION` file at the repo root, displayed in the app
 footer as `<VERSION>-<build-sha>`.
 
+## [0.7.2] - 2026-07-12
+
+### Fixed
+
+- `job-squire uninstall` aborted its entire run if any registered instance's
+  data root had already been deleted outside the CLI (a removed scratch/verify
+  directory, or a prior uninstall that died partway through) -- `compose_down`
+  ran with `cwd` set to that missing directory, and `subprocess.Popen` raises
+  `FileNotFoundError` before it can exec the runtime binary. `remove_instance`
+  now skips the compose teardown when the root is already gone and proceeds to
+  clear the registry entry, so one missing instance no longer blocks removal
+  of the rest.
+
 ## [0.7.1] - 2026-07-12
 
 ### Fixed
