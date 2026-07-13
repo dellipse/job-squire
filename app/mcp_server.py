@@ -324,7 +324,7 @@ def get_candidate_assets(kind: str = "") -> list:
 
 @_ptool()
 def add_jobs(jobs: list) -> dict:
-    """Add job postings Claude found (via its own Indeed/ZipRecruiter/Dice connectors) to the
+    """Add job postings Claude found (via its own Indeed/ZipRecruiter connectors) to the
     Job Squire as 'Saved', skipping duplicates.
 
     Each item should be an object with as many of these fields as available:

@@ -22,7 +22,7 @@ A self-hosted, two-user job-search assistant built with Flask + SQLite, packaged
 
 ## Features
 
-**Automated job search** runs on a configurable schedule (default: 8am, 1pm, 5pm weekdays in the search location's local time) across multiple job boards. Direct sources available in Settings → Sources — no separate setup beyond an API key: Dice (no key), Jobicy (no key), ZipRecruiter, Google Jobs via SerpApi (free tier, 250 searches/month), Adzuna, Jooble, USAJOBS, and The Muse. Google Jobs aggregates Indeed, LinkedIn, and hundreds of other boards in a single call. New postings are deduplicated and dropped into Job Squire as `Saved`; a digest email goes to the job seeker when anything new is found.
+**Automated job search** runs on a configurable schedule (default: 8am, 1pm, 5pm weekdays in the search location's local time) across multiple job boards. Direct sources available in Settings → Sources — no separate setup beyond an API key: The Muse (no key), Jobicy (no key), ZipRecruiter, Google Jobs via SerpApi (free tier, 250 searches/month), Adzuna, Jooble, and USAJOBS. Google Jobs aggregates Indeed, LinkedIn, and hundreds of other boards in a single call. New postings are deduplicated and dropped into Job Squire as `Saved`; a digest email goes to the job seeker when anything new is found.
 
 **Application tracking** follows a full hiring funnel:
 
@@ -224,7 +224,7 @@ job-squire/
     ai.py             AI logic: payload, API calls, auto-triage, follow-up drafts, weekly review
     mcp_server.py     Remote MCP server (OAuth 2.0/PKCE, 23 tools)
     worker.py         APScheduler process
-    providers.py      Job-board adapters: Dice, ZipRecruiter, Google Jobs (SerpApi), Adzuna, Jooble, USAJOBS, The Muse, Jobicy
+    providers.py      Job-board adapters: The Muse, Jobicy, ZipRecruiter, Google Jobs (SerpApi), Adzuna, Jooble, USAJOBS
     search.py         Search orchestration: dedup, ingest, cooldowns, email trigger
     notify.py         SMTP email: search digests, follow-up digests, weekly review
     prompts.py        Claude prompt templates for all five routines

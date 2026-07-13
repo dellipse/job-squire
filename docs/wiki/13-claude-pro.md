@@ -83,7 +83,7 @@ Claude reads your full pipeline and tells you what needs attention today: overdu
 
 Scores every unreviewed Saved job for fit against your profile on a 1-to-10 scale and saves the score and reasoning to each job record. After it runs, open your Jobs list and sort by fit score to see which leads are worth pursuing first.
 
-Job discovery happens automatically through **Settings → Sources** (Dice, ZipRecruiter, Google Jobs, and others run on the scheduler). Indeed is also available as a Claude connector — if you have it connected, Claude can search Indeed and push results in via `add_jobs` during a supplemental search session. This routine focuses on scoring the jobs that have already arrived.
+Job discovery happens automatically through **Settings → Sources** (The Muse, ZipRecruiter, Google Jobs, and others run on the scheduler). Indeed is also available as a Claude connector — if you have it connected, Claude can search Indeed and push results in via `add_jobs` during a supplemental search session. This routine focuses on scoring the jobs that have already arrived.
 
 ---
 

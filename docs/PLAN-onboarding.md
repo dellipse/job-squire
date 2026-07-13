@@ -37,7 +37,7 @@ analysis later in the flow needs it too.
    d. Certifications, recommendation letters → upload as `CandidateAsset`s.
    e. Everything textual lands in `candidate_profile.md` in `DATA_DIR` — the existing file the AI flows and MCP `get_candidate_profile` already read. **No new file store.**
 5. **Search targets** — job titles/queries, location ("City, ST"), radius, include-remote toggle (new — see schema), target salary (`SearchConfig.min_salary` + `KitConfig.fit_salary_floor`), max posting age.
-6. **Job board providers** — walk through `PROVIDERS` registry. Zero-key providers (Dice, The Muse, Jobicy) are pre-suggested so the first search always works; keyed providers (SerpApi, Adzuna, Jooble, ZipRecruiter, USAJOBS) get signup-link guidance from the existing registry metadata.
+6. **Job board providers** — walk through `PROVIDERS` registry. Zero-key providers (The Muse, Jobicy) are pre-suggested so the first search always works; keyed providers (SerpApi, Adzuna, Jooble, ZipRecruiter, USAJOBS) get signup-link guidance from the existing registry metadata.
 7. **First search & next steps** — trigger a search run, show results; if AI is enabled, run triage on the results; end with a "here's what to do next" summary (review scored jobs, apply, set follow-ups).
 
 Every step is individually skippable; skipped steps stay visible on the checklist until completed or the card is dismissed.

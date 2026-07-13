@@ -54,21 +54,6 @@ def _patch_request(monkeypatch, resp):
 # 1. Per-provider response parsing
 # ---------------------------------------------------------------------------
 
-DICE_RSS = """<?xml version="1.0" encoding="UTF-8"?>
-<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/">
-  <channel>
-    <item>
-      <title>Senior Java Developer</title>
-      <link>https://dice.example/job/1</link>
-      <guid>dice-guid-1</guid>
-      <dc:creator>Dice Co</dc:creator>
-      <description>Great &lt;b&gt;Java&lt;/b&gt; role</description>
-      <pubDate>Mon, 01 Jun 2026 00:00:00 GMT</pubDate>
-    </item>
-  </channel>
-</rss>"""
-
-
 PROVIDER_CASES = {
     "adzuna": (
         {"app_id": "a", "app_key": "b"},
@@ -154,13 +139,6 @@ PROVIDER_CASES = {
          "url": "https://jobicy.example/7", "location": "Remote",
          "salary": "$95,000 - $115,000", "date_posted": "2026-06-04"},
     ),
-    "dice": (
-        {},
-        FakeResp(text=DICE_RSS),
-        {"external_id": "dice-guid-1", "source": "dice",
-         "title": "Senior Java Developer", "company": "Dice Co",
-         "url": "https://dice.example/job/1", "date_posted": "2026-06-01"},
-    ),
 }
 
 
@@ -231,7 +209,7 @@ def test_missing_credentials_skips_provider(provider, creds, monkeypatch):
 
 
 def test_keyless_providers_need_no_credentials(monkeypatch):
-    """dice/jobicy/themuse declare no required fields, so empty creds are fine."""
+    """jobicy declares no required fields, so empty creds are fine."""
     _patch_request(monkeypatch, FakeResp(json_data={"jobs": []}))
     for provider in ("jobicy",):
         results, err = providers.search_provider(provider, {}, ["engineer"], CFG)
@@ -396,9 +374,9 @@ def test_ingest_dedup_across_runs(app_context):
 def test_ingest_dedup_company_title_without_external_id(app_context):
     from app.search import ingest_jobs
     items = [
-        {"title": "QA Analyst", "company": "GammaCT", "source": "dice"},
+        {"title": "QA Analyst", "company": "GammaCT", "source": "adzuna"},
         # Same company/title, different casing, no external_id -> normalized dup.
-        {"title": "qa analyst", "company": "gammact", "source": "dice"},
+        {"title": "qa analyst", "company": "gammact", "source": "adzuna"},
     ]
     created, skipped = ingest_jobs(items)
     assert len(created) == 1

@@ -124,9 +124,9 @@ relationship history is preserved.
 
 The Job Squire can acquire jobs two ways, both deduplicated through the same `ingest_jobs()` path:
 
-- **In-app search (Model B):** the worker calls job-board APIs (Dice, ZipRecruiter, Google Jobs
-  via SerpApi, Adzuna, Jooble, The Muse, USAJOBS, Jobicy) using keys stored on the Settings page
-  (Sources tab), on a schedule. Dice and Jobicy require no key. Calls are throttled between titles,
+- **In-app search (Model B):** the worker calls job-board APIs (The Muse, Jobicy, ZipRecruiter,
+  Google Jobs via SerpApi, Adzuna, Jooble, USAJOBS) using keys stored on the Settings page
+  (Sources tab), on a schedule. The Muse and Jobicy require no key. Calls are throttled between titles,
   retried with backoff on transient errors, and a provider that returns a 503 outage is put in a
   temporary cooldown (`DATA_DIR/provider_cooldowns.json`). Providers with a `max_runs_per_day`
   credential field (currently Google Jobs/SerpApi) also have daily run counts tracked in

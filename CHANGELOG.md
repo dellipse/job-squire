@@ -6,6 +6,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows the `VERSION` file at the repo root, displayed in the app
 footer as `<VERSION>-<build-sha>`.
 
+## [Unreleased]
+
+### Removed
+
+- Dice as a job source (`app/providers.py`). Dice's public RSS feed
+  (`dice.com/jobs/rss`) no longer returns RSS — it now serves the same HTML
+  search page as a normal browser visit regardless of query params, so the
+  adapter's XML parser was silently failing and returning zero results on
+  every run with no visible error. Dice's official Jobs API was shut down
+  around 2017, and there is currently no free/public replacement, so the
+  provider is removed rather than patched. `PROVIDERS`, the `search_dice`
+  adapter, RSS-parsing helpers used only by it, and all related UI copy,
+  docs, and tests were removed.
+
+### Changed
+
+- Job source ordering (`PROVIDERS` registry, and everywhere it drives
+  display order — Settings → Sources, Getting Started → Providers): The
+  Muse and Jobicy, the two remaining sources that need no API key, now
+  list first.
+- New installs now start with The Muse enabled by default, so the first
+  automated search isn't empty before any credentials are configured.
+  Jobicy is not used for this since it's remote-only and would silently
+  skip on-site/hybrid searches. Existing installs are unaffected — this
+  only seeds a row when none exists yet for that provider.
+- USAJOBS's description no longer references "the Vegas area" — Job Squire
+  is a general-audience self-hosted tool, not scoped to one metro.
+- UI/validation text that showed a hardcoded example location ("Henderson,
+  NV" placeholder on Getting Started, "Boise, ID" in the search-settings
+  validation message) now picks a random city from a top-50-US-cities list
+  (`app/sample_locations.py`) on each render instead.
+
 ## [0.7.6] - 2026-07-12
 
 ### Added

@@ -370,7 +370,7 @@ set_job_fit(job_id, score, reason)  [repeat per job]
 
 **Job search (supplemental via Claude):**
 
-Dice, ZipRecruiter, Google Jobs (SerpApi), and other sources are available as direct sources in
+The Muse, ZipRecruiter, Google Jobs (SerpApi), and other sources are available as direct sources in
 Settings → Sources and run automatically on the scheduler — no MCP call needed for standard
 discovery. The `add_jobs` tool remains available for Claude to push additional results when used
 through the "Search jobs in Claude" button.

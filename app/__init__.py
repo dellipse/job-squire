@@ -291,6 +291,7 @@ def _init_database(app, data_dir):
             _run_migrations()
             _seed_users(app)
             _seed_search_defaults()
+            _seed_default_providers()
             _seed_task_configs()
             _seed_anthropic_provider(app)
         finally:
@@ -416,7 +417,7 @@ def _run_migrations():
                 continue
             _required = [f["name"] for f in _meta["fields"] if f.get("required")]
             if not _required:
-                continue  # keyless provider (Indeed, Dice, Jobicy) — always OK
+                continue  # keyless provider (The Muse, Jobicy) — always OK
             _creds = {}
             if _pc.secret_blob:
                 try:
@@ -517,6 +518,23 @@ def _seed_search_defaults():
     cfg = SearchConfig(id=1, titles="", location="",
                        radius_miles=40, max_age_days=14, results_per_query=25, enabled=False)
     db.session.add(cfg)
+    db.session.commit()
+
+
+def _seed_default_providers():
+    """Turn on one keyless job board by default so a new install's first search
+    isn't empty even before any credentials are configured.
+
+    The Muse is used for this (not Jobicy) because Jobicy is remote-only
+    (REMOTE_ONLY_PROVIDERS) and would silently return nothing for anyone
+    searching on-site/hybrid roles. Only acts when no row exists yet for
+    "themuse", so it never overrides a user's own choice on an existing install.
+    """
+    from .models import ProviderCredential
+
+    if ProviderCredential.query.filter_by(provider="themuse").first():
+        return
+    db.session.add(ProviderCredential(provider="themuse", enabled=True))
     db.session.commit()
 
 

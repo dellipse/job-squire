@@ -110,7 +110,7 @@ so Claude acts through the connector:
   the current form fields via `app.js`.)
 - **Jobs list → "Search jobs in Claude"** → Claude runs a supplemental search using your saved
   targets and calls `add_jobs` to push finds back. Indeed has a published Claude connector, so
-  Claude can search it directly in this session and push results in via `add_jobs`. Dice,
+  Claude can search it directly in this session and push results in via `add_jobs`. The Muse,
   ZipRecruiter, Google Jobs/SerpApi, and others also run automatically on the scheduler via
   Settings → Sources.
 

@@ -171,14 +171,13 @@ source" to enable. Providers and their fields:
 
 | Provider | Fields | Sign up |
 |---|---|---|
-| Dice | No key required | https://www.dice.com/ |
+| The Muse | API Key (optional) | https://www.themuse.com/developers/api/v2 |
+| Jobicy | No key required | https://jobicy.com/ |
 | ZipRecruiter | API Key | https://www.ziprecruiter.com/partner |
 | Google Jobs (SerpApi) | API Key; Max runs/day; Max titles/run | https://serpapi.com/users/sign_up |
 | Adzuna | App ID, App Key | https://developer.adzuna.com/ |
 | Jooble | API Key | https://jooble.org/api/about |
-| The Muse | API Key (optional) | https://www.themuse.com/developers/api/v2 |
 | USAJOBS (federal) | Registered email, Authorization Key | https://developer.usajobs.gov/APIRequest/ |
-| Jobicy | No key required | https://jobicy.com/ |
 
 Google Jobs (SerpApi) aggregates Indeed, LinkedIn, ZipRecruiter, Workday, Greenhouse, and hundreds of other boards. The free SerpApi tier includes 250 searches/month; the **Max runs/day** and **Max titles/run** fields let you stay within that quota. A live monthly query estimate is shown in the Settings form. Per-provider daily run counts are persisted in `DATA_DIR/provider_daily_runs.json` and reset at UTC midnight.
 

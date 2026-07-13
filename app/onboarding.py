@@ -359,7 +359,9 @@ def step(step):
         ctx["resume_mcp_prompt"] = resume_builder_mcp_prompt(cname)
     elif step == "search":
         from .main import _singleton
+        from .sample_locations import random_sample_city
         ctx["search_cfg"] = _singleton(SearchConfig)
+        ctx["sample_city"] = random_sample_city()
     elif step == "providers":
         creds = {pc.provider: pc for pc in ProviderCredential.query.all()}
         keyless, keyed = [], []

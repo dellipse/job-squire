@@ -23,7 +23,7 @@ The goal is to run a search that is thorough, consistent, and hard to ghost — 
 
 ### Finding and tracking jobs
 
-- [Connecting Job Sources](wiki/03-job-sources.md) — Dice and Jobicy (no key required), ZipRecruiter, Google Jobs via SerpApi (free tier, broadest cross-board coverage), plus Adzuna, Jooble, The Muse, and USAJOBS; metro-specific coverage notes; how automatic searches run.
+- [Connecting Job Sources](wiki/03-job-sources.md) — The Muse and Jobicy (no key required), ZipRecruiter, Google Jobs via SerpApi (free tier, broadest cross-board coverage), plus Adzuna, Jooble, and USAJOBS; metro-specific coverage notes; how automatic searches run.
 - [Daily Workflow](wiki/04-daily-workflow.md) — applying, updating status, follow-up reminders, interview debriefs, attachments, CSV export.
 - [Recruiters and Staffing Agencies](wiki/05-recruiters.md) — tracking contacts, logging submissions, dashboard surfacing.
 

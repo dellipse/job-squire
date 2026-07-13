@@ -98,7 +98,7 @@ Provider adapters live in `app/providers.py`. To add one:
    `signup_url`, a short `note` shown in the UI, and a `fields` list (each
    field has `name`, `label`, `secret` (bool, encrypted at rest if `True`),
    `required` (bool), and optionally `input_type`/`placeholder`). Fields with no
-   credentials at all (e.g. Dice, Jobicy) use an empty `fields` list.
+   credentials at all (e.g. Jobicy) use an empty `fields` list.
 2. Write `search_<provider>(creds, title, cfg) -> list[dict]` following the
    existing adapters as a template. Each result dict should include the fields
    the rest of the app expects (`title`, `company`, `location`, `url`,

@@ -19,17 +19,27 @@ To run a manual Indeed search, open Claude and say something like:
 
 > Search Indeed for [job title] jobs near [city, ST] within [X] miles, using my job-squire connector's get_search_targets for my exact criteria. Push any new matches with add_jobs.
 
-The **Search jobs in Claude** button on **Settings → Search** generates a ready-to-use prompt that includes Indeed alongside ZipRecruiter, Dice, and Google Jobs.
+The **Search jobs in Claude** button on **Settings → Search** generates a ready-to-use prompt that includes Indeed alongside ZipRecruiter and Google Jobs.
 
 Indeed is not available in the automated scheduler (Settings → Sources) — it runs through Claude only.
 
 ---
 
-## Dice (no API key required)
+## The Muse (no API key required)
 
-Dice is a tech-focused board that uses a public RSS feed. No sign-up needed.
+Good for operations and company-side roles. Works without a key, but an optional key raises rate limits. Enabled by default on a new install.
 
-1. On the Sources tab, find **Dice**.
+1. On the Sources tab, find **The Muse**.
+2. Optional: get a key at https://www.themuse.com/developers/api/v2 and paste it into the field.
+3. Tick **Use this source** and click Save.
+
+## Jobicy (no API key required)
+
+Jobicy uses a free public JSON API. No sign-up needed.
+
+**Important limitation: Jobicy is remote-only.** Your location and radius settings have no effect — every result will show "Remote" as the location. Enable this source only if the candidate is open to remote work. It complements the other sources well for that segment.
+
+1. On the Sources tab, find **Jobicy**.
 2. Tick **Use this source** and click Save.
 
 ## ZipRecruiter (free partner key)
@@ -52,15 +62,6 @@ SerpApi's Google Jobs engine aggregates postings from Indeed, LinkedIn, ZipRecru
 
 **How credits are used:** each page of 10 results costs 1 credit. With the default 25 results per query setting, each title costs ~3 credits per run. With 3 job titles and 1 run per day on weekdays, that is about 60 credits per month — well within the free tier.
 
-## Jobicy (no API key required)
-
-Jobicy uses a free public JSON API. No sign-up needed.
-
-**Important limitation: Jobicy is remote-only.** Your location and radius settings have no effect — every result will show "Remote" as the location. Enable this source only if the candidate is open to remote work. It complements the other sources well for that segment.
-
-1. On the Sources tab, find **Jobicy**.
-2. Tick **Use this source** and click Save.
-
 ---
 
 ## Adzuna
@@ -78,13 +79,6 @@ Jooble aggregates from many boards.
 1. Go to https://jooble.org/api/about and request an API key (they email you one for free).
 2. Paste it into the **API Key** field, tick **Use this source**, and click Save.
 
-## The Muse (optional)
-
-Good for operations and company-side roles. Works without a key, but a key raises rate limits.
-
-1. Optional: get a key at https://www.themuse.com/developers/api/v2.
-2. Paste it into the field (or leave blank), tick **Use this source**, and click Save.
-
 ## USAJOBS (optional — federal roles)
 
 1. Go to https://developer.usajobs.gov/APIRequest/ and request a key. Provide an email; they send back an **Authorization Key**.
@@ -92,7 +86,7 @@ Good for operations and company-side roles. Works without a key, but a key raise
 
 ---
 
-> LinkedIn and Monster block automated tools and are not available as sources. Indeed is not available in the automated scheduler but is accessible through its published Claude connector (see the Indeed section above). Google Jobs (via SerpApi) also provides indirect coverage of Indeed and LinkedIn through Google's aggregated job index. The eight automated sources plus Indeed via Claude give broad US coverage across all roles and experience levels. No automated feed catches every posting, so it is still worth browsing those sites directly from time to time. Add jobs you find manually with **+ Add job**, or use the [bookmarklet](08-bookmarklet.md) to capture them in one click.
+> LinkedIn and Monster block automated tools and are not available as sources. Indeed is not available in the automated scheduler but is accessible through its published Claude connector (see the Indeed section above). Google Jobs (via SerpApi) also provides indirect coverage of Indeed and LinkedIn through Google's aggregated job index. The seven automated sources plus Indeed via Claude give broad US coverage across all roles and experience levels. No automated feed catches every posting, so it is still worth browsing those sites directly from time to time. Add jobs you find manually with **+ Add job**, or use the [bookmarklet](08-bookmarklet.md) to capture them in one click.
 
 ---
 

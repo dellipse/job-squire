@@ -21,7 +21,7 @@ Connect at least **Adzuna** and **Jooble**. Each needs a free API key from that 
 1. Go to https://jooble.org/api/about and request an API key (they email you one).
 2. Paste it into the Jooble **API Key** field, tick **Use this source**, and click Save.
 
-You can add ZipRecruiter, Google Jobs (SerpApi), Dice (no key), Jobicy (no key), USAJOBS, and The Muse later. See [Connecting Job Sources](03-job-sources.md) for all eight providers.
+You can add The Muse (no key), Jobicy (no key), ZipRecruiter, Google Jobs (SerpApi), and USAJOBS later. See [Connecting Job Sources](03-job-sources.md) for all seven providers.
 
 ## Step 3 — Set your search targets
 

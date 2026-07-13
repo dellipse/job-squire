@@ -78,7 +78,7 @@ You are my job-search assistant. Run the New Job Triage routine for {candidate_n
 
 PART 1 — SEARCH FOR NEW JOBS (run this first)
 
-Check whether you have access to any of these job-board connectors: Indeed, ZipRecruiter, Dice.
+Check whether you have access to any of these job-board connectors: Indeed, ZipRecruiter.
 For each one you have access to:
 1. Call get_search_targets() on my "{connector}" connector to get the target job titles, location, and search criteria.
 2. Search that job board for each title + location combination.
@@ -418,7 +418,7 @@ ROUTINE_DESCRIPTIONS = [
         "title": "New Job Triage",
         "icon": "🔍",
         "description": (
-            "Searches Indeed, ZipRecruiter, and Dice for new postings (if those connectors are "
+            "Searches Indeed and ZipRecruiter for new postings (if those connectors are "
             "set up), adds any new jobs to your Job Squire instance, then scores every unreviewed 'Saved' "
             "job for fit against your profile on a 1-10 scale. You open Job Squire and "
             "immediately know which leads are worth pursuing."

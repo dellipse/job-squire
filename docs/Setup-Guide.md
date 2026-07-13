@@ -133,8 +133,8 @@ For each job board you want to use:
 2. Paste the key into the field.
 3. Tick "Use this source" and save.
 
-Adzuna + Jooble is a good starting pair with solid coverage for most US metro markets. Dice and
-Jobicy need no key at all and are worth turning on regardless.
+Adzuna + Jooble is a good starting pair with solid coverage for most US metro markets. The Muse and
+Jobicy need no key at all and are worth turning on regardless (The Muse is on by default on a new install).
 
 **Email tab**
 

@@ -67,7 +67,7 @@
     </form>
     {% if mcp_configured and ai_cfg.connector_name %}
     {% set _cname = ai_cfg.connector_name %}
-    {% set search_prompt = "Use my job-search connectors (Indeed, ZipRecruiter, Dice, Google Jobs) to find current postings. First call the \"" ~ _cname ~ "\" connector's get_search_targets tool to get my exact titles, location, and criteria. Then search those connectors and collect matching jobs. For each new posting, call the \"" ~ _cname ~ "\" connector's add_jobs tool with an array of objects in this format: {\"title\": \"...\", \"company\": \"...\", \"location\": \"...\", \"url\": \"...\", \"salary\": \"...\", \"source\": \"<board name, e.g. indeed>\", \"external_id\": \"<board's job id>\", \"description\": \"...\"}. The tool returns how many were added vs. skipped as duplicates." %}
+    {% set search_prompt = "Use my job-search connectors (Indeed, ZipRecruiter, Google Jobs) to find current postings. First call the \"" ~ _cname ~ "\" connector's get_search_targets tool to get my exact titles, location, and criteria. Then search those connectors and collect matching jobs. For each new posting, call the \"" ~ _cname ~ "\" connector's add_jobs tool with an array of objects in this format: {\"title\": \"...\", \"company\": \"...\", \"location\": \"...\", \"url\": \"...\", \"salary\": \"...\", \"source\": \"<board name, e.g. indeed>\", \"external_id\": \"<board's job id>\", \"description\": \"...\"}. The tool returns how many were added vs. skipped as duplicates." %}
     <div class="mcp-info">
       <a class="btn btn-outline" target="_blank" rel="noopener noreferrer"
          href="https://claude.ai/new?q={{ search_prompt | urlencode }}">Search jobs in Claude ↗</a>
@@ -82,7 +82,7 @@
 <div id="tab-sources" class="tab-panel">
   <section class="card">
     <h2>Job sources</h2>
-    <p class="muted small">Dice uses a public RSS feed — no key needed, just enable it.
+    <p class="muted small">The Muse and Jobicy need no key — just enable them.
       ZipRecruiter, Google Jobs (SerpApi), Adzuna, and Jooble use free API keys from their respective providers.
       Google Jobs aggregates Indeed, LinkedIn, and hundreds of other boards in a single call — see its quota note below.
       Secrets are encrypted at rest; leave a secret field blank to keep the saved value.</p>
@@ -144,8 +144,8 @@
     <p class="muted small">Note: LinkedIn, Monster, and Indeed block direct automated access and are not
       available as standalone sources. Google Jobs (via SerpApi) pulls from Google's job index, which
       aggregates Indeed, LinkedIn, and hundreds of ATS boards indirectly — making it the highest-coverage
-      single source here. Dice uses a public RSS feed with no key required. ZipRecruiter requires a free
-      partner key. Together with Adzuna, Jooble, The Muse, and USAJOBS, these sources give broad US
+      single source here. The Muse and Jobicy need no key. ZipRecruiter requires a free
+      partner key. Together with Adzuna, Jooble, and USAJOBS, these sources give broad US
       coverage across all roles and experience levels.</p>
   </section>
 </div>

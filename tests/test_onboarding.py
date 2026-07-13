@@ -82,7 +82,7 @@ class TestChecklistDerivation:
                                       stored_name="x.pdf"))
         cfg = db.session.get(SearchConfig, 1)
         cfg.titles, cfg.location = "Ops Manager", "Henderson, NV"
-        db.session.add(ProviderCredential(provider="dice", enabled=True))
+        db.session.add(ProviderCredential(provider="themuse", enabled=True))
         db.session.add(SearchRun(status="ok"))
         db.session.commit()
 
@@ -283,7 +283,7 @@ class TestRemoteGate:
         cfg.enabled = True
         cfg.include_remote = include_remote
         db.session.add(ProviderCredential(provider="jobicy", enabled=True))
-        db.session.add(ProviderCredential(provider="dice", enabled=True))
+        db.session.add(ProviderCredential(provider="themuse", enabled=True))
         db.session.commit()
         called = []
 
@@ -300,7 +300,7 @@ class TestRemoteGate:
     def test_remote_only_board_skipped_when_off(self, clean_state, monkeypatch):
         called = self._run(monkeypatch, include_remote=False)
         assert "jobicy" not in called
-        assert "dice" in called
+        assert "themuse" in called
 
     def test_remote_only_board_runs_when_on(self, clean_state, monkeypatch):
         called = self._run(monkeypatch, include_remote=True)

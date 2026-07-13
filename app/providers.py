@@ -34,9 +34,7 @@ import os
 import random
 import re
 import time
-import xml.etree.ElementTree as ET
 from datetime import datetime
-from email.utils import parsedate_to_datetime as _rfc2822_parse
 
 import requests
 
@@ -95,12 +93,23 @@ def _request(method, url, **kwargs):
 REMOTE_ONLY_PROVIDERS = {"jobicy"}
 
 # UI metadata: what each provider needs and where to sign up.
+# The Muse and Jobicy are listed first since neither requires an API key —
+# they're the two sources a new install can search with immediately.
 PROVIDERS = {
-    "dice": {
-        "label": "Dice",
-        "signup_url": "https://www.dice.com/",
-        "note": "No API key required. Uses Dice's public RSS feed. "
-                "Tech-focused board — strong for IT, software, and engineering roles.",
+    "themuse": {
+        "label": "The Muse",
+        "signup_url": "https://www.themuse.com/developers/api/v2",
+        "note": "Free, API key optional. Filters by location; titles matched on this end.",
+        "fields": [
+            {"name": "api_key", "label": "API Key", "secret": True, "required": False},
+        ],
+    },
+    "jobicy": {
+        "label": "Jobicy",
+        "signup_url": "https://jobicy.com/",
+        "note": "No API key required. Free public JSON API. "
+                "Limitation: remote jobs only — location and radius settings are ignored. "
+                "Best as a supplement for candidates open to remote work.",
         "fields": [],
     },
     "ziprecruiter": {
@@ -145,30 +154,14 @@ PROVIDERS = {
             {"name": "key", "label": "API Key", "secret": True, "required": True},
         ],
     },
-    "themuse": {
-        "label": "The Muse",
-        "signup_url": "https://www.themuse.com/developers/api/v2",
-        "note": "Free, API key optional. Filters by location; titles matched on this end.",
-        "fields": [
-            {"name": "api_key", "label": "API Key", "secret": True, "required": False},
-        ],
-    },
     "usajobs": {
         "label": "USAJOBS (federal)",
         "signup_url": "https://developer.usajobs.gov/APIRequest/",
-        "note": "Free. Federal jobs only. Useful for government-adjacent roles in the Vegas area.",
+        "note": "Free. Federal jobs only. Useful for government-adjacent roles nationwide.",
         "fields": [
             {"name": "email", "label": "Registered email", "secret": False, "required": True},
             {"name": "api_key", "label": "Authorization Key", "secret": True, "required": True},
         ],
-    },
-    "jobicy": {
-        "label": "Jobicy",
-        "signup_url": "https://jobicy.com/",
-        "note": "No API key required. Free public JSON API. "
-                "Limitation: remote jobs only — location and radius settings are ignored. "
-                "Best as a supplement for candidates open to remote work.",
-        "fields": [],
     },
 }
 
@@ -342,28 +335,6 @@ def search_themuse(creds, titles, cfg):
     return out
 
 
-_RSS_UA = "Mozilla/5.0 (compatible; JobSquire/1.0; +https://github.com/dellipse/job-squire)"
-
-
-def _parse_rfc2822(date_str):
-    """Parse an RFC 2822 pubDate string to 'YYYY-MM-DD', or None."""
-    if not date_str:
-        return None
-    try:
-        return _rfc2822_parse(date_str.strip()).strftime("%Y-%m-%d")
-    except Exception:
-        return None
-
-
-def _rss_items(xml_text):
-    """Parse RSS XML text and return a list of <item> Elements."""
-    try:
-        root = ET.fromstring(xml_text)
-    except ET.ParseError:
-        return []
-    return root.findall(".//item")
-
-
 def _parse_relative_date(posted_at):
     """Convert SerpApi's relative 'posted_at' string to 'YYYY-MM-DD', or None.
 
@@ -490,45 +461,6 @@ def search_ziprecruiter(creds, title, cfg):
     return out
 
 
-def search_dice(creds, title, cfg):
-    """Search Dice via the public RSS feed (no API key required)."""
-    params = {
-        "q": title,
-        "countryCode": "US",
-        "location": cfg["location"],
-        "radius": cfg["radius_miles"],
-        "radiusUnit": "miles",
-        "pageSize": min(cfg.get("results_per_query", 25), 50),
-        "datePosted": str(cfg.get("max_age_days", 14)),
-    }
-    r = _request("GET", "https://www.dice.com/jobs/rss", params=params,
-                 headers={"User-Agent": _RSS_UA})
-    DC = "{http://purl.org/dc/elements/1.1/}"
-    out = []
-    for item in _rss_items(r.text):
-        link = (item.findtext("link") or "").strip()
-        guid = (item.findtext("guid") or link).strip()
-        raw = (item.findtext("title") or "").strip()
-        # Dice uses dc:creator for the company name.
-        company = (item.findtext(f"{DC}creator") or "").strip()
-        if not company:
-            parts = raw.split(" - ", 1)
-            if len(parts) == 2:
-                raw, company = parts[0].strip(), parts[1].strip()
-        out.append({
-            "external_id": guid or link,
-            "source": "dice",
-            "title": raw,
-            "company": company or "(see posting)",
-            "location": cfg["location"],
-            "url": link,
-            "salary": "",
-            "description": _clean(item.findtext("description") or ""),
-            "date_posted": _parse_rfc2822(item.findtext("pubDate")),
-        })
-    return out
-
-
 def search_jobicy(creds, title, cfg):
     """Search Jobicy via the free public JSON API (no API key required).
 
@@ -597,7 +529,6 @@ def search_provider(provider, creds, titles, cfg):
             "usajobs": search_usajobs,
             "ziprecruiter": search_ziprecruiter,
             "googlejobs": search_googlejobs,
-            "dice": search_dice,
             "jobicy": search_jobicy,
         }.get(provider)
         if not fn:

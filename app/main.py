@@ -174,7 +174,7 @@ def _claude_search_prompt():
     ai_cfg = db.session.get(AIConfig, 1)
     cname = (ai_cfg.connector_name if ai_cfg else None) or "job-squire"
     return (
-        f'Use my job-search connectors (Indeed, ZipRecruiter, Dice) to find current postings. '
+        f'Use my job-search connectors (Indeed, ZipRecruiter) to find current postings. '
         f'First call the "{cname}" connector\'s get_search_targets tool to get my exact titles, '
         f'location, and criteria. Then search those connectors and collect matching jobs. '
         f'For each new posting, call the "{cname}" connector\'s add_jobs tool with an array of '
@@ -3043,8 +3043,9 @@ def settings_search():
         # US-only: outside the US, timezones.py has no state table to key off of
         # anyway (see SCHEDULE_TZ), so it's just a plain non-empty location.
         if not parse_state(location):
+            from .sample_locations import random_sample_city
             flash("Location must be \"City, ST\" with a valid US state code, "
-                  "e.g. \"Boise, ID\". ZIP codes and street addresses are not "
+                  f"e.g. \"{random_sample_city()}\". ZIP codes and street addresses are not "
                   "supported by the job sources; use the radius to widen the area.",
                   "danger")
             return redirect(back)
