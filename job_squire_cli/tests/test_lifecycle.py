@@ -32,6 +32,7 @@ real per-user registry (XDG_CONFIG_HOME is redirected to a tmp_path, same
 as test_registry.py).
 """
 import json
+import shutil
 import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
@@ -338,6 +339,26 @@ def test_remove_explicit_keep_data_skips_the_prompt_entirely(fake, data_root):
         "castelo", data_root=data_root, run=fake.run, keep_data=False, confirm_delete=exploding_confirm,
     )
     assert result.data_kept is False
+
+
+def test_remove_instance_with_already_missing_root_skips_compose_down(fake, data_root):
+    """A registry entry can outlive its root directory -- e.g. someone rm
+    -rf'd a scratch/verify data_root, or a prior uninstall died partway
+    through. subprocess.Popen raises FileNotFoundError outright when `cwd`
+    doesn't exist, so there's nothing for `docker/podman compose down` to
+    do; remove_instance must not call it, and must still clear the
+    registry entry rather than blowing up (which would otherwise abort a
+    multi-instance `uninstall_everything` loop partway through)."""
+    lc.create_instance(name="castelo", mode="local", data_root=data_root, **create_kwargs(fake))
+    root = paths.instance_root("castelo", data_root)
+    shutil.rmtree(root)
+    assert not root.exists()
+
+    result = lc.remove_instance("castelo", data_root=data_root, run=fake.run, keep_data=True)
+
+    assert result.data_kept is True
+    assert reg.get_instance("castelo") is None
+    assert not any(call[-1] == "down" for call in fake.calls)
 
 
 # ── status / list: health and drift ──────────────────────────────────────

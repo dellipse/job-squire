@@ -491,7 +491,13 @@ def remove_instance(
     root = _instance_root(instance, data_root)
     container_name = derive_compose_project(instance.name)
 
-    compose.compose_down(instance.runtime, root, container_name, run=run)
+    # root.exists() is the same check `observe()` uses for data_dir_exists --
+    # a missing root means there's no compose file and nothing for the
+    # runtime to tear down (subprocess.Popen fails outright if `cwd` doesn't
+    # exist), so skip straight to clearing the registry entry rather than
+    # raising ComposeError for a container that's already gone.
+    if root.exists():
+        compose.compose_down(instance.runtime, root, container_name, run=run)
     _registry_remove(instance.name)
 
     if keep_data is None:
