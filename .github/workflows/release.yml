@@ -1,0 +1,93 @@
+name: Release
+
+# Cuts a GitHub Release (and its tag) whenever VERSION changes on main. This
+# job reads VERSION -- it never writes it; bumping VERSION and adding the
+# matching CHANGELOG.md section is still a manual "CHORE: Bump version to
+# X.Y.Z" commit (see docs/job-squire-cli.md "Versioning").
+#
+# Pre-1.0.0 policy: every release this job creates is marked --prerelease
+# as long as VERSION's major version is 0 (all 0.x.y releases are betas).
+# GitHub does not allow a prerelease to also be flagged "Latest release" --
+# POST/PATCH /releases returns 422 "Latest release cannot be draft or
+# prerelease" if you try -- so none of these will show the "Latest" badge
+# on the repo's Releases page while VERSION stays 0.x.y. That's expected,
+# not a bug: bootstrap.sh already has a fallback for exactly this case
+# (GET /releases/latest 404s when nothing qualifies, so it falls back to
+# GET /releases -- newest first -- and installs that one, with a warning).
+# The first release with a major version >= 1 stops passing --prerelease
+# automatically and becomes the repo's real "Latest" release.
+
+on:
+  push:
+    branches: [main]
+    paths: [VERSION]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          # Full history + tags, so the "already tagged" check below is
+          # reliable rather than working off a shallow clone that might be
+          # missing older tags.
+          fetch-depth: 0
+
+      - name: Read version
+        run: echo "VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
+
+      - name: Skip if this version is already tagged
+        id: check
+        run: |
+          if git rev-parse "v${VERSION}" >/dev/null 2>&1; then
+            echo "v${VERSION} already exists -- nothing to do."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Extract this version's CHANGELOG section
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          python3 - "$VERSION" <<'PY' > release_notes.md
+          import re, sys
+          version = sys.argv[1]
+          text = open("CHANGELOG.md").read()
+          pattern = re.compile(
+              rf"^## \[{re.escape(version)}\][^\n]*\n(.*?)(?=^## \[|\Z)",
+              re.MULTILINE | re.DOTALL,
+          )
+          m = pattern.search(text)
+          if not m:
+              sys.exit(
+                  f"No CHANGELOG.md section found for [{version}]. "
+                  "Add one in the same commit that bumps VERSION before merging."
+              )
+          print(m.group(1).strip())
+          PY
+
+      - name: Decide prerelease flag from VERSION's major component
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          major="${VERSION%%.*}"
+          if [ "$major" = "0" ]; then
+            echo "PRERELEASE_FLAG=--prerelease" >> "$GITHUB_ENV"
+          else
+            echo "PRERELEASE_FLAG=" >> "$GITHUB_ENV"
+          fi
+
+      - name: Create tag and GitHub Release
+        if: steps.check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${VERSION}" \
+            --title "v${VERSION}" \
+            --notes-file release_notes.md \
+            --target "${{ github.sha }}" \
+            $PRERELEASE_FLAG
