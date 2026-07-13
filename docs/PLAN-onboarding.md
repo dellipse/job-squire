@@ -1,6 +1,6 @@
 # PLAN: First-Run Onboarding (Getting Started)
 
-**Status:** Phase 1 SHIPPED 2026-07-12 (`app/onboarding.py`). Phase 2 (AI resume interview) SHIPPED 2026-07-12 — not yet released (staged, VERSION not bumped). Deviation from plan: `/setup` kept as the routines redirect (actively linked from the dashboard); the checklist got its own nav entry instead.
+**Status:** Phase 1 SHIPPED 2026-07-12 (`app/onboarding.py`). Phase 2 (AI resume interview) SHIPPED 2026-07-12 — not yet released (staged, VERSION not bumped). Deviation from plan: `/setup` kept as the routines redirect (actively linked from the dashboard); the checklist got its own nav entry instead. Crash fix 2026-07-13: resume interview was hitting gunicorn `WORKER TIMEOUT` against slow providers (see "Follow-up" section below) — needs an async redesign before wide release, not just the timeout stopgap.
 **Problem:** A fresh install drops the user on an empty Dashboard with no guidance. Nothing tells them to add a resume, set search targets, configure AI, or connect job boards.
 
 ---
@@ -97,6 +97,32 @@ Route tests for checklist rendering/skip/dismiss/state persistence; migration te
 - Step 4b placeholder replaced in `getting_started_step.html` with the three options plus an existing-draft indicator.
 - Tests: `tests/test_onboarding.py::TestResumeInterview` (save/replace/reject-blank, route persistence, admin gate, no-provider redirect, turn-progression + completion via a mocked `call_with_fallback`). Full suite (223 tests) and `ruff check` pass.
 - Not yet done: bumping `VERSION` (CI auto-releases on that), a CHANGELOG entry beyond what's staged, and the "Open in Claude ↗" wiring was reused as-is (relies on the existing `claude_buttons_enabled` setting, same as other routine prompts).
+
+---
+
+## Follow-up — resume interview should move to the async pattern (noted 2026-07-13)
+
+`onboarding.resume_interview()` → `ai.run_resume_interview_turn()` (`app/ai.py:1407`) still calls
+`call_with_fallback()` directly on the request thread — one full round trip per turn, blocking a
+gunicorn worker for the whole model call. Every other slow-AI-call route in this codebase (triage,
+followup, weekly_review, build_kit, ats-gap, score-fit, draft-followup) was already moved off this
+pattern after the job 1162 ats-gap incident (2026-07-01): background thread + `_TaskStatus` +
+poll via `GET /ai/task/<run_id>` (see `main.py:691-700` for the writeup, `_run_single_job_ai_task`
+for the shared helper). The interview route was never migrated.
+
+This bit us for real on 2026-07-13: two `WORKER TIMEOUT` crashes mid-interview against a slow
+keyless/free provider, response size growing turn over turn (transcript is resent as flat text
+each round — `call_with_fallback` has no chat-history param, see Phase 2 notes above). Gunicorn's
+`--timeout` was bumped 60→180s as a stopgap (`root/etc/s6-overlay/s6-rc.d/web/run`), but that just
+buys headroom; it doesn't fix the design.
+
+Worth a real pass before this ships broadly:
+- Migrate the interview turn to the background-thread + poll pattern like every other AI call site,
+  so a slow turn can't take a worker down with it.
+- Consider actually holding a live chat session with the provider instead of "resend the whole
+  transcript as one flat user message, reload the page, repeat" — e.g. a real multi-turn `messages`
+  array and/or streaming tokens back to the browser, closer to how this assistant or Hermes Agent
+  hold a conversation than to the current page-reload-per-turn wizard step.
 
 ---
 

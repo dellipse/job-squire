@@ -15,5 +15,5 @@ export HOME=/config
 exec s6-notifyoncheck -d -w 1000 -n 60 \
         -c /etc/s6-overlay/s6-rc.d/web/health-check \
     s6-setuidgid abc \
-    gunicorn --chdir /app --bind 0.0.0.0:8000 --workers 2 --timeout 60 \
+    gunicorn --chdir /app --bind 0.0.0.0:8000 --workers 2 --timeout 180 \
         --access-logfile - --error-logfile - wsgi:app

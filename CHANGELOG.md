@@ -8,6 +8,27 @@ footer as `<VERSION>-<build-sha>`.
 
 ## [Unreleased]
 
+### Fixed
+
+- The AI resume interview (`/getting-started/profile/interview`) could crash
+  with a bare 500 and no error message against a slow AI provider. gunicorn's
+  worker-timeout watchdog was killing the worker mid-request before the
+  provider call's own timeout or fallback logic got a chance to run —
+  `requests`' read timeout resets on every socket read rather than covering
+  total elapsed time, so a provider trickling a response slowly could run
+  past gunicorn's `--timeout` without ever raising a catchable
+  `requests.Timeout`. Bumped gunicorn `--timeout` 60→180s as a stopgap;
+  moving the interview turn to the same background-thread + poll pattern
+  used by every other slow-AI-call route (and possibly a real streaming
+  chat session) is tracked as a follow-up in `docs/PLAN-onboarding.md`.
+- Getting Started → "Run search now" (and the equivalent button in Settings
+  → Search) silently failed every time: the background search thread
+  referenced `current_app` after execution had already left the request
+  context, raising `RuntimeError: Working outside of application context`
+  on every click. Fixed by capturing the real app object before starting
+  the thread, matching the pattern already used by every other
+  background-thread route in `main.py`.
+
 ### Removed
 
 - Dice as a job source (`app/providers.py`). Dice's public RSS feed

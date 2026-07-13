@@ -3316,8 +3316,10 @@ def settings_test_email():
 @login_required
 @admin_required
 def settings_run():
+    _app = current_app._get_current_object()
+
     def _bg_search():
-        with current_app._get_current_object().app_context():
+        with _app.app_context():
             run_search(trigger="manual")
     t = threading.Thread(target=_bg_search, daemon=True)
     t.start()
