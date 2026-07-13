@@ -370,14 +370,14 @@
               <div class="provider-inline-edit-head">
                 <strong>{{ p.display_name }}</strong>
                 <div style="display:flex;gap:.5rem;align-items:center">
-                  <form method="post" action="{{ url_for('main.ai_provider_test', pid=p.id) }}" style="display:inline">
-                    {{ confirm_form.hidden_tag() }}
-                    <button class="btn btn-sm btn-outline" type="submit">Test connection</button>
-                  </form>
+                  <button class="btn btn-sm btn-outline" type="submit"
+                          form="provider-edit-form-{{ p.id }}"
+                          formaction="{{ url_for('main.ai_provider_test', pid=p.id) }}"
+                          title="Test whatever is currently in this form, including unsaved changes">Test connection</button>
                   <button class="btn btn-sm btn-outline provider-close-btn" type="button" data-pid="{{ p.id }}">Close</button>
                 </div>
               </div>
-              <form method="post" action="{{ url_for('main.ai_provider_edit', pid=p.id) }}" class="form">
+              <form id="provider-edit-form-{{ p.id }}" method="post" action="{{ url_for('main.ai_provider_edit', pid=p.id) }}" class="form">
                 {{ confirm_form.hidden_tag() }}
                 <div class="form-grid" style="grid-template-columns:1fr 1fr">
                   <div class="field">
@@ -1223,6 +1223,23 @@ openclaw mcp doctor {{ connector }} --probe{% endset %}
         {% endif %}
       </div>
     </form>
+
+    {% if ai_cfg.api_enabled %}
+    <div style="margin-top:1rem;padding-top:1rem;border-top:1px solid var(--border)">
+      <form method="post" action="{{ url_for('main.ai_run_task', task='rescore') }}"
+            target="_blank" style="display:flex;gap:.75rem;align-items:center;flex-wrap:wrap">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button class="btn btn-outline" type="submit">Rescore all Saved jobs</button>
+        <span class="muted small">
+          Fit scores are only computed once — editing your profile above doesn't
+          automatically re-score jobs you've already saved. Use this after a profile
+          update to clear and recompute scores for all <strong>Saved</strong>-status jobs
+          against the profile as it reads right now.
+        </span>
+      </form>
+    </div>
+    {% endif %}
+
     <div style="margin-top:1rem;padding-top:1rem;border-top:1px solid var(--border)">
       <p class="muted small" style="margin:0 0 .4rem">Or upload a <code>.md</code> file to replace the profile directly:</p>
       <form method="post" action="{{ url_for('main.settings_profile_upload') }}"

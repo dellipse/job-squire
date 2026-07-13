@@ -2228,12 +2228,18 @@ class _StatusLogHandler(logging.Handler):
 @main_bp.route("/ai/run/<task>", methods=["POST"])
 @login_required
 def ai_run_task(task):
-    """Manually trigger one of the automatic background tasks (triage, followup, weekly_review).
+    """Manually trigger one of the automatic background tasks (triage, followup,
+    weekly_review), or a full rescore of already-scored Saved jobs.
+
+    "rescore" exists because run_auto_triage() only scores jobs with no score yet —
+    by design, so a normal triage run doesn't burn API calls re-scoring jobs that
+    haven't changed. That means fit scores go stale after the candidate profile is
+    edited. This clears scores on Saved jobs first, then runs the same triage.
 
     Launches the AI call in a daemon thread (so the gunicorn worker is freed immediately),
     then redirects to a live status page that opens in a new browser tab.
     """
-    if task not in ("triage", "followup", "weekly_review"):
+    if task not in ("triage", "followup", "weekly_review", "rescore"):
         abort(404)
     if not ConfirmForm().validate_on_submit():
         abort(400)
@@ -2246,7 +2252,8 @@ def ai_run_task(task):
         api_key = decrypt(secret, cfg.api_key_enc) if cfg.api_key_enc else ""
         if not api_key:
             flash("Add an AI provider or Anthropic API key under Settings → Claude first.", "warning")
-            return redirect(url_for("main.settings", _anchor=f"feature-{task}"))
+            anchor = "tab-documents" if task == "rescore" else f"feature-{task}"
+            return redirect(url_for("main.settings", _anchor=anchor))
 
     run_id = uuid.uuid4().hex
     data_dir = current_app.config["DATA_DIR"]
@@ -2266,9 +2273,21 @@ def ai_run_task(task):
         with _app.app_context():
             try:
                 labels = {"triage": "Auto-Triage", "followup": "Follow-Up Drafts",
-                          "weekly_review": "Weekly Review"}
+                          "weekly_review": "Weekly Review", "rescore": "Rescore All Jobs"}
                 status.log(f"INFO Starting {labels.get(task, task)}")
                 if task == "triage":
+                    result = ai.run_auto_triage()
+                elif task == "rescore":
+                    reset = (
+                        Job.query
+                        .filter(Job.status == "Saved")
+                        .filter(Job.ai_fit_score.isnot(None))
+                        .filter(Job.ai_fit_score != 0)
+                        .update({Job.ai_fit_score: None, Job.ai_fit_reason: None},
+                                synchronize_session=False)
+                    )
+                    db.session.commit()
+                    status.log(f"INFO Cleared {reset} existing score(s) — rescoring against the current candidate profile")
                     result = ai.run_auto_triage()
                 elif task == "followup":
                     result = ai.run_followup_drafts()
@@ -2726,12 +2745,18 @@ def ai_provider_test(pid):
     if not p:
         abort(404)
     secret = current_app.config["SECRET_KEY"]
-    api_key = decrypt(secret, p.api_key_enc) if p.api_key_enc else ""
-    base_url = p.base_url.strip() if p.base_url else ai._PROVIDER_URLS.get(p.provider, "")
+    # This route is submitted as the Edit form's "Test connection" button (via
+    # formaction), so it sees whatever is currently typed — including unsaved
+    # changes. Fields left blank fall back to the last-saved value, matching
+    # the "leave blank to keep current" convention used when actually saving.
+    form_api_key = (request.form.get("api_key") or "").strip()
+    api_key = form_api_key if form_api_key else (decrypt(secret, p.api_key_enc) if p.api_key_enc else "")
+    form_base_url = (request.form.get("base_url") or "").strip()
+    base_url = form_base_url or (p.base_url.strip() if p.base_url else "") or ai._PROVIDER_URLS.get(p.provider, "")
     if not base_url:
         flash(f"{p.display_name}: no base URL — enter one in the Edit form.", "warning")
         return redirect(url_for("main.settings") + "#tab-claude")
-    model = (p.model or "").strip()
+    model = (request.form.get("model") or "").strip() or (p.model or "").strip()
     if not model:
         # Supply a known-cheap default per provider so the test call doesn't fail on a missing model
         _test_defaults = {
@@ -3051,6 +3076,33 @@ def settings_kit():
     return redirect(url_for("main.settings"))
 
 
+@main_bp.route("/settings/providers/save-keyless", methods=["POST"])
+@login_required
+@admin_required
+def settings_providers_keyless_save():
+    """Batch-save the no-key-required job boards shown on the Getting Started
+    'providers' step. These used to be separate auto-submitting checkboxes
+    (one per board); checking several in a row could race against each
+    other's page reload and silently drop a change. One form + one Save
+    button submits all of them together instead."""
+    checked = set(request.form.getlist("provider"))
+    changed = []
+    for name, meta in PROVIDERS.items():
+        if any(f.get("required") for f in meta["fields"]):
+            continue  # needs a key — managed individually on Settings | Sources
+        pc = ProviderCredential.query.filter_by(provider=name).first()
+        if not pc:
+            pc = ProviderCredential(provider=name)
+            db.session.add(pc)
+        wants = name in checked
+        if pc.enabled != wants:
+            changed.append(meta["label"])
+        pc.enabled = wants
+    db.session.commit()
+    flash(f"Job boards updated: {', '.join(changed)}." if changed else "No changes to job boards.", "success")
+    return redirect(_safe_next(url_for("main.settings")))
+
+
 @main_bp.route("/settings/provider/<provider>", methods=["POST"])
 @login_required
 @admin_required
@@ -3163,8 +3215,18 @@ def settings_provider_pull(provider):
         "max_age_days": (cfg_row.max_age_days if cfg_row else None) or 14,
         "results_per_query": (cfg_row.results_per_query if cfg_row else None) or 25,
     }
+    # Tracked the same way a full search is, so it shows up in Settings | History
+    # instead of silently vanishing after the flash message disappears.
+    run = SearchRun(trigger="manual", status="running", providers=provider)
+    db.session.add(run)
+    db.session.commit()
+
     results, err = search_provider(provider, creds, titles, cfg)
     if err:
+        run.finished_at = datetime.now(timezone.utc)
+        run.status = "error"
+        run.detail = err[:1000]
+        db.session.commit()
         flash(f"{label} pull failed: {err}", "danger")
         return redirect(url_for("main.settings"))
 
@@ -3175,6 +3237,12 @@ def settings_provider_pull(provider):
         _save_cooldowns(cooldowns)
 
     created, skipped = ingest_jobs(results, created_by=f"pull:{provider}")
+    run.finished_at = datetime.now(timezone.utc)
+    run.found = len(results)
+    run.created = len(created)
+    run.skipped = skipped
+    run.status = "ok"
+    db.session.commit()
     flash(
         f"{label}: fetched {len(results)}, {len(created)} new"
         + (f", {skipped} already in Job Squire" if skipped else "") + ".",

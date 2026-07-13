@@ -74,11 +74,12 @@ document.addEventListener('DOMContentLoaded', function () {
   });
 
   // Settings page tabs. Tabs use data-tab on buttons and id on panels.
-  // Active tab is persisted in localStorage so it survives form-submit redirects.
+  // Active tab is persisted in localStorage so it survives form-submit redirects,
+  // and reflected in the URL hash so links like #tab-claude land on the right tab.
   var tabBtns = document.querySelectorAll('.page-tabs button[data-tab]');
   if (tabBtns.length) {
     var STORAGE_KEY = 'settings-tab';
-    function activateTab(id) {
+    function activateTab(id, opts) {
       tabBtns.forEach(function (b) {
         b.classList.toggle('active', b.getAttribute('data-tab') === id);
       });
@@ -86,16 +87,38 @@ document.addEventListener('DOMContentLoaded', function () {
         p.classList.toggle('active', p.id === id);
       });
       try { localStorage.setItem(STORAGE_KEY, id); } catch (e) {}
+      if (!opts || opts.updateHash !== false) {
+        try { history.replaceState(null, '', '#' + id); } catch (e) {}
+      }
     }
     tabBtns.forEach(function (b) {
       b.addEventListener('click', function () { activateTab(b.getAttribute('data-tab')); });
     });
-    // Restore saved tab, or default to first.
+    var valid = Array.from(tabBtns).map(function (b) { return b.getAttribute('data-tab'); });
+    var first = tabBtns[0].getAttribute('data-tab');
+    // A URL hash (e.g. #tab-claude) takes priority over the remembered tab,
+    // so shared/bookmarked links always land where they say they will.
+    var hashTab = window.location.hash ? window.location.hash.slice(1) : null;
     var saved;
     try { saved = localStorage.getItem(STORAGE_KEY); } catch (e) {}
-    var first = tabBtns[0].getAttribute('data-tab');
-    var valid = Array.from(tabBtns).map(function (b) { return b.getAttribute('data-tab'); });
-    activateTab((saved && valid.indexOf(saved) !== -1) ? saved : first);
+    var initial = (hashTab && valid.indexOf(hashTab) !== -1) ? hashTab
+      : (saved && valid.indexOf(saved) !== -1) ? saved
+      : first;
+    activateTab(initial, { updateHash: !!hashTab || initial !== first });
+    // If the hash changes while the page is open (e.g. back/forward), follow it.
+    window.addEventListener('hashchange', function () {
+      var h = window.location.hash ? window.location.hash.slice(1) : null;
+      if (h && valid.indexOf(h) !== -1) activateTab(h, { updateHash: false });
+    });
+  }
+
+  // Getting Started: First Search step. While a search is running in the
+  // background, poll by reloading every 5s so the result appears without a
+  // manual refresh. The server decides whether to keep polling (data-poll)
+  // based on the SearchRun status, so this just stops naturally once done.
+  var searchStatus = document.getElementById('first-search-status');
+  if (searchStatus && searchStatus.getAttribute('data-poll') === '1') {
+    window.setTimeout(function () { window.location.reload(); }, 5000);
   }
 
   // AI settings sub-tabs (secondary row within the AI tab).

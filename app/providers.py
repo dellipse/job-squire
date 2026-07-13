@@ -150,7 +150,7 @@ PROVIDERS = {
         "signup_url": "https://www.themuse.com/developers/api/v2",
         "note": "Free, API key optional. Filters by location; titles matched on this end.",
         "fields": [
-            {"name": "api_key", "label": "API Key (optional)", "secret": True, "required": False},
+            {"name": "api_key", "label": "API Key", "secret": True, "required": False},
         ],
     },
     "usajobs": {

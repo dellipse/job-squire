@@ -25,6 +25,25 @@
   --amber: #f59e0b;
   --red: #ef4444;
   --radius: 10px;
+
+  /* Aliases: several templates reference these names directly (with their own
+     hardcoded fallback colors). Defining them here means those fallbacks never
+     kick in, so every card actually follows the active theme instead of being
+     stuck on whichever color the fallback happened to hardcode. */
+  --surface: var(--panel);
+  --surface-alt: var(--panel-2);
+  --bg-card: var(--panel);
+  --bg-subtle: var(--panel-2);
+  --border: var(--line);
+  --text-muted: var(--muted);
+  --accent-light: rgba(59, 130, 246, 0.18);
+  --yellow: var(--amber);
+  --danger: var(--red);
+  --color-danger: var(--red);
+  --success: var(--green);
+  --color-success: var(--green);
+  --success-text: #86efac;
+  --warning-text: #fde68a;
 }
 
 [data-theme="light"] {
@@ -39,6 +58,21 @@
   --green: #16a34a;
   --amber: #d97706;
   --red: #dc2626;
+
+  --surface: var(--panel);
+  --surface-alt: var(--panel-2);
+  --bg-card: var(--panel);
+  --bg-subtle: var(--panel-2);
+  --border: var(--line);
+  --text-muted: var(--muted);
+  --accent-light: #dbeafe;
+  --yellow: var(--amber);
+  --danger: var(--red);
+  --color-danger: var(--red);
+  --success: var(--green);
+  --color-success: var(--green);
+  --success-text: #166534;
+  --warning-text: #92400e;
 }
 * { box-sizing: border-box; }
 body {

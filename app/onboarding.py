@@ -74,10 +74,50 @@ def _profile_path() -> str:
     return os.path.join(current_app.config["DATA_DIR"], "candidate_profile.md")
 
 
+def _bundled_profile_template() -> str:
+    """The placeholder candidate_profile.md shipped with the app and copied
+    into DATA_DIR on first boot (see _seed_data_files in __init__.py)."""
+    try:
+        path = os.path.join(os.path.dirname(__file__), "candidate_profile.md")
+        with open(path, encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+# Bracket placeholders from the shipped template (e.g. "[Write a 2-4 sentence
+# professional summary here.]"). Several of these still present means the user
+# hasn't actually written their profile yet, even if the file is non-empty.
+_PROFILE_PLACEHOLDER_MARKERS = (
+    "[Write a", "[List key skills", "[Job Title]", "[Degree]",
+    "[Certification name]", "[Accomplishment", "[Name], [Title]",
+)
+
+
+def _profile_seems_filled_out(text: str) -> bool:
+    """True once the profile looks like more than the untouched seed template.
+
+    A plain non-empty check marks this step "done" the instant the bundled
+    template is copied to DATA_DIR on first boot — before the user has
+    written a word of their own profile. This requires the text to actually
+    differ from the shipped placeholder, have most of its bracket
+    placeholders replaced, and be long enough to hold real content.
+    """
+    text = (text or "").strip()
+    if not text:
+        return False
+    if text == _bundled_profile_template():
+        return False
+    remaining = sum(1 for m in _PROFILE_PLACEHOLDER_MARKERS if m in text)
+    if remaining >= 3:
+        return False
+    return len(text) > 300
+
+
 def _profile_exists() -> bool:
     try:
         with open(_profile_path(), encoding="utf-8") as f:
-            return bool(f.read().strip())
+            return _profile_seems_filled_out(f.read())
     except OSError:
         return False
 

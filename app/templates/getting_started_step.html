@@ -241,19 +241,23 @@
   <h2>Works immediately — no API key</h2>
   <p>These boards need no sign-up. Enable them now and your first search will
     return real results:</p>
-  {% for p in keyless_providers %}
-  <form method="post" action="{{ url_for('main.settings_provider', provider=p.name) }}" class="form" style="margin-bottom:0.75rem">
+  <form method="post" action="{{ url_for('main.settings_providers_keyless_save') }}" class="form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="next" value="{{ back_url }}">
-    <label>
-      <input type="checkbox" name="enabled" {% if p.enabled %}checked{% endif %}
-             onchange="this.form.submit()">
-      <strong>{{ p.meta.label }}</strong>{% if p.remote_only %} <span class="badge">remote only</span>{% endif %}
-      {% if p.enabled %}<span class="badge admin">enabled</span>{% endif %}
-    </label>
-    <span class="muted small" style="display:block;margin-left:1.5rem">{{ p.meta.note }}</span>
+    {% for p in keyless_providers %}
+    <div style="margin-bottom:0.75rem">
+      <label>
+        <input type="checkbox" name="provider" value="{{ p.name }}" {% if p.enabled %}checked{% endif %}>
+        <strong>{{ p.meta.label }}</strong>{% if p.remote_only %} <span class="badge">remote only</span>{% endif %}
+        {% if p.enabled %}<span class="badge admin">enabled</span>{% endif %}
+      </label>
+      <span class="muted small" style="display:block;margin-left:1.5rem">{{ p.meta.note }}</span>
+    </div>
+    {% endfor %}
+    <div class="actions" style="margin-top:1rem">
+      <button class="btn btn-primary" type="submit">Save job boards</button>
+    </div>
   </form>
-  {% endfor %}
 </section>
 
 <section class="card">
@@ -299,16 +303,24 @@
       {% endif %}
     </li>
   </ul>
+  {% set _just_started = request.args.get('started') == '1' %}
+  {% set _still_running = (last_run and last_run.status == 'running') or (_just_started and not last_run) %}
   {% if search_ready %}
   <form method="post" action="{{ url_for('main.settings_run') }}" class="form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <input type="hidden" name="next" value="{{ back_url }}">
+    <input type="hidden" name="next" value="{{ back_url }}?started=1">
     <div class="actions">
       <button class="btn btn-primary" type="submit">Run first search now</button>
     </div>
   </form>
-  <p class="muted small" style="margin-top:0.5rem">Runs in the background — refresh this
-    page after a few seconds to see the result.</p>
+  <p class="muted small" id="first-search-status" style="margin-top:0.5rem"
+     data-poll="{{ '1' if _still_running else '0' }}">
+    {% if _still_running %}
+      Search running in the background — this page updates automatically every few seconds…
+    {% else %}
+      Runs in the background — this page updates automatically once results are in.
+    {% endif %}
+  </p>
   {% endif %}
   {% if last_run %}
   <div class="mode-info-box" style="margin-top:1rem">
