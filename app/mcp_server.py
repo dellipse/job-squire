@@ -27,6 +27,7 @@ Run:  python -m app.mcp_server      (listens on 0.0.0.0:9000)
 """
 
 import base64
+import functools
 import hashlib
 import json
 import os
@@ -60,6 +61,7 @@ def _record_login_failure(ip: str) -> None:
 _log = logging.getLogger(__name__)
 
 from . import create_app
+from . import privacy
 from .ai import apply_analysis, build_export_dict
 from .crypto import dump_encrypted_json, load_encrypted_json
 from .extensions import db
@@ -94,6 +96,32 @@ _transport_security = TransportSecuritySettings(
     ],
 )
 mcp = FastMCP("JobSquire", stateless_http=True, transport_security=_transport_security)
+
+
+def _ptool():
+    """``mcp.tool()`` plus the PII/SPI privacy boundary (docs/PLAN-ai-privacy.md).
+
+    Every tool result is redacted before it leaves the server, so the AI on the
+    other end sees placeholders (``{{PII:NAME_…}}``) instead of identifiers, and
+    SPI/PHI is stripped. Placeholders arriving in tool *arguments* (Claude writes
+    drafts containing the placeholders it was shown) are rehydrated before the
+    wrapped tool runs, so the database only ever stores real values.
+
+    Gated on AIConfig.redaction_enabled — there is no "trusted Claude" exception;
+    MCP is treated like any other transmission path.
+    """
+    def deco(fn):
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            with flask_app.app_context():
+                if not privacy.redaction_enabled():
+                    return fn(*args, **kwargs)
+                args = [privacy.rehydrate_obj(a) for a in args]
+                kwargs = privacy.rehydrate_obj(kwargs)
+                result = fn(*args, **kwargs)
+                return privacy.redact_obj(result)
+        return mcp.tool()(wrapper)
+    return deco
 
 # ---------------------------------------------------------------------------
 # OAuth stores
@@ -148,14 +176,14 @@ with flask_app.app_context():
 # MCP tools
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@_ptool()
 def get_pipeline() -> dict:
     """Return the user's full job-search pipeline and all interview debriefs, for analysis."""
     with flask_app.app_context():
         return build_export_dict()
 
 
-@mcp.tool()
+@_ptool()
 def list_jobs(status: str = "") -> list:
     """List jobs, optionally filtered by status (e.g. 'Applied', 'Interview', 'Saved')."""
     with flask_app.app_context():
@@ -172,7 +200,7 @@ def list_jobs(status: str = "") -> list:
         ]
 
 
-@mcp.tool()
+@_ptool()
 def get_job(job_id: int) -> dict:
     """Get full detail for one job, including notes, AI fit score, and interview debriefs."""
     with flask_app.app_context():
@@ -197,7 +225,7 @@ def get_job(job_id: int) -> dict:
         }
 
 
-@mcp.tool()
+@_ptool()
 def get_candidate_profile() -> str:
     """Return the user's master profile (background, skills, experience) for tailoring documents."""
     with flask_app.app_context():
@@ -209,7 +237,7 @@ def get_candidate_profile() -> str:
             return "(candidate profile not available)"
 
 
-@mcp.tool()
+@_ptool()
 def save_candidate_profile(profile_markdown: str) -> dict:
     """Save an updated candidate profile back to Job Squire.
 
@@ -230,7 +258,7 @@ def save_candidate_profile(profile_markdown: str) -> dict:
             return {"error": f"Could not write profile: {exc}"}
 
 
-@mcp.tool()
+@_ptool()
 def get_candidate_assets(kind: str = "") -> list:
     """List the candidate's master documents (resume, recommendation letters, certs, etc.).
 
@@ -274,7 +302,7 @@ def get_candidate_assets(kind: str = "") -> list:
         return result
 
 
-@mcp.tool()
+@_ptool()
 def add_jobs(jobs: list) -> dict:
     """Add job postings Claude found (via its own Indeed/ZipRecruiter/Dice connectors) to the
     Job Squire as 'Saved', skipping duplicates.
@@ -290,7 +318,7 @@ def add_jobs(jobs: list) -> dict:
         return {"created": len(created), "skipped": skipped, "ids": [j.id for j in created]}
 
 
-@mcp.tool()
+@_ptool()
 def get_search_targets() -> dict:
     """Return the user's target job titles and location, so Claude knows what to search for."""
     from .models import SearchConfig
@@ -302,7 +330,7 @@ def get_search_targets() -> dict:
                 "radius_miles": cfg.radius_miles, "min_salary": cfg.min_salary}
 
 
-@mcp.tool()
+@_ptool()
 def save_analysis(overall_summary: str, recommendations: list, jobs: list) -> dict:
     """Save analysis back to Job Squire.
 
@@ -319,7 +347,7 @@ def save_analysis(overall_summary: str, recommendations: list, jobs: list) -> di
         return {"updated": updated, "skipped": missing}
 
 
-@mcp.tool()
+@_ptool()
 def get_kit_instructions() -> str:
     """Return the full step-by-step instructions for building an application kit.
 
@@ -330,7 +358,7 @@ def get_kit_instructions() -> str:
     return KIT_PROMPT
 
 
-@mcp.tool()
+@_ptool()
 def update_job_notes(job_id: int, notes: str) -> dict:
     """Replace the notes/description on a job record.
 
@@ -353,7 +381,7 @@ def update_job_notes(job_id: int, notes: str) -> dict:
                 "message": f"Notes updated for {j.company} — {j.title}."}
 
 
-@mcp.tool()
+@_ptool()
 def save_kit(job_id: int, kit_markdown: str) -> dict:
     """Save a completed application kit (tailored resume, cover letter, emails, etc.) back to a
     specific job record.
@@ -405,7 +433,7 @@ def _run_ats_after_kit(job):
         _log.exception("ATS auto-analysis failed for job %d", job.id)
 
 
-@mcp.tool()
+@_ptool()
 def set_follow_up(job_id: int, days_out: int = 6) -> dict:
     """Set a follow-up reminder on a job record.
 
@@ -423,7 +451,7 @@ def set_follow_up(job_id: int, days_out: int = 6) -> dict:
         return {"ok": True, "job_id": job_id, "follow_up_date": str(date)}
 
 
-@mcp.tool()
+@_ptool()
 def list_contacts(contact_type: str = "") -> list:
     """List the user's recruiter / staffing-agency / networking contacts.
 
@@ -445,7 +473,7 @@ def list_contacts(contact_type: str = "") -> list:
         ]
 
 
-@mcp.tool()
+@_ptool()
 def get_contact(contact_id: int) -> dict:
     """Get one contact with their full submission history (who submitted the user where)."""
     with flask_app.app_context():
@@ -469,7 +497,7 @@ def get_contact(contact_id: int) -> dict:
         }
 
 
-@mcp.tool()
+@_ptool()
 def add_contact(name: str, agency: str = "", contact_type: str = "Recruiter",
                 title: str = "", email: str = "", phone: str = "",
                 linkedin_url: str = "", notes: str = "") -> dict:
@@ -498,7 +526,7 @@ def add_contact(name: str, agency: str = "", contact_type: str = "Recruiter",
         return {"id": c.id, "name": c.name}
 
 
-@mcp.tool()
+@_ptool()
 def log_submission(contact_id: int = 0, company: str = "", role_title: str = "",
                    job_id: int = 0, status: str = "Submitted",
                    submitted_date: str = "", notes: str = "") -> dict:
@@ -543,7 +571,7 @@ def log_submission(contact_id: int = 0, company: str = "", role_title: str = "",
 # Phase 2: Pro routine support tools
 # ---------------------------------------------------------------------------
 
-@mcp.tool()
+@_ptool()
 def list_unanalyzed_jobs(limit: int = 20) -> list:
     """Return Saved jobs that have no AI fit score yet — used by the New Job Triage routine.
 
@@ -565,7 +593,7 @@ def list_unanalyzed_jobs(limit: int = 20) -> list:
         ]
 
 
-@mcp.tool()
+@_ptool()
 def set_job_fit(job_id: int, score: int, reason: str) -> dict:
     """Save an AI fit score and brief reasoning to a job record.
 
@@ -583,7 +611,7 @@ def set_job_fit(job_id: int, score: int, reason: str) -> dict:
         return {"ok": True, "job_id": job_id, "score": j.ai_fit_score}
 
 
-@mcp.tool()
+@_ptool()
 def list_overdue_followups() -> dict:
     """Return all jobs and recruiter submissions where a follow-up is overdue
     and no follow-up draft has been written yet.
@@ -635,7 +663,7 @@ def list_overdue_followups() -> dict:
         }
 
 
-@mcp.tool()
+@_ptool()
 def save_followup_draft(job_id: int, email_text: str) -> dict:
     """Save an AI-drafted follow-up email to a job record.
 
@@ -652,7 +680,7 @@ def save_followup_draft(job_id: int, email_text: str) -> dict:
         return {"ok": True, "job_id": job_id, "company": j.company, "title": j.title}
 
 
-@mcp.tool()
+@_ptool()
 def save_interview_prep(job_id: int, prep_notes: str) -> dict:
     """Save an AI-generated interview prep guide to the most recent interview record for a job.
 
@@ -683,7 +711,7 @@ def save_interview_prep(job_id: int, prep_notes: str) -> dict:
                                "Add an interview debrief record when ready."}
 
 
-@mcp.tool()
+@_ptool()
 def get_weekly_summary() -> dict:
     """Return a summary of pipeline activity over the past 7 days for the Weekly Strategy Review.
 

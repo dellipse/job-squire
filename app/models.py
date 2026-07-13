@@ -339,6 +339,10 @@ class AIConfig(db.Model):
     last_rejection_analysis_at = db.Column(db.DateTime, nullable=True)
     # Multi-provider: fall back to Anthropic after all ranked providers fail
     fallback_to_anthropic = db.Column(db.Boolean, default=True)
+    # AI privacy — PII/SPI redaction before transmission (docs/PLAN-ai-privacy.md)
+    redaction_enabled = db.Column(db.Boolean, default=True)   # tokenize identifiers, strip SPI
+    redact_strict = db.Column(db.Boolean, default=False)      # also pseudonymize orgs/locations
+    redact_local = db.Column(db.Boolean, default=False)       # apply redaction to local providers too
     updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 

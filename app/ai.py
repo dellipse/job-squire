@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 
 import requests
 
+from . import privacy
 from .extensions import db
 from .models import AIInsight, Job, User
 
@@ -189,11 +190,26 @@ def call_with_fallback(system: str, user_content: str,
       The last transient exception if all options are exhausted.
     """
     from flask import current_app
+    from . import privacy
     from .crypto import decrypt
     from .models import AIConfig, AIProviderConfig, AITaskConfig, AI_TRIAGE_TASKS
 
     secret = current_app.config["SECRET_KEY"]
     is_triage = use_triage_model or (task_name in AI_TRIAGE_TASKS if task_name else False)
+
+    # PII/SPI redaction choke point (docs/PLAN-ai-privacy.md). Redacted variants
+    # are computed once, lazily — local providers may receive the original text
+    # (redact_local off), cloud providers always get the redacted version.
+    _redacted: dict = {}
+
+    def _outbound_for(provider_row):
+        """Return (system, user_content, was_redacted) for one provider attempt."""
+        if not privacy.should_redact_for(provider_row):
+            return system, user_content, False
+        if not _redacted:
+            _redacted["system"] = privacy.redact(system).text
+            _redacted["user"] = privacy.redact(user_content).text
+        return _redacted["system"], _redacted["user"], True
 
     # Load per-task config if a task name was given.
     task_cfg = None
@@ -228,12 +244,13 @@ def call_with_fallback(system: str, user_content: str,
             return None
 
         tried_ids.add(p.id)
+        out_system, out_user, was_redacted = _outbound_for(p)
         try:
             # Anthropic uses its own SDK path; all others use OpenAI-compat HTTP.
             if p.provider == "anthropic":
                 thinking = getattr(p, "thinking_mode", None) or None
                 result = _call_anthropic_sdk(api_key, model, thinking,
-                                              system, user_content, max_tokens)
+                                              out_system, out_user, max_tokens)
             else:
                 base_url = (p.base_url or _PROVIDER_URLS.get(p.provider, "")).strip()
                 if not base_url:
@@ -242,7 +259,9 @@ def call_with_fallback(system: str, user_content: str,
                     tried_ids.discard(p.id)
                     return None
                 result = call_openai_compat(base_url, api_key, model,
-                                             system, user_content, max_tokens, p.provider)
+                                             out_system, out_user, max_tokens, p.provider)
+            if was_redacted:
+                result, _unresolved = privacy.rehydrate(result)
             if last_exc is not None:
                 log.info("task %s: succeeded with %s after earlier failure(s)",
                          task_name or "?", p.provider)
@@ -313,8 +332,18 @@ def call_with_fallback(system: str, user_content: str,
             log.warning("task %s: all providers failed (%s) — falling back to legacy Anthropic key (model: %s)",
                         task_name or "?", tried_names, fallback_model)
             try:
-                result = _call_anthropic_sdk(fallback_key, fallback_model, None,
-                                              system, user_content, max_tokens)
+                # Legacy Anthropic is always a cloud call — redact whenever enabled.
+                if privacy.redaction_enabled():
+                    if not _redacted:
+                        _redacted["system"] = privacy.redact(system).text
+                        _redacted["user"] = privacy.redact(user_content).text
+                    result = _call_anthropic_sdk(fallback_key, fallback_model, None,
+                                                  _redacted["system"], _redacted["user"],
+                                                  max_tokens)
+                    result, _unresolved = privacy.rehydrate(result)
+                else:
+                    result = _call_anthropic_sdk(fallback_key, fallback_model, None,
+                                                  system, user_content, max_tokens)
                 return result, "anthropic-legacy"
             except Exception as exc:  # noqa: BLE001
                 log.warning("legacy Anthropic fallback failed: %s", exc)
@@ -791,11 +820,22 @@ def run_triage_batch(offset: int, limit: int = 20,
     def _invoke(call_content: str) -> str:
         """Make a single triage AI call using the configured provider or chain."""
         if _p is not None:
+            # Direct-provider path bypasses call_with_fallback, so it applies
+            # the PII redaction choke point itself (docs/PLAN-ai-privacy.md).
+            out_system, out_content = _TRIAGE_SYSTEM, call_content
+            was_redacted = privacy.should_redact_for(_p)
+            if was_redacted:
+                out_system = privacy.redact(out_system).text
+                out_content = privacy.redact(out_content).text
             if _p.provider == "anthropic":
-                return _call_anthropic_sdk(_api_key, _model, None,
-                                           _TRIAGE_SYSTEM, call_content, 1024)
-            return call_openai_compat(_base_url, _api_key, _model,
-                                      _TRIAGE_SYSTEM, call_content, 1024, _p.provider)
+                raw = _call_anthropic_sdk(_api_key, _model, None,
+                                          out_system, out_content, 1024)
+            else:
+                raw = call_openai_compat(_base_url, _api_key, _model,
+                                         out_system, out_content, 1024, _p.provider)
+            if was_redacted:
+                raw, _ = privacy.rehydrate(raw)
+            return raw
         return _call_no_thinking(_TRIAGE_SYSTEM, call_content, 1024,
                                   use_triage_model=True, task_name="triage")
 

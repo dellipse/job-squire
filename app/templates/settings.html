@@ -234,6 +234,58 @@
     </form>
   </section>
 
+  {# ── Card: AI Privacy ── #}
+  <section class="card" id="ai-privacy-card">
+    <h2>Privacy</h2>
+    <p class="muted small">
+      Before anything is sent to an AI provider, Job Squire replaces personal identifiers
+      (your name, email, phone, address, contacts' details) with placeholders and swaps the
+      real values back into the results. Sensitive personal information that should never
+      reach employers (health details, age signals, marital status) is removed and flagged
+      for your review. Applies to automatic features, manual exports, and the MCP connector.
+    </p>
+    <form method="post" action="{{ url_for('main.settings_ai_privacy') }}" class="form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-grid">
+        <div class="field field-wide">
+          <label>
+            <input type="checkbox" name="redaction_enabled"
+                   {% if ai_cfg.redaction_enabled %}checked{% endif %}>
+            <strong>Redact personal identifiers</strong>
+          </label>
+          <span class="muted small">
+            Recommended on. Turning this off sends your data to AI providers as-is.
+          </span>
+        </div>
+        <div class="field field-wide">
+          <label>
+            <input type="checkbox" name="redact_strict"
+                   {% if ai_cfg.redact_strict %}checked{% endif %}>
+            Strict mode — also pseudonymize employer names and locations
+          </label>
+          <span class="muted small">
+            Maximum privacy, but tailored resumes and cover letters lose useful context
+            and may be noticeably more generic.
+          </span>
+        </div>
+        <div class="field field-wide">
+          <label>
+            <input type="checkbox" name="redact_local"
+                   {% if ai_cfg.redact_local %}checked{% endif %}>
+            Apply redaction to local providers too (Ollama, LiteLLM)
+          </label>
+          <span class="muted small">
+            Local providers keep your data on your own machine, so redaction is normally
+            unnecessary for them.
+          </span>
+        </div>
+      </div>
+      <div class="actions" style="margin-top:1.25rem">
+        <button class="btn btn-primary" type="submit">Save</button>
+      </div>
+    </form>
+  </section>
+
   </div>{# end ai-sub-features #}
 
   {# ── Sub-panel: Providers ── #}

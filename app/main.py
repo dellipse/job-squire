@@ -44,7 +44,7 @@ from flask_login import current_user, login_required
 from sqlalchemy import func, text
 from werkzeug.utils import secure_filename
 
-from . import ai
+from . import ai, privacy
 from .backup import build_backup_archive
 from .crypto import decrypt, dump_encrypted_json, encrypt, load_encrypted_json
 from .mcp_auth import expires_at_from_ttl_hours, generate_token, is_network_reachable
@@ -2074,7 +2074,12 @@ def kit_download_docx():
 @main_bp.route("/export/ai")
 @login_required
 def export_ai():
-    payload = json.dumps(ai.build_export_dict(), indent=2)
+    # Manual-mode export goes to whatever AI chat the user pastes it into —
+    # redact it like any other transmission (docs/PLAN-ai-privacy.md).
+    export = ai.build_export_dict()
+    if privacy.redaction_enabled():
+        export = privacy.redact_obj(export)
+    payload = json.dumps(export, indent=2)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
     return Response(
         payload,
@@ -2097,6 +2102,13 @@ def ai_hub():
         if not raw.strip():
             flash("Paste JSON or choose a file first.", "warning")
             return redirect(url_for("main.ai_hub"))
+        # The pasted result may contain placeholders from a redacted export —
+        # swap the real values back before storing anything.
+        raw, unresolved = privacy.rehydrate(raw)
+        if unresolved:
+            flash(f"{len(unresolved)} privacy placeholder(s) in the AI response could not "
+                  "be matched to stored values and were left as-is — review the imported "
+                  "analysis for stray {{PII:…}} tokens.", "warning")
         try:
             parsed = ai.extract_json(raw)
         except ValueError as e:
@@ -2749,6 +2761,29 @@ def ai_provider_test(pid):
     return redirect(url_for("main.settings") + "#tab-claude")
 
 
+@main_bp.route("/settings/ai/privacy", methods=["POST"])
+@login_required
+@admin_required
+def settings_ai_privacy():
+    """Save the AI privacy (redaction) toggles — see docs/PLAN-ai-privacy.md."""
+    cfg = _singleton(AIConfig)
+    cfg.redaction_enabled = bool(request.form.get("redaction_enabled"))
+    cfg.redact_strict = bool(request.form.get("redact_strict"))
+    cfg.redact_local = bool(request.form.get("redact_local"))
+    db.session.commit()
+    if not cfg.redaction_enabled:
+        flash("Privacy redaction disabled — personal identifiers will be sent "
+              "to AI providers as-is.", "warning")
+    else:
+        bits = ["identifier redaction on"]
+        if cfg.redact_strict:
+            bits.append("strict mode (employers/locations pseudonymized)")
+        if cfg.redact_local:
+            bits.append("applied to local providers too")
+        flash("Privacy settings saved: " + ", ".join(bits) + ".", "success")
+    return redirect(url_for("main.settings") + "#tab-claude")
+
+
 @main_bp.route("/settings/ai/providers/fallback", methods=["POST"])
 @login_required
 @admin_required
@@ -2845,6 +2880,10 @@ def settings():
     profile_text = _load_profile()
     profile_prompt = _load_profile_prompt()
 
+    # The embedded profile excerpt travels to claude.ai as chat text — redact it
+    # like any other AI-bound content (the MCP tools rehydrate on write-back).
+    _profile_for_prompt = (privacy.redact(profile_text).text
+                          if privacy.redaction_enabled() else profile_text)
     regen_profile_prompt = (
         f'Using my "{cname}" connector, call get_candidate_assets() to retrieve all '
         f'uploaded candidate documents.\n\n'
@@ -2853,7 +2892,7 @@ def settings():
         'with the full profile markdown so it saves directly to Job Squire — '
         'do not ask me to copy and paste it. Confirm once saved.\n\n'
         'Current profile (for format reference — do not simply copy this):\n---\n'
-        + profile_text
+        + _profile_for_prompt
     )
 
     evaluate_docs_prompt = (
@@ -2883,6 +2922,8 @@ def settings():
     from .models import User as _SettingsUser
     cuser = _SettingsUser.query.filter_by(role="user").first()
     candidate_name = (cuser.display_name or cuser.username) if cuser else "the candidate"
+    if candidate_name != "the candidate" and privacy.redaction_enabled():
+        candidate_name = privacy.redact(candidate_name).text
     _routine_prompts = [
         morning_briefing_prompt(cname),
         new_job_triage_prompt(cname, candidate_name),

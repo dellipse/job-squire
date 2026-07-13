@@ -18,6 +18,19 @@ footer as `<VERSION>-<build-sha>`.
 
 ### Added
 
+- **AI privacy redaction** (`app/privacy.py`, `docs/PLAN-ai-privacy.md`): personal
+  identifiers (names, emails, phones, addresses, SSNs, LinkedIn URLs, clearance /
+  work-authorization statements) are replaced with deterministic
+  `{{PII:KIND_digest}}` placeholders before anything is sent to an AI provider,
+  and swapped back in the results. Sensitive personal information that should not
+  reach employers at all (health details, age signals, marital status) is stripped
+  outbound and reported as coaching flags. Applies to all three AI paths: the API
+  provider chain (`call_with_fallback`), manual-mode export/import, and every MCP
+  tool. On by default; Settings → AI → Privacy adds a strict mode (also
+  pseudonymize employer names/locations) and a local-provider toggle — local
+  providers such as Ollama skip redaction by default since data never leaves the
+  machine. Placeholder mappings are stored Fernet-encrypted in
+  `DATA_DIR/privacy_vault.json`.
 - `job-squire uninstall` — removes every registered instance, optionally the
   container runtime job-squire itself installed (`--remove-runtime`, never a
   runtime it only found already working), and the CLI's own venv and `PATH`
