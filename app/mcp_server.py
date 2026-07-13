@@ -259,6 +259,26 @@ def save_candidate_profile(profile_markdown: str) -> dict:
 
 
 @_ptool()
+def save_resume_draft(resume_markdown: str, profile_facts: str = "") -> dict:
+    """Save a resume built during the Getting Started resume-interview routine.
+
+    Call this once, at the end of the interview, after the candidate has
+    confirmed the draft is ready. resume_markdown is the complete final
+    resume in markdown. profile_facts is an optional short plain-text
+    summary of background worth folding into the candidate profile (target
+    roles, years of experience, top skills) — leave blank if there's nothing
+    new beyond what's already in the resume.
+
+    Upserts the single "Resume" candidate asset (distinct from an uploaded
+    "Base Resume") — running this again replaces the previous draft.
+    Returns {"ok": True, "asset_id": ...} or an error dict.
+    """
+    with flask_app.app_context():
+        from .onboarding import save_resume_draft as _save
+        return _save(resume_markdown, profile_facts, created_by="Claude (MCP)")
+
+
+@_ptool()
 def get_candidate_assets(kind: str = "") -> list:
     """List the candidate's master documents (resume, recommendation letters, certs, etc.).
 

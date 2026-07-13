@@ -1332,6 +1332,98 @@ def _format_ats_gap_as_markdown(parsed: dict, job) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Onboarding — resume interview, API mode (docs/PLAN-onboarding.md, Phase 2)
+#
+# Multi-turn conversation over a stateless single-shot call: each turn resends
+# the whole transcript as plain text in user_content (call_with_fallback / the
+# OpenAI-compat path only ever sends one system + one user message — there is
+# no chat-history param), and the model is instructed to ask one question at a
+# time until it has enough to write the resume, at which point it emits a
+# sentinel block this function parses out.
+# ---------------------------------------------------------------------------
+
+_RESUME_INTERVIEW_SENTINEL = "===RESUME_READY==="
+_RESUME_FACTS_SENTINEL = "===PROFILE_FACTS==="
+
+_RESUME_INTERVIEW_SYSTEM = (
+    "You are a resume-writing coach interviewing a candidate who has no resume yet. "
+    "Ask exactly ONE question per turn — never a list of questions. Build on the "
+    "transcript so far; do not repeat a question already answered. Keep questions "
+    "short and concrete, and push for specific numbers (how many, how much, how "
+    "often) when an answer is vague."
+)
+
+
+def _format_interview_transcript(history: list) -> str:
+    lines = []
+    for turn in history or []:
+        role = "Interviewer" if turn.get("role") == "assistant" else "Candidate"
+        content = (turn.get("content") or "").strip()
+        if content:
+            lines.append(f"{role}: {content}")
+    return "\n\n".join(lines)
+
+
+def run_resume_interview_turn(history: list, candidate_name: str = "the candidate") -> dict:
+    """Advance the onboarding resume interview by one turn.
+
+    history: list of {"role": "assistant"|"user", "content": str} — "assistant"
+    entries are questions already asked, "user" entries are the candidate's
+    answers, in order. Pass [] to get the opening question.
+
+    Returns:
+      {"done": False, "message": "<next question>"}
+      {"done": True, "message": "<closing note>", "resume_markdown": "...", "profile_facts": "..."}
+    Raises whatever call_with_fallback raises (caller shows an error and lets
+    the candidate retry or fall back to manual/MCP mode).
+    """
+    from .prompts import RESUME_BEST_PRACTICES
+
+    transcript = _format_interview_transcript(history)
+    cover_areas = (
+        "target job titles/field, work history (employer, title, dates, specific "
+        "quantified accomplishments per job), education, certifications or "
+        "licenses, skills, and other notable achievements"
+    )
+    content = (
+        f"Candidate name: {candidate_name}\n\n"
+        f"Areas to cover before you have enough to write the resume: {cover_areas}.\n\n"
+        "Resume writing rules the FINAL resume must follow:\n"
+        f"{RESUME_BEST_PRACTICES}\n"
+        "If you do NOT yet have enough to write a complete, specific resume, respond "
+        "with ONLY your next single question — no preamble, no markdown, no sentinel.\n\n"
+        "Once you DO have enough, respond with EXACTLY this format and nothing else:\n"
+        f"{_RESUME_INTERVIEW_SENTINEL}\n"
+        "<the complete resume as clean markdown>\n"
+        f"{_RESUME_FACTS_SENTINEL}\n"
+        "<a short plain-text summary of the candidate's background worth adding to "
+        "their profile: target roles, years of experience, top skills. Leave this "
+        "section blank if there is nothing beyond what's in the resume.>\n\n"
+        + ("This is the start of the interview — there is no transcript yet. Ask your "
+           "first question." if not transcript else
+           f"Transcript so far:\n\n{transcript}")
+    )
+
+    raw, _provider = call_with_fallback(_RESUME_INTERVIEW_SYSTEM, content, max_tokens=3000)
+    raw = (raw or "").strip()
+
+    if _RESUME_INTERVIEW_SENTINEL in raw:
+        after = raw.split(_RESUME_INTERVIEW_SENTINEL, 1)[1].strip()
+        if _RESUME_FACTS_SENTINEL in after:
+            resume_md, facts = after.split(_RESUME_FACTS_SENTINEL, 1)
+        else:
+            resume_md, facts = after, ""
+        return {
+            "done": True,
+            "message": "Resume drafted — review it below before saving.",
+            "resume_markdown": resume_md.strip(),
+            "profile_facts": facts.strip(),
+        }
+
+    return {"done": False, "message": raw}
+
+
+# ---------------------------------------------------------------------------
 # Feature 5: Rejection Pattern Deep-Dive
 # ---------------------------------------------------------------------------
 

@@ -298,6 +298,105 @@ Be specific. "You tend to be rejected after phone screens when applying to roles
 
 
 # ---------------------------------------------------------------------------
+# Onboarding — resume interview (docs/PLAN-onboarding.md, Phase 2)
+#
+# Shared guidance across all three transports (manual copy-paste, the
+# interactive API chat in ai.py, and this MCP routine) so the resume comes
+# out the same regardless of which AI the candidate used. Reflects current
+# resume practice, not the old one-page-always rule.
+# ---------------------------------------------------------------------------
+
+RESUME_BEST_PRACTICES = """\
+- Reverse-chronological order, single-column layout, standard section headings \
+(Summary, Skills, Experience, Education) — no tables, columns, or creative labels; \
+those confuse ATS parsers.
+- Length: one page under 5 years of relevant experience, two pages at 5+ years. \
+A cramped one-pager that cuts real accomplishments to hit a page count is worse \
+than a clean two-pager.
+- Professional summary: 3-5 sentences at the top, written for the specific target \
+role, not a generic objective statement.
+- Skills section: list the exact tools, methods, and credentials a hiring manager \
+or ATS keyword match would scan for. Match the target job posting's own wording \
+(e.g. if postings say "stakeholder communication," use that phrase, not a synonym).
+- Experience bullets: 3-6 per role, each starting with a strong verb and naming a \
+specific, quantified outcome (%, $, count, time) wherever the candidate can supply \
+a real number. Do not invent numbers — if the candidate can't quantify something, \
+write it as a clear, specific accomplishment instead of a vague duty.
+- Leave out anything that reveals age, health status, marital status, or includes \
+a photo — none of that belongs on a resume and some of it invites illegal \
+discrimination. Graduation years far in the past are a common unintentional \
+age signal; omit them or keep only the degree and institution.
+"""
+
+
+def resume_interview_manual_prompt() -> str:
+    """Self-contained prompt for Manual AI mode: paste into any free AI chat.
+
+    The candidate runs this in ChatGPT, Gemini, or any assistant, has the
+    back-and-forth there, then pastes the finished markdown resume back into
+    Job Squire's Getting Started > Resume step.
+    """
+    return f"""\
+I don't have a resume yet and need your help building one from scratch. Interview me \
+one question at a time, the way a good resume writer would, then produce a complete, \
+polished resume in markdown.
+
+Cover these areas, one at a time, waiting for my answer before moving on:
+1. Target job titles / field (what kind of role am I aiming for?)
+2. Work history: for each job, employer, title, dates, and 3-5 things I actually did \
+and accomplished there (ask me to be specific — ask "how many," "how much," or "how \
+often" whenever I give you something vague).
+3. Education: degrees, institutions, graduation (year optional — see note below).
+4. Certifications or licenses relevant to the target roles.
+5. Skills: technical tools, software, methods, and any soft skills that are actually \
+relevant to the target roles.
+6. Notable achievements, awards, or projects I haven't already mentioned.
+
+Resume writing rules to follow:
+{RESUME_BEST_PRACTICES}
+Once you have enough to work with, write the complete resume as clean markdown \
+(no tables). Show it to me, ask if anything needs correcting, then give me the final \
+version as a single markdown block I can copy in one piece.
+
+When I confirm it's ready, tell me to paste the whole markdown resume into the \
+"Paste your finished resume" box on Job Squire's Getting Started > Resume step.
+"""
+
+
+def resume_builder_mcp_prompt(connector: str) -> str:
+    """On-demand Claude routine: conversational resume interview that writes
+    the result straight back to Job Squire via MCP. Not a scheduled routine —
+    launched once from the Getting Started > Resume step.
+    """
+    return f"""\
+You are my resume-writing coach. I don't have a resume yet — interview me and build one.
+
+1. Call get_candidate_profile() and get_candidate_assets() on my "{connector}" \
+connector first, in case I already have partial background saved. Use whatever is \
+there instead of asking me to repeat it.
+2. Interview me one question at a time (don't dump a long questionnaire at once):
+   - Target job titles / field
+   - Work history: employer, title, dates, and specific accomplishments per job \
+(push for numbers — "how many," "how much," "how often" — whenever I'm vague)
+   - Education
+   - Certifications or licenses
+   - Skills (tools, software, methods, relevant soft skills)
+   - Other notable achievements, awards, or projects
+3. Resume writing rules to follow:
+{RESUME_BEST_PRACTICES}
+4. Once you have enough, draft the complete resume as clean markdown and show it to \
+me for corrections before finalizing.
+5. When I confirm it's ready, call save_resume_draft(resume_markdown, profile_facts) \
+on my "{connector}" connector: resume_markdown is the full final resume; profile_facts \
+is a short plain-text summary of my background worth folding into my candidate \
+profile (target roles, years of experience, top skills) — leave it blank if there's \
+nothing new beyond what's already in the resume.
+6. Confirm once saved and tell me it's now available as my base resume for tailored \
+application kits.
+"""
+
+
+# ---------------------------------------------------------------------------
 # Setup instruction helpers (for the /setup page)
 # ---------------------------------------------------------------------------
 

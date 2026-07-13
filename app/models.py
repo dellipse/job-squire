@@ -42,8 +42,13 @@ WORK_MODES = ["On-site", "Hybrid", "Remote", "Unknown"]
 ATTACHMENT_KINDS = ["Resume", "Cover Letter", "Job Description", "Other"]
 
 # Kinds for master candidate assets (not tied to a specific job).
+# "Resume" (AI-generated, via the onboarding resume interview) is distinct
+# from "Base Resume" (user-uploaded) so onboarding can tell them apart and
+# the interview can safely overwrite its own output without touching an
+# uploaded file. See docs/PLAN-onboarding.md Phase 2.
 ASSET_KINDS = [
     "Base Resume",
+    "Resume",
     "Recommendation Letter",
     "Cover Letter Template",
     "Certification",

@@ -143,11 +143,16 @@
 {% elif step_key == 'profile' %}
 <section class="card">
   <h2>Your resume</h2>
-  {% if assets %}
+  {% if uploaded_assets %}
   <p><strong>&#10003; Uploaded documents:</strong></p>
   <ul>
-    {% for a in assets %}<li>{{ a.kind }} — {{ a.display_name }} <span class="muted small">({{ a.size_kb }} KB)</span></li>{% endfor %}
+    {% for a in uploaded_assets %}<li>{{ a.kind }} — {{ a.display_name }} <span class="muted small">({{ a.size_kb }} KB)</span></li>{% endfor %}
   </ul>
+  {% endif %}
+  {% if resume_asset %}
+  <p><strong>&#10003; AI-generated resume on file:</strong> {{ resume_asset.display_name }}
+    <span class="muted small">({{ resume_asset.size_kb }} KB, from the resume interview below —
+    re-run it any time to replace this)</span></p>
   {% endif %}
   <p>Upload your current resume — it becomes the base for tailored versions per
     application. Certifications, recommendation letters, and portfolio samples
@@ -167,11 +172,65 @@
       <button class="btn btn-primary" type="submit">Upload</button>
     </div>
   </form>
+</section>
 
-  <div class="mode-info-box" style="margin-top:1rem">
-    <strong>Don't have a resume yet?</strong> A guided, interview-style resume builder is
-    coming in a future release. For now: upload anything you have (even rough), or start
-    from a plain document — the tailoring features will improve it per application.
+<section class="card">
+  <h2>Don't have a resume yet?</h2>
+  <p>Build one from an interview instead — three ways to run it, same result either way:
+    a markdown resume saved as your base resume.</p>
+
+  <div class="mode-info-box" style="margin:0.75rem 0">
+    <strong>1. Interactive — right here.</strong>
+    {% if has_ai_provider %}
+    <p style="margin:.4rem 0 0">Answer one question at a time; Job Squire drafts the resume
+      when it has enough to work with.</p>
+    <div class="actions" style="margin-top:.5rem;margin-top:.5rem">
+      <a class="btn btn-primary" href="{{ url_for('onboarding.resume_interview') }}">Start the interview</a>
+    </div>
+    {% else %}
+    <span class="muted small">Needs an AI provider configured under
+      <a href="{{ url_for('main.settings', _anchor='tab-claude') }}">Settings &rarr; AI</a> first.</span>
+    {% endif %}
+  </div>
+
+  <div class="mode-info-box" style="margin:0.75rem 0">
+    <strong>2. Claude connector.</strong> If you have Claude connected via MCP, paste this
+    into a chat and Claude will interview you and save the result directly.
+    <div class="routine-prompt-section" style="margin-top:.5rem">
+      <div class="routine-prompt-label">
+        <span class="lbl-inline">Prompt</span>
+        <button class="btn btn-sm copy-btn" data-target="resume-mcp-prompt">Copy</button>
+      </div>
+      <textarea id="resume-mcp-prompt" class="routine-prompt-text select-on-click" rows="4" readonly>{{ resume_mcp_prompt }}</textarea>
+    </div>
+    {% if ai_cfg and ai_cfg.claude_buttons_enabled %}
+    <div class="actions" style="margin-top:.5rem">
+      <button class="btn btn-outline open-in-claude-btn" data-prompt-id="resume-mcp-prompt"
+              data-prompt="{{ resume_mcp_prompt | e }}">Open in Claude &#8599;</button>
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="mode-info-box" style="margin:0.75rem 0">
+    <strong>3. Any free AI chat.</strong> Copy this prompt into ChatGPT, Gemini, or anything
+    else, have the conversation there, then paste the finished resume back below.
+    <div class="routine-prompt-section" style="margin-top:.5rem">
+      <div class="routine-prompt-label">
+        <span class="lbl-inline">Prompt</span>
+        <button class="btn btn-sm copy-btn" data-target="resume-manual-prompt">Copy</button>
+      </div>
+      <textarea id="resume-manual-prompt" class="routine-prompt-text select-on-click" rows="4" readonly>{{ resume_manual_prompt }}</textarea>
+    </div>
+    <form method="post" action="{{ url_for('onboarding.save_resume') }}" class="form" style="margin-top:.75rem">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="field field-wide">
+        <label>Paste your finished resume (markdown)</label>
+        <textarea name="resume_markdown" rows="8" placeholder="Paste the complete resume here..."></textarea>
+      </div>
+      <div class="actions" style="margin-top:.5rem">
+        <button class="btn btn-primary" type="submit">Save resume</button>
+      </div>
+    </form>
   </div>
 </section>
 

@@ -1,6 +1,6 @@
 # PLAN: First-Run Onboarding (Getting Started)
 
-**Status:** Phase 1 SHIPPED 2026-07-12 (`app/onboarding.py`). Phase 2 (AI resume interview) not started. Deviation from plan: `/setup` kept as the routines redirect (actively linked from the dashboard); the checklist got its own nav entry instead.
+**Status:** Phase 1 SHIPPED 2026-07-12 (`app/onboarding.py`). Phase 2 (AI resume interview) SHIPPED 2026-07-12 — not yet released (staged, VERSION not bumped). Deviation from plan: `/setup` kept as the routines redirect (actively linked from the dashboard); the checklist got its own nav entry instead.
 **Problem:** A fresh install drops the user on an empty Dashboard with no guidance. Nothing tells them to add a resume, set search targets, configure AI, or connect job boards.
 
 ---
@@ -86,15 +86,17 @@ Route tests for checklist rendering/skip/dismiss/state persistence; migration te
 
 ---
 
-## Phase 2 — Resume interview & profile generation
+## Phase 2 — Resume interview & profile generation (SHIPPED, staged)
 
-- **Research pass first:** review current (2026) resume best practices — ATS-friendly formatting, quantified achievements, skills sections, length norms — and encode the findings into the interview prompt template in `prompts.py`.
-- **Interview flow**, three transports matching the existing AI modes:
-  - **API mode:** multi-turn interview driven through the configured provider chain; app renders the Q&A in the wizard step.
-  - **MCP mode:** a new Claude routine ("Onboarding / Resume Builder") in `prompts.py`; Claude interviews conversationally and writes back via `save_candidate_profile` + a new `save_resume_draft` (or reuse `save_kit`).
-  - **Manual mode:** generate a copy/paste interview prompt (asks about work history, education, skills, certifications, achievements); user runs it in any free AI chat and pastes the finished markdown resume back into the app.
-- Output: markdown resume stored as a `CandidateAsset` (kind: Resume) + profile facts merged into `candidate_profile.md`.
-- Wire step 4b into the checklist, replacing the placeholder.
+- **Research pass:** done via web search (ATS single-column/reverse-chronological parses most reliably; one page under 5 years experience, two pages at 5+; quantify 70%+ of bullets; skills section should mirror the target posting's exact wording; omit photo/age/marital/health signals). Encoded as `prompts.RESUME_BEST_PRACTICES`, shared by all three transports so the resume comes out consistent regardless of which AI ran the interview.
+- **Interview flow**, three transports:
+  - **API mode:** `ai.run_resume_interview_turn(history, candidate_name)` — one question per round trip. There's no chat-history param in this codebase's provider dispatch (`call_with_fallback` sends one system + one user message), so each turn resends the transcript as plain text and the model is instructed to emit a `===RESUME_READY===` / `===PROFILE_FACTS===` sentinel block when it has enough to write the resume. Wizard step: `GET/POST /getting-started/profile/interview` (`app/templates/resume_interview.html`), state carried in a hidden `history_json` field — no new DB table, no server-side session.
+  - **MCP mode:** `prompts.resume_builder_mcp_prompt(connector)` — an on-demand routine (not one of the 5 scheduled slots) that has Claude read existing profile/assets, interview conversationally, then call the new `save_resume_draft(resume_markdown, profile_facts)` MCP tool.
+  - **Manual mode:** `prompts.resume_interview_manual_prompt()` — self-contained copy-paste prompt; the user runs it in any free AI chat and pastes the finished resume into a textarea on the profile step, which posts to `POST /getting-started/profile/resume-draft`.
+- All three write through one function, `onboarding.save_resume_draft()`: upserts the single `CandidateAsset(kind="Resume")` — a new kind, added distinct from the existing uploaded `"Base Resume"` kind so re-running the interview replaces its own output without touching an uploaded file — and appends `profile_facts` to `candidate_profile.md` under a "From resume interview" heading.
+- Step 4b placeholder replaced in `getting_started_step.html` with the three options plus an existing-draft indicator.
+- Tests: `tests/test_onboarding.py::TestResumeInterview` (save/replace/reject-blank, route persistence, admin gate, no-provider redirect, turn-progression + completion via a mocked `call_with_fallback`). Full suite (223 tests) and `ruff check` pass.
+- Not yet done: bumping `VERSION` (CI auto-releases on that), a CHANGELOG entry beyond what's staged, and the "Open in Claude ↗" wiring was reused as-is (relies on the existing `claude_buttons_enabled` setting, same as other routine prompts).
 
 ---
 

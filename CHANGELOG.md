@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows the `VERSION` file at the repo root, displayed in the app
 footer as `<VERSION>-<build-sha>`.
 
+## [0.7.6] - 2026-07-12
+
+### Added
+
+- Getting Started → Resume: Phase 2 of the onboarding walkthrough
+  (`docs/PLAN-onboarding.md`). Candidates with no resume yet can now build
+  one through an interview, in whichever of the three AI modes they're
+  already using:
+  - **Interactive** — a one-question-at-a-time chat right in the wizard
+    (`/getting-started/profile/interview`), driven through the configured
+    AI provider chain.
+  - **Claude connector** — a new on-demand routine that has Claude
+    interview conversationally and save the result directly via a new
+    `save_resume_draft` MCP tool.
+  - **Any free AI chat** — a self-contained copy-paste prompt; paste the
+    finished resume back into the wizard.
+  - All three write through one function (`onboarding.save_resume_draft`)
+    to a new `CandidateAsset` kind, `"Resume"` (AI-generated), kept
+    separate from an uploaded `"Base Resume"` so re-running the interview
+    replaces its own draft without touching anything uploaded. Extracted
+    background facts are folded into `candidate_profile.md`.
+  - Interview content follows current (2026) resume practice: ATS-friendly
+    single-column reverse-chronological format, one page under 5 years of
+    experience / two pages at 5+, quantified accomplishments, a
+    keyword-matched skills section, and no age/marital/health signals.
+
 ## [0.7.5] - 2026-07-12
 
 ### Fixed

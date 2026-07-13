@@ -194,6 +194,87 @@ class TestProfileStep:
             os.unlink(path)
 
 
+class TestResumeInterview:
+    """Phase 2 (docs/PLAN-onboarding.md): the resume-building interview.
+
+    All three transports (manual paste-back, the interactive API chat, and
+    the MCP tool) funnel through onboarding.save_resume_draft(), so that
+    function carries most of the coverage here.
+    """
+
+    def test_save_resume_draft_creates_asset_and_appends_profile(self, clean_state):
+        from app.onboarding import save_resume_draft
+        result = save_resume_draft(
+            "# Jordan Lee\n\nSummary of experience...",
+            "Targets operations manager roles, 8 years experience.",
+        )
+        assert result.get("ok") is True
+        asset = CandidateAsset.query.filter_by(kind="Resume").first()
+        assert asset is not None
+        assert asset.label == "AI-generated resume"
+        assert asset.id == result["asset_id"]
+
+        from flask import current_app
+        profile_path = os.path.join(current_app.config["DATA_DIR"], "candidate_profile.md")
+        with open(profile_path, encoding="utf-8") as f:
+            profile = f.read()
+        assert "From resume interview" in profile
+        assert "8 years experience" in profile
+
+    def test_save_resume_draft_replaces_not_duplicates(self, clean_state):
+        from app.onboarding import save_resume_draft
+        first = save_resume_draft("# Draft one")
+        second = save_resume_draft("# Draft two, revised")
+        assert first["asset_id"] == second["asset_id"]
+        assert CandidateAsset.query.filter_by(kind="Resume").count() == 1
+
+    def test_save_resume_draft_rejects_blank(self, clean_state):
+        from app.onboarding import save_resume_draft
+        assert "error" in save_resume_draft("   ")
+
+    def test_save_resume_route_persists(self, clean_state, client, app):
+        _login_admin(client, app)
+        r = client.post("/getting-started/profile/resume-draft",
+                        data={"resume_markdown": "# Test Resume\n\nContent."},
+                        follow_redirects=True)
+        assert r.status_code == 200
+        assert CandidateAsset.query.filter_by(kind="Resume").count() == 1
+
+    def test_resume_interview_non_admin_blocked(self, clean_state, client, app):
+        _login_user(client, app)
+        assert client.get("/getting-started/profile/interview").status_code == 403
+
+    def test_resume_interview_redirects_without_provider(self, clean_state, client, app):
+        _login_admin(client, app)
+        r = client.get("/getting-started/profile/interview", follow_redirects=False)
+        assert r.status_code == 302
+        assert "/getting-started/profile" in r.headers["Location"]
+
+    def test_run_resume_interview_turn_asks_then_completes(self, clean_state, monkeypatch):
+        import app.ai as ai_mod
+
+        monkeypatch.setattr(
+            ai_mod, "call_with_fallback",
+            lambda *a, **k: ("What roles are you targeting?", "test-provider"))
+        result = ai_mod.run_resume_interview_turn([])
+        assert result["done"] is False
+        assert "targeting" in result["message"]
+
+        sentinel_reply = (
+            "===RESUME_READY===\n# Jordan Lee\n\nSummary...\n"
+            "===PROFILE_FACTS===\nTargets operations manager roles.\n"
+        )
+        monkeypatch.setattr(
+            ai_mod, "call_with_fallback",
+            lambda *a, **k: (sentinel_reply, "test-provider"))
+        history = [{"role": "assistant", "content": "What roles are you targeting?"},
+                  {"role": "user", "content": "Operations manager."}]
+        result2 = ai_mod.run_resume_interview_turn(history)
+        assert result2["done"] is True
+        assert "Jordan Lee" in result2["resume_markdown"]
+        assert "operations manager" in result2["profile_facts"].lower()
+
+
 class TestRemoteGate:
     def _run(self, monkeypatch, include_remote):
         import app.search as search_mod

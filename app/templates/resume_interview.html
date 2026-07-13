@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Resume interview · Getting Started · JobSquire{% endblock %}
+{% block content %}
+
+<p class="muted small">
+  <a href="{{ back_url }}">&larr; Back to Resume step</a>
+</p>
+
+<h1>Resume interview</h1>
+
+{% if history %}
+<section class="card">
+  <h2>So far</h2>
+  <ul>
+    {% for turn in history %}
+    <li><strong>{{ 'Q' if turn.role == 'assistant' else 'You' }}:</strong> {{ turn.content }}</li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+{% if done %}
+<section class="card">
+  <h2>Your draft resume</h2>
+  <p>Review and edit before saving — this becomes your base resume for tailored application kits.</p>
+  <form method="post" action="{{ url_for('onboarding.save_resume') }}" class="form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="profile_facts" value="{{ profile_facts }}">
+    <div class="field field-wide">
+      <textarea name="resume_markdown" rows="22">{{ resume_markdown }}</textarea>
+    </div>
+    <div class="actions" style="margin-top:.75rem">
+      <button class="btn btn-primary" type="submit">Save resume</button>
+      <a class="btn btn-outline" href="{{ url_for('onboarding.resume_interview') }}">Start over</a>
+    </div>
+  </form>
+</section>
+{% else %}
+<section class="card">
+  {% if question %}
+  <p><strong>{{ question }}</strong></p>
+  {% else %}
+  <p>Answer a few questions and Job Squire will draft a complete resume for you.
+    Be specific — real numbers make for a much stronger resume than general
+    descriptions.</p>
+  {% endif %}
+  <form method="post" action="{{ url_for('onboarding.resume_interview') }}" class="form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="history_json" value="{{ history_json }}">
+    <div class="field field-wide">
+      <textarea name="answer" rows="4" autofocus placeholder="Type your answer..."></textarea>
+    </div>
+    <div class="actions" style="margin-top:.5rem">
+      <button class="btn btn-primary" type="submit">{{ 'Continue' if history else 'Start' }}</button>
+    </div>
+  </form>
+</section>
+{% endif %}
+
+<div class="actions" style="margin-top:1rem">
+  <a class="btn btn-outline" href="{{ back_url }}">Back to Resume step</a>
+</div>
+{% endblock %}
