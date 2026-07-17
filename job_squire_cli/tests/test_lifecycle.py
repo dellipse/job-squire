@@ -48,7 +48,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from job_squire_cli.ops import compose, crypto_mirror, lifecycle as lc, paths
+from job_squire_cli.ops import compose, lifecycle as lc, paths
 from job_squire_cli.ops import registry as reg
 from job_squire_cli.query import config as query_config_module
 

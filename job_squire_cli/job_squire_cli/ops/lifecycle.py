@@ -30,11 +30,10 @@ import shutil
 import subprocess
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
-from . import compose, dotenv, paths, ports, runtime as runtime_mod, secrets_copy
+from . import compose, ports, runtime as runtime_mod, secrets_copy
 from .paths import instance_root
 from .registry import (
     Drift,
