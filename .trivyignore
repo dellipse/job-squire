@@ -1,0 +1,10 @@
+# No active ignores. Kept as a placeholder since trivy-action looks for
+# this file by default in the CI gate step (see .github/workflows/ci.yml).
+#
+# History: this file briefly suppressed CVE-2026-5773 and CVE-2026-6276
+# (curl/libcurl, HIGH) while the fix (curl 8.20.0-r0+) lagged Alpine's
+# v3.23 stable branch. Resolved 2026-07-17 by bumping the base image to
+# the Alpine 3.24 line (ghcr.io/linuxserver/baseimage-alpine:3.24-03b33b49-ls6),
+# which ships curl 8.21.0-r0 and does not need the ignore. See the FROM
+# comment in the Dockerfile and docs/PLAN-deployment-modes.md Section 8
+# for the full record.
