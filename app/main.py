@@ -339,10 +339,17 @@ def _worker_heartbeat_status(max_age_seconds=900):
 @main_bp.route("/")
 @login_required
 def dashboard():
-    # Getting Started card (admins only; hides itself once dismissed/complete).
+    # Getting Started (admins only; hides itself once dismissed/complete).
+    # Fresh installs land on the persona step, then the checklist overview,
+    # until onboarding is done — this is the app's post-login landing route,
+    # so gating it here covers both a fresh /login redirect and a remembered
+    # session hitting "/" directly.
     onboarding_checklist = None
     if current_user.is_admin:
-        from .onboarding import checklist_for_dashboard
+        from .onboarding import checklist_for_dashboard, get_onboarding_redirect
+        redirect_target = get_onboarding_redirect()
+        if redirect_target:
+            return redirect(redirect_target)
         onboarding_checklist = checklist_for_dashboard()
 
     jobs = Job.query.all()

@@ -84,12 +84,36 @@ class TestChecklistDerivation:
         cfg.titles, cfg.location = "Ops Manager", "Henderson, NV"
         db.session.add(ProviderCredential(provider="themuse", enabled=True))
         db.session.add(SearchRun(status="ok"))
+        # Completion requires both the real data AND having visited the step's
+        # own page at least once — a step can't complete itself on defaults
+        # alone (see OnboardingState.mark_visited).
+        for key in ("persona", "profile", "search", "providers", "first_search"):
+            state.mark_visited(key)
         db.session.commit()
 
         status = {i["key"]: i["status"] for i in build_checklist()}
         for key in ("persona", "profile", "search", "providers", "first_search"):
             assert status[key] == "done", key
         assert status["ai"] == "todo"   # nothing AI-ish configured
+
+    def test_data_alone_is_not_enough_without_a_visit(self, clean_state):
+        """A step's real data can already satisfy its condition (e.g. the
+        seeded "themuse" board is enabled out of the box) without the step
+        ever being marked done until its own page has actually been loaded."""
+        from app.onboarding import build_checklist
+        db.session.add(ProviderCredential(provider="themuse", enabled=True))
+        db.session.commit()
+        status = {i["key"]: i["status"] for i in build_checklist()}
+        assert status["providers"] == "todo"
+
+    def test_visit_alone_is_not_enough_without_data(self, clean_state, client, app):
+        """Loading a step's page shouldn't complete it if nothing was actually
+        filled in — both conditions are required."""
+        _login_admin(client, app)
+        assert client.get("/getting-started/search").status_code == 200
+        from app.onboarding import build_checklist
+        status = {i["key"]: i["status"] for i in build_checklist()}
+        assert status["search"] == "todo"
 
     def test_skip_persists_and_revisit_allowed(self, clean_state, client, app):
         _login_admin(client, app)
@@ -105,6 +129,7 @@ class TestChecklistDerivation:
         from app.onboarding import build_checklist, get_state
         state = get_state()
         state.set_step("search", "skipped")
+        state.mark_visited("search")
         cfg = db.session.get(SearchConfig, 1)
         cfg.titles, cfg.location = "Ops Manager", "Henderson, NV"
         db.session.commit()
@@ -115,10 +140,17 @@ class TestChecklistDerivation:
 class TestDashboardCard:
     def test_card_shows_then_hides_on_dismiss(self, clean_state, client, app):
         _login_admin(client, app)
-        assert b"Getting started" in client.get("/").data
+        # Incomplete + not dismissed: "/" force-redirects into the walkthrough
+        # (persona first) rather than rendering the dashboard card.
+        r = client.get("/", follow_redirects=False)
+        assert r.status_code == 302
+        assert "/getting-started/persona" in r.headers["Location"]
         r = client.post("/getting-started/dismiss", follow_redirects=False)
         assert r.status_code == 302
-        assert b"Open walkthrough" not in client.get("/").data
+        # Dismissed: "/" renders the plain dashboard again, no more redirect.
+        home = client.get("/", follow_redirects=False)
+        assert home.status_code == 200
+        assert b"Open walkthrough" not in home.data
         # The full page stays reachable from the nav even when dismissed.
         assert client.get("/getting-started").status_code == 200
 
@@ -166,6 +198,7 @@ class TestAccountsStep:
 class TestAiStep:
     def test_no_ai_marks_done_and_warns(self, clean_state, client, app):
         _login_admin(client, app)
+        assert client.get("/getting-started/ai").status_code == 200  # marks it visited
         r = client.post("/getting-started/ai", data={"action": "no_ai"},
                         follow_redirects=True)
         assert b"Continuing without AI" in r.data

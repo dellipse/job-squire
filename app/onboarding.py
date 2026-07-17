@@ -195,8 +195,16 @@ def save_resume_draft(resume_markdown: str, profile_facts: str = "",
     }
 
 
-def _step_done(key: str, state: OnboardingState) -> bool:
-    """Derived completion — the checklist mirrors actual app state."""
+def _step_data_satisfied(key: str, state: OnboardingState) -> bool:
+    """Whether the step's underlying data/answer condition is met, ignoring
+    whether its page has ever been visited.
+
+    Split out from _step_done() so the one-time migration backfill (see
+    __init__.py._run_migrations) can ask "would this step already look done
+    under the old, visit-blind logic?" without duplicating the per-key
+    rules — that's how it decides which steps to retroactively mark visited
+    for installs that finished onboarding before visit-tracking existed.
+    """
     answered = state.steps.get(key, "")
     if key == "persona":
         return state.persona in ("self", "helper")
@@ -219,6 +227,23 @@ def _step_done(key: str, state: OnboardingState) -> bool:
     if key == "first_search":
         return SearchRun.query.count() > 0
     return False
+
+
+def _step_done(key: str, state: OnboardingState) -> bool:
+    """Derived completion — the checklist mirrors actual app state.
+
+    Requires BOTH conditions: the step's own page must have been visited at
+    least once (state.visited), AND its underlying data/answer must satisfy
+    the step's condition (_step_data_satisfied). Data alone isn't enough —
+    several steps ship with non-empty defaults (e.g. "themuse" job board is
+    enabled out of the box) that would otherwise mark a step "done" before
+    the user ever saw the page. Visited alone isn't enough either — merely
+    opening the page shouldn't complete a step whose settings were never
+    actually filled in.
+    """
+    if key not in state.visited:
+        return False
+    return _step_data_satisfied(key, state)
 
 
 def build_checklist(state: OnboardingState | None = None) -> list:
@@ -246,6 +271,30 @@ def checklist_for_dashboard():
     if all(item["status"] == "done" for item in checklist):
         return None
     return checklist
+
+
+def get_onboarding_redirect():
+    """URL to land an admin on instead of the dashboard, or None to show the
+    dashboard normally.
+
+    Fresh install: persona is the very first thing shown, since nothing else
+    in the walkthrough makes sense before the app knows who it's for. Once
+    persona is done (or explicitly skipped — "Skip for now" shouldn't just
+    bounce the admin right back to the same page), the checklist overview
+    becomes the landing page until every step is "done". Respects the
+    "dismissed" flag, same as the dashboard card, so dismissing onboarding
+    actually stops the nagging.
+    """
+    state = get_state()
+    if state.dismissed:
+        return None
+    checklist = build_checklist(state)
+    persona_status = next(i["status"] for i in checklist if i["key"] == "persona")
+    if persona_status == "todo":
+        return url_for("onboarding.step", step="persona")
+    if all(item["status"] == "done" for item in checklist):
+        return None
+    return url_for("onboarding.overview")
 
 
 def _next_todo(checklist, after: str | None = None) -> str | None:
@@ -318,6 +367,8 @@ def step(step):
     if step not in STEP_KEYS:
         return redirect(url_for("onboarding.overview"))
     state = get_state()
+    state.mark_visited(step)
+    db.session.commit()
     checklist = build_checklist(state)
     item = next(i for i in checklist if i["key"] == step)
     ctx = {

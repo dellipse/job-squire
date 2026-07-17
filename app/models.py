@@ -299,6 +299,7 @@ class OnboardingState(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     persona = db.Column(db.String(10), default="")   # "" | "self" | "helper"
     steps_json = db.Column(db.Text, default="{}")     # step key -> "skipped" | "answered" | "no_ai"
+    visited_json = db.Column(db.Text, default="[]")   # step keys whose page has been loaded at least once
     dismissed = db.Column(db.Boolean, default=False)  # hide the dashboard card
     completed_at = db.Column(db.DateTime, nullable=True)
     updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
@@ -316,6 +317,30 @@ class OnboardingState(db.Model):
         data = self.steps
         data[key] = value
         self.steps_json = _json.dumps(data)
+
+    @property
+    def visited(self) -> set:
+        import json as _json
+        try:
+            return set(_json.loads(self.visited_json or "[]"))
+        except ValueError:
+            return set()
+
+    def mark_visited(self, key: str) -> None:
+        """Record that the step's own page has been loaded at least once.
+
+        Some steps derive "done" from data that can already exist on a fresh
+        install (e.g. a default job board is enabled out of the box), which
+        would otherwise mark the step complete before the user ever saw it.
+        _step_done() in onboarding.py requires both this flag AND the
+        underlying data before calling a step done.
+        """
+        import json as _json
+        seen = self.visited
+        if key in seen:
+            return
+        seen.add(key)
+        self.visited_json = _json.dumps(sorted(seen))
 
 
 class KitConfig(db.Model):

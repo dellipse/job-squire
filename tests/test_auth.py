@@ -36,6 +36,22 @@ def _login(client, username, password, next_url=None):
     )
 
 
+def _dismiss_onboarding(app):
+    """These tests exercise login/logout mechanics, not the Getting Started
+    walkthrough — dismiss it so a fresh admin account's "/" renders the
+    dashboard directly instead of the onboarding force-redirect that a truly
+    unstarted checklist would trigger (see app/onboarding.py)."""
+    from app.extensions import db
+    from app.models import OnboardingState
+    with app.app_context():
+        state = db.session.get(OnboardingState, 1)
+        if state is None:
+            state = OnboardingState(id=1)
+            db.session.add(state)
+        state.dismissed = True
+        db.session.commit()
+
+
 # --------------------------------------------------------------------------- #
 # _is_safe_next — pure open-redirect guard
 # --------------------------------------------------------------------------- #
@@ -68,7 +84,8 @@ def test_is_safe_next_rejects_unsafe_targets(target):
 # Login flow
 # --------------------------------------------------------------------------- #
 
-def test_login_success_redirects(client):
+def test_login_success_redirects(client, app):
+    _dismiss_onboarding(app)
     resp = _login(client, ADMIN_USERNAME, ADMIN_PASSWORD)
     assert resp.status_code == 302
     # Lands on the dashboard, and the session is now authenticated.
@@ -84,8 +101,9 @@ def test_get_login_when_authenticated_redirects(client):
     assert resp.headers["Location"].endswith("/")
 
 
-def test_logout_clears_session(client):
+def test_logout_clears_session(client, app):
     """Logout ends the session; protected pages then bounce back to login."""
+    _dismiss_onboarding(app)
     _login(client, ADMIN_USERNAME, ADMIN_PASSWORD)
     assert client.get("/").status_code == 200
     resp = client.get("/logout", follow_redirects=False)

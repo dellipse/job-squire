@@ -107,8 +107,19 @@ def test_dashboard_and_settings_render_worker_status(client, app):
     # session. Re-seed from the same env vars conftest.py used originally so
     # this test doesn't depend on suite ordering.
     from app import _seed_users
+    from app.extensions import db
+    from app.models import OnboardingState
     with app.app_context():
         _seed_users(app)
+        # This test checks the worker-status banner on "/", not the Getting
+        # Started walkthrough — dismiss it so a fresh checklist doesn't
+        # force-redirect "/" away from the dashboard (see app/onboarding.py).
+        state = db.session.get(OnboardingState, 1)
+        if state is None:
+            state = OnboardingState(id=1)
+            db.session.add(state)
+        state.dismissed = True
+        db.session.commit()
 
     resp = _login(client)
     assert resp.status_code == 302

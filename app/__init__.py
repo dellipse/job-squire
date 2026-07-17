@@ -362,6 +362,10 @@ def _run_migrations():
         # Onboarding: remote-jobs toggle for search (docs/PLAN-onboarding.md).
         # Defaults ON so existing installs keep their current provider behavior.
         "ALTER TABLE search_config ADD COLUMN include_remote BOOLEAN DEFAULT 1",
+        # Onboarding: which step pages have actually been loaded, so a step
+        # with data-derived completion (e.g. providers, seeded with a default
+        # job board enabled) isn't marked done until the user has seen it.
+        "ALTER TABLE onboarding_state ADD COLUMN visited_json TEXT DEFAULT '[]'",
     ]
     for stmt in migrations:
         try:
@@ -401,6 +405,28 @@ def _run_migrations():
     except Exception as e:  # noqa: BLE001
         db.session.rollback()
         log.warning("mode migration skipped: %s", e)
+
+    # Onboarding: backfill "visited" for installs that finished (or were
+    # mid-way through) onboarding before step-visit tracking existed, so this
+    # change doesn't retroactively un-complete a checklist that was already
+    # done. Guarded on real prior activity (a persona answer or a stored step
+    # answer) — a row with zero interaction is indistinguishable from a fresh
+    # install whose row was just created but hasn't loaded its first page
+    # yet, and must be left alone so a same-boot restart can't fake
+    # "visited" for a step no one has actually seen.
+    try:
+        from .models import OnboardingState as _OnboardingState
+        from .onboarding import STEP_KEYS as _STEP_KEYS
+        from .onboarding import _step_data_satisfied as _step_data_satisfied
+        _state = db.session.get(_OnboardingState, 1)
+        if _state and not _state.visited and (_state.persona or _state.steps):
+            for _key in _STEP_KEYS:
+                if _step_data_satisfied(_key, _state):
+                    _state.mark_visited(_key)
+            db.session.commit()
+    except Exception as e:  # noqa: BLE001
+        db.session.rollback()
+        log.warning("onboarding visited-backfill skipped: %s", e)
 
     # Integrity check: disable any provider that is marked enabled but is
     # missing one or more required credentials.  Runs on every startup; safe
