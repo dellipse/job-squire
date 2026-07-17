@@ -3,6 +3,14 @@
 # Ensures DATA_DIR exists and is owned by the abc account before web, worker,
 # or mcp touch the shared SQLite database there. Runs after init-adduser so
 # abc's PUID/PGID mapping is already applied.
+#
+# -R matters: on a fresh volume this is a no-op either way, but a
+# DATA_HOST_DIR that already has content in it (files written directly by
+# the job-squire CLI on the host, an existing install, a restored backup)
+# only had its top-level entry re-owned without recursion -- everything
+# inside kept whatever ownership it arrived with. On a real Linux host that
+# silently leaves files unwritable by abc; harmless on runtimes whose
+# bind-mount bridge doesn't enforce uid/mode bits, but wrong either way.
 
 mkdir -p "${DATA_DIR:-/data}"
-lsiown abc:abc "${DATA_DIR:-/data}"
+lsiown -R abc:abc "${DATA_DIR:-/data}"

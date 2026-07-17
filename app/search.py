@@ -21,6 +21,7 @@ from pathlib import Path
 from flask import current_app
 
 from .crypto import decrypt
+from .db_utils import with_db_retry
 from .extensions import db
 from .models import Job, ProviderCredential, SearchConfig, SearchRun, SmtpConfig, User
 from .notify import build_digest, build_error_report, send_email
@@ -233,7 +234,7 @@ def _run_search_locked(trigger="manual"):
     run = SearchRun(trigger=trigger, status="running",
                     providers=",".join(p.provider for p in enabled))
     db.session.add(run)
-    db.session.commit()
+    with_db_retry(db.session.commit)
 
     cooldowns = _load_cooldowns()
     cooldowns_dirty = False
@@ -312,7 +313,7 @@ def _run_search_locked(trigger="manual"):
     run.emailed = emailed
     run.status = "error" if (notes and not all_items) else "ok"
     run.detail = " | ".join(notes)[:1000]
-    db.session.commit()
+    with_db_retry(db.session.commit)
     return run
 
 

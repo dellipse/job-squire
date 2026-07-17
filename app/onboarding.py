@@ -31,6 +31,7 @@ from flask import (Blueprint, current_app, flash, redirect, render_template,
                    request, url_for)
 from flask_login import current_user, login_required
 
+from .db_utils import with_db_retry
 from .extensions import db
 from .models import (AIConfig, AIProviderConfig, CandidateAsset,
                      OnboardingState, ProviderCredential, SearchConfig,
@@ -64,11 +65,14 @@ STEP_KEYS = [s["key"] for s in STEPS]
 
 
 def get_state() -> OnboardingState:
-    state = db.session.get(OnboardingState, 1)
+    # Called at the top of every Getting Started route, so this is the one
+    # spot that most needs to absorb a transient SQLite hiccup rather than
+    # 500 the whole page (see app/db_utils.py).
+    state = with_db_retry(lambda: db.session.get(OnboardingState, 1))
     if state is None:
         state = OnboardingState(id=1)
         db.session.add(state)
-        db.session.commit()
+        with_db_retry(db.session.commit)
     return state
 
 
