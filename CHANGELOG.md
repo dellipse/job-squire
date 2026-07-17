@@ -6,10 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows the `VERSION` file at the repo root, displayed in the app
 footer as `<VERSION>-<build-sha>`.
 
-## [Unreleased]
+## [0.7.9] - 2026-07-17
 
 ### Fixed
 
+- `app/ai.py`'s `run_triage_batch()` (the manual `/tools/triage-batch` tool) had several raw,
+  unwrapped SQLAlchemy calls -- the initial unscored-jobs fetch, four early-return `.count()`
+  calls, the final commit, and the final remaining-count -- that could still raise a raw
+  `sqlite3.OperationalError: disk I/O error` 500 from the same transient bind-mount hiccup that
+  `d9a9c23` (this file, `with_db_retry()`) fixed for `onboarding.get_state()` and `search.py`, but
+  never got wired into this function. All six call sites now route through `with_db_retry()`.
+- `job-squire ollama setup`'s `--base-url` defaulted to `http://localhost:11434`, which can never
+  work: the app runs inside the single container, and "localhost" there always means the container
+  itself, never the host Ollama is actually running on. The default is now
+  `http://host.docker.internal:11434` (`ops/ollama_assist.py`'s new `OLLAMA_CONTAINER_HOST`), and
+  `ops/compose.py`'s generated compose file (plus the repo's own `docker-compose.single.yml`) now
+  declare `extra_hosts: ["host.docker.internal:host-gateway"]` unconditionally so that name
+  resolves on Linux too, not just Docker Desktop/OrbStack's macOS/Windows built-in DNS. The
+  post-setup round-trip test (which runs from the CLI/host process, not the container) now probes
+  `localhost` instead of the container-facing default, since `host.docker.internal` doesn't resolve
+  from bare host. An operator-supplied `--base-url` (Ollama on another machine) is unaffected.
 - Getting Started → "Resume & documents" step never marked complete for a user who uploaded
   their own resume file: the step's completion check only recognized a `kind="Resume"`
   `CandidateAsset`, which was reserved for the AI-generated draft produced by the resume
@@ -18,6 +34,15 @@ footer as `<VERSION>-<build-sha>`.
   online-profile link never satisfied the step.
 
 ### Added
+
+- `job-squire ollama setup` now also turns on the app's "Automatic Features" toggle
+  (`ai_config.api_enabled`) by default once the provider row is written -- previously, writing an
+  `ai_provider_configs` row alone left auto-triage/follow-up drafts/weekly review sitting idle
+  until the operator separately found and checked that box in Settings. New
+  `--skip-enable-features` flag opts out (configure Ollama for manual/MCP-only use without
+  touching the toggle). `ops/ollama_assist.py`'s `write_provider_config()` does this defensively
+  (a missing/unseeded `ai_config` row warns rather than crashes, consistent with this module's
+  existing "additive, never assumed" handling of schema gaps).
 
 - `app/resume_convert.py`: deterministic, non-AI conversion of an uploaded resume document to
   markdown -- docx (via `python-docx`, mapping headings/bold/italic/lists/simple tables), pdf
