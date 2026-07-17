@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows the `VERSION` file at the repo root, displayed in the app
 footer as `<VERSION>-<build-sha>`.
 
-## [Unreleased]
+## [0.7.8] - 2026-07-17
 
 ### Added
 
@@ -53,6 +53,15 @@ footer as `<VERSION>-<build-sha>`.
   `is_triage`, so a provider's `triage_model` — settable via `job-squire ollama setup` since it was
   added, but with no Settings form field until this change — was silently ignored in favor of the
   (larger, slower) analysis model on every triage/follow-up call.
+- CI's Trivy image-scan gate ("fixable CRITICAL/HIGH CVEs") was failing on curl/libcurl 8.19.0-r0 in
+  the LinuxServer Alpine 3.23 base — two HIGH CVEs (CVE-2026-5773, CVE-2026-6276) with no fix
+  backported to that branch. Bumped the base image to the Alpine 3.24 line
+  (`ghcr.io/linuxserver/baseimage-alpine:3.24-03b33b49-ls6`), which ships curl 8.21.0-r0 and resolves
+  both. This also moves the base's Python from 3.12 to 3.14; the full `requirements.txt` lockfile (61
+  packages, `cryptography`/`lxml`/`pydantic_core` included) was re-verified to install as binary
+  musllinux wheels and import cleanly at runtime under 3.14 before the bump, so the wheel-coverage
+  risk retired for 3.12 stays retired. Retires the `.trivyignore` stopgap added while the base was
+  still pinned to 3.23.
 
 ## [0.7.7] - 2026-07-13
 
