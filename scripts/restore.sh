@@ -4,32 +4,42 @@
 # Usage:
 #   ./scripts/restore.sh path/to/job-squire-backup-*.tgz
 #
-# Env overrides (same names as data/.env):
-#   DATA_HOST_DIR   Path to the data directory (default: ./job-squire/data)
+# Env overrides:
+#   CONTAINER_NAME   Compose service/container name (default: job-squire)
+#   DATA_ENV_DIR     Path to the directory holding data/.env (default:
+#                     ./job-squire/data) -- see backup.sh's header comment
+#                     for why this is the one thing still a host path.
 #
 # What this does:
-#   Stops the Job Squire container, moves the current data directory
-#   aside (never deletes it — see the .pre-restore-<timestamp> path printed
-#   at the end), extracts the backup archive in its place, then restarts.
-#   Stopping the container for the few seconds this takes is the simplest
-#   way to guarantee nothing writes to the data directory mid-restore.
+#   /data is a named Docker volume, not a host bind mount, so a restore
+#   can't just move a host directory aside and untar into it the way older
+#   versions did. Instead: tear the container and its volume down entirely
+#   (`docker compose down -v`, never deletes the *archive* you're restoring
+#   from, just the live container+volume), extract the backup, recreate the
+#   container without starting it (`docker compose create`) so a fresh empty
+#   volume exists, `docker cp` the restored data straight into it, then
+#   start. The image's own init-data-dir service re-owns everything under
+#   /data to the app's account on every boot, so there's no manual chown
+#   step needed here (unlike the old bind-mount version of this script).
 #
-# IMPORTANT — SECRET_KEY: the archive includes the .env that was active at
-# backup time, so by default this restores that SECRET_KEY too, which keeps
-# every encrypted secret (provider keys, SMTP password, Anthropic key, OAuth
-# tokens) readable. If you are restoring onto a host that already has its own
-# data/.env (e.g. moving to new hardware) and want to KEEP that key instead,
-# answer "n" when prompted and merge the two .env files by hand afterward —
-# see docs/backup-restore.md and docs/deployment.md's "Rotating SECRET_KEY"
-# section for what re-entering secrets involves if the keys end up mismatched.
+# IMPORTANT — SECRET_KEY: the archive includes the data/.env that was active
+# at backup time, so by default this restores that SECRET_KEY too, which
+# keeps every encrypted secret (provider keys, SMTP password, Anthropic key,
+# OAuth tokens) readable. If you are restoring onto a host that already has
+# its own data/.env (e.g. moving to new hardware) and want to KEEP that key
+# instead, answer "n" when prompted and merge the two .env files by hand
+# afterward — see docs/backup-restore.md and docs/deployment.md's "Rotating
+# SECRET_KEY" section for what re-entering secrets involves if the keys end
+# up mismatched.
 #
-# Podman users: replace `docker compose` below with `podman compose` (or
-# `podman-compose`, depending on how you installed it).
+# Podman users: replace `docker compose`/`docker` below with `podman
+# compose`/`podman`.
 
 set -euo pipefail
 
 BACKUP_FILE="${1:?Usage: ./scripts/restore.sh path/to/job-squire-backup-*.tgz}"
-DATA_DIR="${DATA_HOST_DIR:-./job-squire/data}"
+CONTAINER="${CONTAINER_NAME:-job-squire}"
+DATA_ENV_DIR="${DATA_ENV_DIR:-./job-squire/data}"
 
 if [[ ! -f "$BACKUP_FILE" ]]; then
   echo "Backup file not found: $BACKUP_FILE" >&2
@@ -37,10 +47,10 @@ if [[ ! -f "$BACKUP_FILE" ]]; then
 fi
 
 echo "This will:"
-echo "  1. Stop the job-squire container"
-echo "  2. Move $DATA_DIR aside (kept, not deleted)"
-echo "  3. Extract $BACKUP_FILE into $DATA_DIR"
-echo "  4. Restart the container"
+echo "  1. Stop and remove the $CONTAINER container and its data volume"
+echo "  2. Extract $BACKUP_FILE and copy it into a freshly created volume"
+echo "  3. Restore data/.env at $DATA_ENV_DIR (the previous one is kept, not deleted)"
+echo "  4. Start the container"
 echo
 read -r -p "Continue? [y/N] " ans
 if [[ "$ans" != "y" && "$ans" != "Y" ]]; then
@@ -48,40 +58,54 @@ if [[ "$ans" != "y" && "$ans" != "Y" ]]; then
   exit 1
 fi
 
-echo "Stopping the container..."
-docker compose stop job-squire
+echo "Tearing down the current container and its data volume (if any)..."
+docker compose down -v
 
 TS="$(date +%Y%m%dT%H%M%S)"
-if [[ -d "$DATA_DIR" ]]; then
-  SIDECAR="${DATA_DIR%/}.pre-restore-$TS"
-  mv "$DATA_DIR" "$SIDECAR"
-  echo "Previous data moved to $SIDECAR"
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+tar xzf "$BACKUP_FILE" -C "$WORK"
+
+if [[ ! -f "$WORK/job-squire.db" ]]; then
+  echo "The archive has no job-squire.db -- doesn't look like a job-squire backup." >&2
+  exit 1
 fi
 
-mkdir -p "$DATA_DIR"
-tar xzf "$BACKUP_FILE" -C "$DATA_DIR"
-
-# The container runs as PUID:PGID (see data/.env); make sure the restored
-# files are owned correctly, or the app can't write to them on next boot.
-if [[ -f "$DATA_DIR/.env" ]]; then
-  PUID_VAL="$(grep -E '^PUID=' "$DATA_DIR/.env" | cut -d= -f2 || true)"
-  PGID_VAL="$(grep -E '^PGID=' "$DATA_DIR/.env" | cut -d= -f2 || true)"
+# data/.env travels inside the archive but is restored to the host
+# separately, not copied into the volume -- see this script's header.
+if [[ -f "$WORK/.env" ]]; then
+  mkdir -p "$DATA_ENV_DIR"
+  if [[ -f "$DATA_ENV_DIR/.env" ]]; then
+    SIDECAR="$DATA_ENV_DIR/.env.pre-restore-$TS"
+    read -r -p "$DATA_ENV_DIR/.env already exists. Overwrite with the archive's SECRET_KEY? [y/N] " env_ans
+    if [[ "$env_ans" == "y" || "$env_ans" == "Y" ]]; then
+      mv "$DATA_ENV_DIR/.env" "$SIDECAR"
+      echo "Previous data/.env moved to $SIDECAR"
+      mv "$WORK/.env" "$DATA_ENV_DIR/.env"
+    else
+      echo "Keeping the existing data/.env -- if secrets don't decrypt after this restore, see"
+      echo "docs/deployment.md's 'Rotating SECRET_KEY' section."
+    fi
+  else
+    mv "$WORK/.env" "$DATA_ENV_DIR/.env"
+  fi
+  chmod 600 "$DATA_ENV_DIR/.env" 2>/dev/null || true
+  rm -f "$WORK/.env"
 fi
-PUID_VAL="${PUID_VAL:-1000}"
-PGID_VAL="${PGID_VAL:-1000}"
-if command -v sudo >/dev/null 2>&1; then
-  sudo chown -R "${PUID_VAL}:${PGID_VAL}" "$DATA_DIR" || \
-    echo "Warning: could not chown $DATA_DIR to ${PUID_VAL}:${PGID_VAL} — do this manually if the app fails to write." >&2
-fi
 
-echo "Restored into $DATA_DIR."
+echo "Creating the container so its data volume exists (not starting it yet)..."
+docker compose create
+
+echo "Copying restored data into the volume..."
+docker cp "$WORK/." "$CONTAINER:/data"
+
 echo "Starting the container..."
-docker compose up -d job-squire
+docker compose start "$CONTAINER"
 
 echo
 echo "Waiting for the container's aggregated healthcheck..."
 sleep 10
-docker compose ps job-squire
+docker compose ps "$CONTAINER"
 
 cat <<'EOF'
 

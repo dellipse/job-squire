@@ -15,14 +15,21 @@
 
 FakeRuntime stands in for `docker`/`podman` end to end: it answers
 `docker info` (runtime detection), `docker compose ... up/stop/start/
-restart/down` (flipping an in-memory container state keyed by compose
-project name), `docker inspect --format {{json .State}}` (reading that
-state back), and `docker logs` (a per-container log buffer, the channel
-the startup guard's FATAL lines travel through). On a successful `up`, it
-also creates a minimal sqlite database at the instance's data dir --
-standing in for the app's own first-boot schema creation -- so the
-`--import-from` tests can exercise the real ops/secrets_copy.py path
-against actual files, not a mock.
+restart/create/down` (flipping an in-memory container state keyed by
+compose project name), `docker inspect --format {{json .State}}` (reading
+that state back), `docker logs` (a per-container log buffer, the channel
+the startup guard's FATAL lines travel through), and -- since /data is a
+named Docker volume, not a host bind mount (ops/compose.py) -- `docker exec
+... python -m app.backup_cli` and `docker cp` (ops/backup.py's backup/
+restore path). Since there's no real container to hold a real volume,
+FakeRuntime keeps using the instance's own `data/` directory on the tmp_path
+filesystem as its stand-in for "whatever the named volume contains": `exec`
+tars up whatever's there (minus `.env`, mirroring app/backup_cli.py's
+`include_env=False`) instead of talking to a real container, and `cp`
+copies into it directly instead of shelling out. On a successful `up`, it
+also creates a minimal sqlite database there -- standing in for the app's
+own first-boot schema creation -- so the `--import-from` tests can exercise
+the real ops/secrets_copy.py path against actual files, not a mock.
 
 No test here touches a real container runtime, a real socket bind (see
 ops/ports.py -- `port_free` isn't injectable through create_instance, so
@@ -31,9 +38,11 @@ colliding with whatever's actually listening on the test machine), or the
 real per-user registry (XDG_CONFIG_HOME is redirected to a tmp_path, same
 as test_registry.py).
 """
+import io
 import json
 import shutil
 import sqlite3
+import tarfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -80,6 +89,10 @@ class FakeRuntime:
         self.fail_rmi: set[str] = set()
         self.removed_images: list[str] = []
         self.calls: list[tuple] = []
+        # Stand-in for "what the named volume contains", keyed by container
+        # name -- populated whenever a compose call supplies `cwd` (create/
+        # up/start/restart all pass `--project-directory root`, i.e. cwd).
+        self.data_dirs: dict[str, Path] = {}
 
     def run(self, args, **kwargs):
         args = list(args)
@@ -106,6 +119,8 @@ class FakeRuntime:
             cwd = kwargs.get("cwd")
             if "up" in args and "-d" in args:
                 self._on_up(project, cwd)
+            elif args[-1] == "create":
+                self._on_create(project, cwd)
             elif args[-1] == "stop":
                 if project in self.fail_stops:
                     return SimpleNamespace(returncode=1, stdout="", stderr=f"error stopping {project}")
@@ -125,7 +140,61 @@ class FakeRuntime:
         if len(args) >= 2 and args[1] == "logs":
             return SimpleNamespace(returncode=0, stdout="", stderr=self.logs.get(args[-1], ""))
 
+        if len(args) >= 4 and args[1] == "exec":
+            # [runtime, "exec", "-T", container_name, "python3", "-m", "app.backup_cli"]
+            container_name = args[3] if args[2] == "-T" else args[2]
+            state = self.containers.get(container_name)
+            if state is None or state.get("Status") != "running":
+                return SimpleNamespace(
+                    returncode=1, stdout=b"", stderr=b"container not running -- cannot exec"
+                )
+            return SimpleNamespace(
+                returncode=0, stdout=self._fake_volume_snapshot(container_name), stderr=b"",
+            )
+
+        if len(args) >= 4 and args[1] == "cp":
+            # [runtime, "cp", "<staging_dir>/.", "<container_name>:/data"]
+            src, dst = args[2], args[3]
+            container_name, _, _dest_path = dst.partition(":")
+            target = self.data_dirs.get(container_name)
+            if target is None:
+                return SimpleNamespace(returncode=1, stdout="", stderr=f"no such container: {container_name}")
+            src_dir = Path(src[:-2]) if src.endswith("/.") else Path(src)
+            target.mkdir(parents=True, exist_ok=True)
+            if src_dir.exists():
+                for path in sorted(src_dir.rglob("*")):
+                    if path.is_dir():
+                        continue
+                    rel = path.relative_to(src_dir).as_posix()
+                    dest = target / rel
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(path, dest)
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
         raise AssertionError(f"unexpected call in test: {args}")
+
+    def _fake_volume_snapshot(self, container_name: str) -> bytes:
+        """Tar up whatever's in this container's fake data dir, minus
+        `.env` -- the fake equivalent of app/backup_cli.py's
+        `build_backup_archive(..., include_env=False)`."""
+        data_dir = self.data_dirs.get(container_name)
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+            if data_dir is not None and data_dir.exists():
+                for path in sorted(data_dir.rglob("*")):
+                    if path.is_dir():
+                        continue
+                    rel = path.relative_to(data_dir).as_posix()
+                    if rel == paths.DATA_ENV_FILENAME:
+                        continue
+                    tar.add(path, arcname=rel)
+        return buf.getvalue()
+
+    def _on_create(self, project, cwd):
+        if project not in self.containers:
+            self.containers[project] = {"Status": "created"}
+        if cwd is not None:
+            self.data_dirs[project] = paths.data_dir(Path(cwd))
 
     def _on_up(self, project, cwd):
         if project in self.fail_projects:
@@ -139,6 +208,7 @@ class FakeRuntime:
             return
         self.containers[project] = {"Status": "running", "Health": {"Status": "healthy"}}
         if cwd is not None:
+            self.data_dirs[project] = paths.data_dir(Path(cwd))
             db_path = paths.sqlite_db_path(Path(cwd))
             if not db_path.exists():
                 db_path.parent.mkdir(parents=True, exist_ok=True)

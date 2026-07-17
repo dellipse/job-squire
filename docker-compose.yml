@@ -31,9 +31,25 @@ services:
     env_file:
       - data/.env
     volumes:
-      # Persistent data (SQLite DB + uploads) lives on the host for easy backup.
-      # Set DATA_HOST_DIR in data/.env; defaults to ./job-squire/data.
-      - ${DATA_HOST_DIR:-./job-squire/data}:/data
+      # Persistent data (SQLite DB + uploads) lives in a named Docker volume,
+      # not a host bind mount. WAL-mode SQLite over a bind mount bridged
+      # through a VM (OrbStack/Docker Desktop's virtiofs/gRPC-FUSE layer on
+      # macOS/Windows) intermittently throws "disk I/O error" under
+      # concurrent access -- see app/db_utils.py's module docstring. A named
+      # volume is native storage managed by the Docker/Podman daemon itself,
+      # not bridged through the host filesystem, so it doesn't hit that
+      # class of bug. Back this up with `job-squire backup` (or
+      # scripts/backup.sh, which drives it the same way), not by copying a
+      # host directory -- see docs/backup-restore.md.
+      - job-squire-data:/data
+      # data/.env is the one thing that still needs to be a plain host file:
+      # `env_file:` above is read by `docker compose` itself at "up" time,
+      # before the named volume even exists, so it can never point inside
+      # one. Layering a single-file bind mount on top of the named volume's
+      # mount point is safe -- Docker applies mounts in order, and a lone
+      # small text file is never touched concurrently by SQLite the way the
+      # database itself was.
+      - ./data/.env:/data/.env:ro
     healthcheck:
       # Same aggregated check baked into the image's own HEALTHCHECK (web
       # /health, mcp /health, worker heartbeat freshness); declared
@@ -65,6 +81,14 @@ services:
     # ports block above and uncomment this instead.
     # networks:
     #   - swag
+
+volumes:
+  # Compose namespaces this by project (e.g. "jobsquire_job-squire-data"),
+  # so the same literal key here is safe to reuse across every job-squire
+  # instance on a host -- each instance is already its own compose project
+  # (see job_squire_cli/ops/compose.py's `-p` project flag), so there is no
+  # cross-instance collision to guard against by hand.
+  job-squire-data:
 
 # Uncomment if using the shared-network option above.
 # Create the network once with: docker network create <network-name>

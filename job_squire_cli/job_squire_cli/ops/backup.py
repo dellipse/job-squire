@@ -14,26 +14,46 @@
 Section 7 "Backup and restore").
 
 `backup` produces one self-contained, mandatory-encrypted archive per
-instance: the entire instance directory (docs/../ops/paths.py -- not just
-`data/`, the whole thing, since that's the one directory that is the whole
-instance) plus a `backup-manifest.json` describing it, sealed with
-ops/backup_crypto.py's Argon2id + AES-256-GCM. `restore` reverses that:
-decrypt, verify, unpack, re-register, and bring the instance back up.
+instance: the whole instance directory as it would look if it were still
+all host-visible (docs/../ops/paths.py -- not just `data/`, the whole
+thing, since that's the one directory that is the whole instance) plus a
+`backup-manifest.json` describing it, sealed with ops/backup_crypto.py's
+Argon2id + AES-256-GCM. `restore` reverses that: decrypt, verify, unpack,
+re-register, and bring the instance back up.
 
-The SQLite database is captured through the same WAL-safe snapshot
-mechanism app/backup.py already uses for the in-app one-click download
-(SQLite's own Online Backup API, `Connection.backup()`, followed by an
-integrity check) -- safe to run against a live, concurrently-written
-database, so `create_backup` never needs to stop the instance's container.
-Everything else in the directory is added verbatim; the WAL/SHM/journal
-sidecar files next to the live database are skipped since the snapshot
-already captures their effect.
+Since /data is a named Docker volume, not a host bind mount (see
+ops/compose.py's render_compose_yaml), the pieces that live there --
+job-squire.db, uploads/, candidate_profile.md, and the other files
+app/backup.py's `_SIDE_FILES` names -- are not a path this module can walk
+on the host. `create_backup` instead runs `app/backup_cli.py` inside the
+instance's own running container via `docker exec` (or `podman exec`) and
+reads the resulting WAL-safe .tgz straight off the exec's stdout; that
+inner archive's members are folded into the outer one under a `data/`
+prefix, exactly matching the relative paths this module used to find by
+walking the host directly. This means `create_backup` requires the
+instance's container to be running (a live SQLite database is what makes
+the Online Backup API snapshot safe in the first place, so this isn't a
+new constraint, just a now-unavoidable one). `data/.env` is the one
+exception: it's still a real host file (compose's `env_file:` has to read
+it before the container or its volume exist at all), so it's still walked
+directly like the rest of the instance root.
+
+`restore_instance` mirrors this split: config files extract straight to
+the host as before, but anything that belongs under the named volume is
+staged to a temp directory and `docker cp`'d into the container's /data
+after the container is created but before it's started -- `docker cp`
+works against a stopped container's filesystem regardless of whether it's
+backed by a bind mount or a named volume, and the image's own
+`init-data-dir` s6 service (root/etc/s6-overlay/s6-rc.d/init-data-dir/run)
+already recursively re-owns everything under /data to the `abc` account on
+every boot, which is exactly what a volume populated by `docker cp` (as
+root) needs before the app processes can write to it.
 
 This module never imports the app package (same constraint as every other
 ops module -- see ops/crypto_mirror.py's docstring): the schema/migration
 point recorded in the manifest is a fingerprint of the live schema
-(`sqlite_master.sql`) taken directly with the stdlib `sqlite3` module, not
-a version number read from app code.
+(`sqlite_master.sql`), computed here from the snapshot bytes the container
+handed back, not a version number read from app code.
 """
 from __future__ import annotations
 
@@ -113,26 +133,40 @@ def backup_filename(name: str, *, ext: str = "tgz", timestamp: str | None = None
     return f"job-squire-{name}-{timestamp or _utc_stamp_minutes()}.{ext}"
 
 
-# ── WAL-safe database snapshot (mirrors app/backup.py's _snapshot_db) ────
+# ── Pulling the named volume's contents through the container ───────────
+
+_BACKUP_CLI_ARGV = ["python3", "-m", "app.backup_cli"]
 
 
-def _snapshot_sqlite_db(db_path: Path, dest_path: Path) -> None:
-    src = sqlite3.connect(str(db_path))
-    dst = sqlite3.connect(str(dest_path))
+def _snapshot_container_data(
+    runtime: str, container_name: str, *, root: Path, run: Runner,
+) -> bytes:
+    """Run `app/backup_cli.py` inside the running container and return the
+    raw .tgz bytes it writes to stdout -- the WAL-safe DB snapshot plus
+    uploads/ and the other files named in app/backup.py's `_SIDE_FILES`,
+    pulled live out of the named volume backing /data. Requires the
+    container to be running (`docker/podman exec` cannot reach a stopped
+    one); raises BackupError with a clear, actionable message otherwise
+    rather than a raw non-zero exit from exec.
+    """
+    state = compose.inspect_state(runtime, container_name, run=run)
+    if state is None or state.get("Status") != "running":
+        raise BackupError(
+            f"The {container_name!r} container must be running to create a backup -- "
+            f"its data now lives in a Docker volume, only reachable while the container "
+            f"is up. Start it first (`job-squire start`)."
+        )
+    argv = [compose.runtime_binary(runtime), "exec", "-T", container_name, *_BACKUP_CLI_ARGV]
     try:
-        with dst:
-            src.backup(dst)
-    finally:
-        src.close()
-        dst.close()
-
-    conn = sqlite3.connect(str(dest_path))
-    try:
-        result = conn.execute("PRAGMA integrity_check").fetchone()[0]
-    finally:
-        conn.close()
-    if result != "ok":
-        raise BackupError(f"Database snapshot of {db_path} failed integrity check: {result}")
+        result = run(argv, cwd=str(root), capture_output=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise BackupError(f"Failed to snapshot data from {container_name!r}: {exc}") from exc
+    if result.returncode != 0:
+        stderr = result.stderr
+        stderr = stderr.decode(errors="replace") if isinstance(stderr, bytes) else (stderr or "")
+        raise BackupError(f"Snapshotting data from {container_name!r} failed: {stderr.strip()}")
+    stdout = result.stdout
+    return stdout if isinstance(stdout, bytes) else stdout.encode()
 
 
 def _schema_fingerprint(db_path: Path) -> str | None:
@@ -183,36 +217,60 @@ def _write_zip(entries: list[tuple[str, Path]], manifest_bytes: bytes) -> bytes:
 
 
 def _gather_and_build(
-    root: Path, instance: Instance, *, image: str, container_format: int,
+    root: Path, instance: Instance, *, image: str, container_format: int, run: Runner = subprocess.run,
 ) -> tuple[bytes, dict]:
-    """Snapshot the database, walk the rest of the instance directory
-    verbatim, and build the (unencrypted) tar.gz or zip payload plus its
-    manifest dict. The WAL/SHM/journal sidecars next to the live database
-    are skipped -- the snapshot already captures a consistent point-in-time
-    copy of what they represent."""
+    """Pull the live data snapshot out of the container, walk the rest of
+    the instance directory verbatim, and build the (unencrypted) tar.gz or
+    zip payload plus its manifest dict.
+
+    Two sources, folded into one flat `entries` list so the resulting
+    archive has exactly the same shape it always did (a `data/` subtree
+    alongside docker-compose.yml and the top-level `.env`), even though the
+    two are gathered completely differently now:
+
+    - Everything under `root` EXCEPT the contents of `data/` (excluding
+      `data/.env` itself, which is still a real host file -- see this
+      module's docstring) is walked directly, exactly as before.
+    - `data/`'s actual contents -- the database, uploads/, and the other
+      files app/backup.py's `_SIDE_FILES` names -- come from
+      `_snapshot_container_data`, which runs `app/backup_cli.py` inside the
+      running container and returns its own inner .tgz. That inner
+      archive's members are unpacked to a temp dir here (so `_write_tar_gz`/
+      `_write_zip` can keep working with plain `(arcname, Path)` entries)
+      and re-prefixed with `data/` to land at the same relative paths a
+      host walk used to find them at.
+    """
+    data_prefix = f"{paths.DATA_DIRNAME}/"
+    data_env_rel = f"{paths.DATA_DIRNAME}/{paths.DATA_ENV_FILENAME}"
     with tempfile.TemporaryDirectory(prefix="job-squire-backup-") as work:
         work_path = Path(work)
         entries: list[tuple[str, Path]] = []
         checksums: dict[str, str] = {}
-        db_path = paths.sqlite_db_path(root)
-        schema_fingerprint = None
-        skip = {db_path.with_name(db_path.name + suffix) for suffix in ("-wal", "-shm", "-journal")}
-
-        if db_path.exists():
-            snapshot_path = work_path / paths.DB_FILENAME
-            _snapshot_sqlite_db(db_path, snapshot_path)
-            schema_fingerprint = _schema_fingerprint(snapshot_path)
-            rel = db_path.relative_to(root).as_posix()
-            entries.append((rel, snapshot_path))
-            checksums[rel] = _sha256_file(snapshot_path)
-            skip.add(db_path)
 
         for path in sorted(root.rglob("*")):
-            if path.is_dir() or path in skip:
+            if path.is_dir():
                 continue
             rel = path.relative_to(root).as_posix()
+            if rel.startswith(data_prefix) and rel != data_env_rel:
+                continue  # lives in the named volume now -- gathered below instead
             entries.append((rel, path))
             checksums[rel] = _sha256_file(path)
+
+        container_name = derive_compose_project(instance.name)
+        snapshot_bytes = _snapshot_container_data(instance.runtime, container_name, root=root, run=run)
+        schema_fingerprint = None
+        with tarfile.open(fileobj=io.BytesIO(snapshot_bytes), mode="r:gz") as inner:
+            for member in inner.getmembers():
+                if not member.isfile():
+                    continue
+                rel = data_prefix + member.name
+                dest = work_path / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(inner.extractfile(member).read())
+                entries.append((rel, dest))
+                checksums[rel] = _sha256_file(dest)
+                if member.name == paths.DB_FILENAME:
+                    schema_fingerprint = _schema_fingerprint(dest)
 
         manifest = {
             "backup_format_version": BACKUP_FORMAT_VERSION,
@@ -248,13 +306,15 @@ def create_backup(
     dest_dir: Path | None = None,
     passphrase: str,
     ext: str = "tgz",
+    run: Runner = subprocess.run,
     argon2_time_cost: int = backup_crypto.DEFAULT_TIME_COST,
     argon2_memory_cost_kib: int = backup_crypto.DEFAULT_MEMORY_COST_KIB,
     argon2_lanes: int = backup_crypto.DEFAULT_LANES,
 ) -> BackupResult:
     """Write one encrypted archive for `instance` into `dest_dir` (default:
     the user's home folder). Never writes an unencrypted archive to disk --
-    the plaintext payload only ever exists in memory."""
+    the plaintext payload only ever exists in memory. The instance's
+    container must be running (see `_snapshot_container_data`)."""
     if ext not in _EXT_TO_FORMAT:
         raise BackupError(f"Unsupported backup format {ext!r} -- expected 'tgz' or 'zip'.")
     root = instance_root(instance.name, data_root) if data_root is not None else Path(instance.data_dir)
@@ -263,7 +323,9 @@ def create_backup(
 
     image = compose.read_image(root) if paths.compose_path(root).exists() else "unknown"
     container_format = _EXT_TO_FORMAT[ext]
-    payload, manifest = _gather_and_build(root, instance, image=image, container_format=container_format)
+    payload, manifest = _gather_and_build(
+        root, instance, image=image, container_format=container_format, run=run,
+    )
 
     try:
         sealed = backup_crypto.seal(
@@ -291,6 +353,7 @@ def create_all_backups(
     passphrase: str,
     ext: str = "tgz",
     data_root: Path | None = None,
+    run: Runner = subprocess.run,
     argon2_time_cost: int = backup_crypto.DEFAULT_TIME_COST,
     argon2_memory_cost_kib: int = backup_crypto.DEFAULT_MEMORY_COST_KIB,
     argon2_lanes: int = backup_crypto.DEFAULT_LANES,
@@ -299,7 +362,7 @@ def create_all_backups(
     back up every registered instance in one run")."""
     return [
         create_backup(
-            instance, data_root=data_root, dest_dir=dest_dir, passphrase=passphrase, ext=ext,
+            instance, data_root=data_root, dest_dir=dest_dir, passphrase=passphrase, ext=ext, run=run,
             argon2_time_cost=argon2_time_cost, argon2_memory_cost_kib=argon2_memory_cost_kib,
             argon2_lanes=argon2_lanes,
         )
@@ -436,32 +499,49 @@ def _safe_member_path(dest_root: Path, arcname: str) -> Path:
     return candidate
 
 
-def _extract_payload(payload: bytes, container_format: int, dest_root: Path) -> None:
-    dest_root.mkdir(parents=True, exist_ok=True)
-    if container_format == _FORMAT_TAR:
-        with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as tar:
-            for member in tar.getmembers():
-                if not member.isfile() or not member.name.startswith(_INSTANCE_PREFIX):
-                    continue
-                rel = member.name[len(_INSTANCE_PREFIX) :]
-                if not rel:
-                    continue
-                target = _safe_member_path(dest_root, rel)
-                target.parent.mkdir(parents=True, exist_ok=True)
-                with open(target, "wb") as out:
-                    out.write(tar.extractfile(member).read())
-    else:
-        with zipfile.ZipFile(io.BytesIO(payload)) as zf:
-            for info in zf.infolist():
-                if info.is_dir() or not info.filename.startswith(_INSTANCE_PREFIX):
-                    continue
-                rel = info.filename[len(_INSTANCE_PREFIX) :]
-                if not rel:
-                    continue
-                target = _safe_member_path(dest_root, rel)
-                target.parent.mkdir(parents=True, exist_ok=True)
-                with zf.open(info) as src, open(target, "wb") as out:
-                    out.write(src.read())
+def _extract_instance_payload(
+    payload: bytes, container_format: int, *, host_root: Path, volume_staging: Path,
+) -> None:
+    """Split the archive back into the two places its two halves came from
+    (see `_gather_and_build`): `host_root` gets docker-compose.yml, the
+    compose-level `.env`, and `data/.env` -- real host files, written
+    directly and immediately. Everything else that was under `data/` lands
+    in `volume_staging` instead, with that prefix stripped (so
+    `data/job-squire.db` -> `<volume_staging>/job-squire.db`), ready for
+    `_copy_staged_data_into_container` to `docker cp` into the freshly
+    created (but not yet started) container's named volume.
+    """
+    host_root.mkdir(parents=True, exist_ok=True)
+    volume_staging.mkdir(parents=True, exist_ok=True)
+    data_prefix = f"{paths.DATA_DIRNAME}/"
+    data_env_rel = f"{paths.DATA_DIRNAME}/{paths.DATA_ENV_FILENAME}"
+    for rel, data in _iter_payload_members(payload, container_format):
+        if rel.startswith(data_prefix) and rel != data_env_rel:
+            target = _safe_member_path(volume_staging, rel[len(data_prefix):])
+        else:
+            target = _safe_member_path(host_root, rel)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with open(target, "wb") as out:
+            out.write(data)
+
+
+def _copy_staged_data_into_container(
+    runtime: str, container_name: str, staging_dir: Path, *, run: Runner,
+) -> None:
+    """`docker/podman cp <staging_dir>/. <container_name>:/data` -- the
+    trailing `/.` on the source copies the *contents* of `staging_dir` into
+    `/data` rather than nesting a `staging_dir` directory inside it. Works
+    against a container created but not started (`compose_create`), which
+    is the point: nothing has read or written the volume yet, so there is
+    no race with the app's own first-boot database creation.
+    """
+    argv = [compose.runtime_binary(runtime), "cp", f"{staging_dir}/.", f"{container_name}:/data"]
+    try:
+        result = run(argv, capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RestoreError(f"Failed to copy restored data into {container_name!r}: {exc}") from exc
+    if result.returncode != 0:
+        raise RestoreError(f"Copying restored data into {container_name!r} failed: {result.stderr}")
 
 
 @dataclass(frozen=True)
@@ -492,6 +572,14 @@ def restore_instance(
     typically the click layer, resolves the rename interactively) or
     `overwrite=True`; leaving both unset/False raises NameCollisionError
     rather than clobbering silently (PLAN Section 7).
+
+    The container is always created (`compose create`) and its restored
+    data always copied in, regardless of `bring_up` -- the named volume
+    only exists once the container is created, so that step can't be
+    deferred to a later `job-squire start` the way starting the app itself
+    can. `bring_up=False` only skips the final `compose up`/health wait,
+    leaving a fully-populated, not-yet-started container for the operator
+    to inspect or adjust before starting it themselves.
     """
     manifest_instance: dict = opened.manifest["instance"]
     slug = sanitize_slug(target_name or manifest_instance["name"])
@@ -514,70 +602,82 @@ def restore_instance(
     if root.exists():
         shutil.rmtree(root)
 
-    _extract_payload(opened.payload, opened.container_format, root)
+    staging_ctx = tempfile.TemporaryDirectory(prefix="job-squire-restore-")
+    staging_dir = Path(staging_ctx.name)
     try:
-        paths.data_env_path(root).chmod(0o600)  # holds SECRET_KEY/ADMIN_PASSWORD; matches create's own chmod
-    except OSError:
-        pass
-
-    mode = manifest_instance.get("mode", "local")
-    registered = [i for i in list_instances() if i.name != slug]
-    app_port = manifest_instance.get("app_port")
-    mcp_port = manifest_instance.get("mcp_port")
-    ports_changed = False
-    if mode == "local":
-        used_app = {i.app_port for i in registered if i.app_port is not None}
-        used_mcp = {i.mcp_port for i in registered if i.mcp_port is not None}
-        collides = (
-            app_port is None or mcp_port is None
-            or app_port in used_app or mcp_port in used_mcp
-            or not ports.default_port_free(app_port) or not ports.default_port_free(mcp_port)
+        _extract_instance_payload(
+            opened.payload, opened.container_format, host_root=root, volume_staging=staging_dir,
         )
-        if collides:
-            app_port, mcp_port = ports.allocate_port_pair(registered)
-            ports_changed = True
+        try:
+            paths.data_env_path(root).chmod(0o600)  # holds SECRET_KEY/ADMIN_PASSWORD; matches create's own chmod
+        except OSError:
+            pass
 
-    chosen_runtime = lc.runtime_mod.ensure_runtime(
-        confirm=confirm, prefer_orbstack=prefer_orbstack, prefer_docker_desktop=prefer_docker_desktop,
-        run=run, which=which,
-    )
+        mode = manifest_instance.get("mode", "local")
+        registered = [i for i in list_instances() if i.name != slug]
+        app_port = manifest_instance.get("app_port")
+        mcp_port = manifest_instance.get("mcp_port")
+        ports_changed = False
+        if mode == "local":
+            used_app = {i.app_port for i in registered if i.app_port is not None}
+            used_mcp = {i.mcp_port for i in registered if i.mcp_port is not None}
+            collides = (
+                app_port is None or mcp_port is None
+                or app_port in used_app or mcp_port in used_mcp
+                or not ports.default_port_free(app_port) or not ports.default_port_free(mcp_port)
+            )
+            if collides:
+                app_port, mcp_port = ports.allocate_port_pair(registered)
+                ports_changed = True
 
-    if renamed or ports_changed:
-        compose_env = dotenv.parse(paths.compose_env_path(root))
-        compose.write_compose_files(
-            root, container_name=derive_compose_project(slug), image=(image or compose.read_image(root)),
-            loopback_only=(mode == "local"), app_port=app_port, mcp_port=mcp_port,
-            puid=int(compose_env.get("PUID", 1000)), pgid=int(compose_env.get("PGID", 1000)),
-            umask=compose_env.get("UMASK", "022"), data_host_dir=compose_env.get("DATA_HOST_DIR", "./data"),
+        chosen_runtime = lc.runtime_mod.ensure_runtime(
+            confirm=confirm, prefer_orbstack=prefer_orbstack, prefer_docker_desktop=prefer_docker_desktop,
+            run=run, which=which,
         )
-    elif image is not None:
-        compose.write_image(root, image)
 
-    if renamed:
-        cookie_name = derive_cookie_name(slug)
-        dotenv.set_line(paths.data_env_path(root), "INSTANCE_NAME", slug)
-        dotenv.set_line(paths.data_env_path(root), "SESSION_COOKIE_NAME", cookie_name)
-    else:
-        cookie_name = manifest_instance.get("cookie_name") or derive_cookie_name(slug)
+        if renamed or ports_changed:
+            compose_env = dotenv.parse(paths.compose_env_path(root))
+            compose.write_compose_files(
+                root, container_name=derive_compose_project(slug), image=(image or compose.read_image(root)),
+                loopback_only=(mode == "local"), app_port=app_port, mcp_port=mcp_port,
+                puid=int(compose_env.get("PUID", 1000)), pgid=int(compose_env.get("PGID", 1000)),
+                umask=compose_env.get("UMASK", "022"),
+            )
+        elif image is not None:
+            compose.write_image(root, image)
 
-    if mode == "local":
-        public_url = f"http://localhost:{app_port}"
-    else:
-        public_url = manifest_instance.get("public_url", "")
+        if renamed:
+            cookie_name = derive_cookie_name(slug)
+            dotenv.set_line(paths.data_env_path(root), "INSTANCE_NAME", slug)
+            dotenv.set_line(paths.data_env_path(root), "SESSION_COOKIE_NAME", cookie_name)
+        else:
+            cookie_name = manifest_instance.get("cookie_name") or derive_cookie_name(slug)
 
-    instance = add_instance(
-        name=slug, mode=mode, runtime=chosen_runtime, data_dir=str(root), public_url=public_url,
-        app_port=app_port, mcp_port=mcp_port, cookie_name=cookie_name, created=manifest_instance.get("created"),
-    )
+        if mode == "local":
+            public_url = f"http://localhost:{app_port}"
+        else:
+            public_url = manifest_instance.get("public_url", "")
 
-    health = None
-    if bring_up:
+        instance = add_instance(
+            name=slug, mode=mode, runtime=chosen_runtime, data_dir=str(root), public_url=public_url,
+            app_port=app_port, mcp_port=mcp_port, cookie_name=cookie_name, created=manifest_instance.get("created"),
+        )
+
         container_name = derive_compose_project(slug)
-        up_result = compose.compose_up(chosen_runtime, root, container_name, run=run)
-        if up_result.returncode != 0:
-            lc._raise_for_failed_state(chosen_runtime, container_name, None, run=run)
-        health = lc.wait_for_state(chosen_runtime, container_name, run=run, sleep=sleep)
-        if health is not None and health.get("Status") == "exited":
-            lc._raise_for_failed_state(chosen_runtime, container_name, health, run=run)
+        create_result = compose.compose_create(chosen_runtime, root, container_name, run=run)
+        if create_result.returncode != 0:
+            raise RestoreError(f"Failed to create container {container_name!r}: {create_result.stderr}")
+        _copy_staged_data_into_container(chosen_runtime, container_name, staging_dir, run=run)
 
-    return RestoreResult(instance=instance, data_dir=root, health=health)
+        health = None
+        if bring_up:
+            up_result = compose.compose_up(chosen_runtime, root, container_name, run=run)
+            if up_result.returncode != 0:
+                lc._raise_for_failed_state(chosen_runtime, container_name, None, run=run)
+            health = lc.wait_for_state(chosen_runtime, container_name, run=run, sleep=sleep)
+            if health is not None and health.get("Status") == "exited":
+                lc._raise_for_failed_state(chosen_runtime, container_name, health, run=run)
+
+        return RestoreResult(instance=instance, data_dir=root, health=health)
+    finally:
+        staging_ctx.cleanup()

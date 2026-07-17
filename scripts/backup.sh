@@ -4,44 +4,40 @@
 # Usage:
 #   ./scripts/backup.sh [backup-dir]
 #
-# Env overrides (same names as data/.env):
-#   DATA_HOST_DIR   Path to the data directory (default: ./job-squire/data)
+# Env overrides:
+#   CONTAINER_NAME   Compose service/container name (default: job-squire)
+#   DATA_ENV_DIR     Path to the directory holding data/.env (default:
+#                     ./job-squire/data) -- the only thing this script still
+#                     reads directly off the host; everything else the app
+#                     itself owns lives in a named Docker volume now (see
+#                     docs/PLAN-deployment-modes.md), not a host path.
 #
 # What this does:
-#   The SQLite DB runs in WAL mode, so `cp`/`tar` of job-squire.db alone can
-#   miss committed data still sitting in job-squire.db-wal, and a plain copy
-#   of all three files (.db/.db-wal/.db-shm) while the app is live is not
-#   guaranteed atomic. This script instead uses Python's stdlib
-#   sqlite3.Connection.backup(), which drives SQLite's own Online Backup API
-#   -- the same mechanism the `sqlite3 .backup` CLI command uses -- to produce
-#   a single consistent snapshot safely, even with the app running and
-#   writing concurrently. No downtime required.
+#   /data is a named Docker volume, not a host bind mount, so this script
+#   cannot read job-squire.db off the host filesystem the way older versions
+#   did. Instead it runs `python -m app.backup_cli` INSIDE the running
+#   container -- the same WAL-safe snapshot mechanism job-squire-cli's own
+#   `backup` command uses (SQLite's Online Backup API via
+#   sqlite3.Connection.backup(), the same thing the `sqlite3 .backup` CLI
+#   command does), pulling out the database, uploads/, and the other files
+#   named in app/backup.py's _SIDE_FILES -- and captures its stdout. The
+#   container is never stopped; the Online Backup API is safe to run
+#   against a live, concurrently-written database. data/.env is added
+#   separately from the host, since it's still a real host file (compose's
+#   env_file: has to read it before the container or its volume exist at
+#   all).
 #
-# Run this from the host (needs python3 with the stdlib sqlite3 module,
-# present on effectively every Python install -- nothing extra to pip
-# install). If your host has no python3, run the equivalent command inside
-# the running container instead:
-#   docker compose exec job-squire python3 -c "..."
-# (see docs/backup-restore.md for the full inline command).
-#
-# Podman users: this script only shells out to `tar`/`python3`, not docker
-# itself, so it works unmodified under Podman too.
+# Podman users: replace `docker compose`/`docker` below with `podman
+# compose`/`podman`.
 
 set -euo pipefail
 
-DATA_DIR="${DATA_HOST_DIR:-./job-squire/data}"
+CONTAINER="${CONTAINER_NAME:-job-squire}"
+DATA_ENV_DIR="${DATA_ENV_DIR:-./job-squire/data}"
 DEST_DIR="${1:-./backups}"
 
-if [[ ! -d "$DATA_DIR" ]]; then
-  echo "Data directory not found: $DATA_DIR" >&2
-  echo "Set DATA_HOST_DIR or pass the right path, e.g.: DATA_HOST_DIR=/path/to/data ./scripts/backup.sh" >&2
-  exit 1
-fi
-
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "python3 not found on this host. Run the backup from inside the container instead:" >&2
-  echo "  docker compose exec job-squire python3 -c \"import sqlite3; s=sqlite3.connect('/data/job-squire.db'); d=sqlite3.connect('/data/job-squire-backup.db');" \
-       "\nwith d: s.backup(d)\"" >&2
+if ! command -v docker >/dev/null 2>&1; then
+  echo "docker not found on this host -- this script needs the container running to snapshot its data." >&2
   exit 1
 fi
 
@@ -51,51 +47,34 @@ trap 'rm -rf "$WORK"' EXIT
 
 mkdir -p "$DEST_DIR"
 
-DB_PATH="$DATA_DIR/job-squire.db"
-if [[ ! -f "$DB_PATH" ]]; then
-  echo "No job-squire.db found at $DB_PATH — nothing to back up yet." >&2
+echo "Snapshotting live data from the $CONTAINER container (WAL-safe) ..."
+if ! docker compose exec -T "$CONTAINER" python3 -m app.backup_cli > "$WORK/data.tgz"; then
+  echo "Failed to snapshot data from the $CONTAINER container." >&2
+  echo "Is it running and healthy? Check with: docker compose ps" >&2
   exit 1
 fi
 
-echo "Snapshotting $DB_PATH (WAL-safe, live) ..."
-python3 - "$DB_PATH" "$WORK/job-squire.db" <<'PY'
-import sqlite3
-import sys
+tar xzf "$WORK/data.tgz" -C "$WORK"
+rm -f "$WORK/data.tgz"
 
-src_path, dst_path = sys.argv[1], sys.argv[2]
-src = sqlite3.connect(src_path)
-dst = sqlite3.connect(dst_path)
-try:
-    with dst:
-        src.backup(dst)
-finally:
-    src.close()
-    dst.close()
-PY
+if [[ ! -f "$WORK/job-squire.db" ]]; then
+  echo "The container reported no database yet -- nothing to back up. (Has Getting Started run?)" >&2
+  exit 1
+fi
 
-# Sanity check: the snapshot must open cleanly and pass an integrity check
-# before we call the backup good.
-python3 - "$WORK/job-squire.db" <<'PY'
-import sqlite3
-import sys
-
-conn = sqlite3.connect(sys.argv[1])
-result = conn.execute("PRAGMA integrity_check").fetchone()[0]
-conn.close()
-if result != "ok":
-    print(f"Integrity check failed on the snapshot: {result}", file=sys.stderr)
-    sys.exit(1)
-PY
-
-# Bring along everything else needed for a full restore.
-cp -a "$DATA_DIR/uploads" "$WORK/" 2>/dev/null || true
-cp -a "$DATA_DIR/candidate_profile.md" "$WORK/" 2>/dev/null || true
-cp -a "$DATA_DIR/oauth_tokens.json" "$WORK/" 2>/dev/null || true
-cp -a "$DATA_DIR/.env" "$WORK/" 2>/dev/null || true
+# data/.env is the one thing that's still a plain host file (see this
+# script's header comment) -- add it from the host, not the container.
+if [[ -f "$DATA_ENV_DIR/.env" ]]; then
+  cp -a "$DATA_ENV_DIR/.env" "$WORK/"
+else
+  echo "Warning: no $DATA_ENV_DIR/.env found -- the archive will be missing SECRET_KEY and won't be" >&2
+  echo "restorable as-is. Set DATA_ENV_DIR if data/.env lives somewhere else." >&2
+fi
 
 ARCHIVE="$DEST_DIR/job-squire-backup-$TS.tgz"
 tar czf "$ARCHIVE" -C "$WORK" .
 
 echo "Wrote $ARCHIVE"
-echo "Contains: job-squire.db (integrity-checked snapshot), uploads/, candidate_profile.md, oauth_tokens.json, .env"
+echo "Contains: job-squire.db (integrity-checked snapshot), uploads/, candidate_profile.md,"
+echo "profile_prompt.md, oauth_tokens.json, privacy_vault.json, .env"
 echo "Restore with: ./scripts/restore.sh $ARCHIVE"

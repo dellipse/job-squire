@@ -19,10 +19,15 @@ to look.
 > falls back gracefully, but concurrent startup races are theoretically possible on a fresh DB.
 
 ### App can't write to `/data` / permission denied
-The container runs as the UID/GID set via `PUID`/`PGID` build args and `/data` is a **host bind
-mount** (`DATA_HOST_DIR`), so the host folder must be owned by that UID/GID. If you change
-`PUID/PGID` or the folder is owned by someone else, the container user can't write. **Fix:**
-`sudo chown -R <PUID>:<PGID> ./job-squire/data`.
+`/data` is a **named Docker volume**, not a host bind mount, and the image's own `init-data-dir`
+s6 service (`root/etc/s6-overlay/s6-rc.d/init-data-dir/run`) recursively re-owns it to the
+`PUID`/`PGID` account on every boot, so this shouldn't come up in normal use. If it does anyway
+(e.g. right after `docker cp`-ing data into a container that hasn't started yet, or a runtime
+whose volume driver doesn't honor uid/gid the way Docker's default one does), restart the
+container -- `sudo docker compose restart` -- to re-run that init step. `data/.env` is the one
+piece still on the host (a single bind-mounted file, `./data/.env`); if that specific file is
+unwritable, the usual cause is that it or its parent directory is owned by something other than
+the user running `docker compose`.
 
 ### `curl: (52) Empty reply` / `(92) PROTOCOL_ERROR` on the MCP subdomain
 nginx rejected the proxy-conf, so the subdomain fell through to a default server. The cause was

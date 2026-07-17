@@ -14,6 +14,8 @@ Restore is intentionally not covered here — it is a host-level CLI operation
 import io
 import os
 import sqlite3
+import subprocess
+import sys
 import tarfile
 
 import pytest
@@ -97,6 +99,59 @@ def test_build_backup_archive_missing_db_raises(app, app_context, tmp_path):
     os.makedirs(empty_dir, exist_ok=True)
     with pytest.raises(FileNotFoundError):
         build_backup_archive(empty_dir, os.path.join(empty_dir, "uploads"))
+
+
+def test_build_backup_archive_includes_privacy_vault_and_profile_prompt(app, app_context):
+    """Regression guard: job-squire-cli's create_backup (once /data may be a
+    named Docker volume) relies entirely on this function's _SIDE_FILES list
+    to capture anything besides the DB and uploads/ -- a file missing here is
+    a file silently absent from every CLI backup, not just the in-app one."""
+    data_dir = app.config["DATA_DIR"]
+    upload_dir = app.config["UPLOAD_DIR"]
+    vault_path = os.path.join(data_dir, "privacy_vault.json")
+    prompt_path = os.path.join(data_dir, "profile_prompt.md")
+
+    with open(vault_path, "w") as f:
+        f.write("{}")
+    with open(prompt_path, "w") as f:
+        f.write("# scoring guidance\n")
+    try:
+        _, blob = build_backup_archive(data_dir, upload_dir, include_env=False)
+        with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as tar:
+            names = tar.getnames()
+            assert "privacy_vault.json" in names
+            assert "profile_prompt.md" in names
+    finally:
+        os.remove(vault_path)
+        os.remove(prompt_path)
+
+
+# --------------------------------------------------------------------------- #
+# app/backup_cli.py -- the container-side entrypoint job-squire-cli execs
+# --------------------------------------------------------------------------- #
+
+def test_backup_cli_writes_archive_bytes_to_stdout(app, app_context):
+    data_dir = app.config["DATA_DIR"]
+    env = dict(os.environ, DATA_DIR=data_dir)
+    result = subprocess.run(
+        [sys.executable, "-m", "app.backup_cli"], env=env, capture_output=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr.decode(errors="replace")
+    with tarfile.open(fileobj=io.BytesIO(result.stdout), mode="r:gz") as tar:
+        names = tar.getnames()
+        assert "job-squire.db" in names
+        assert ".env" not in names  # never duplicates the host's data/.env
+
+
+def test_backup_cli_missing_db_exits_nonzero_with_stderr_message(tmp_path):
+    empty_dir = tmp_path / "no-db-here"
+    empty_dir.mkdir()
+    env = dict(os.environ, DATA_DIR=str(empty_dir))
+    result = subprocess.run(
+        [sys.executable, "-m", "app.backup_cli"], env=env, capture_output=True, timeout=30,
+    )
+    assert result.returncode == 1
+    assert b"No database found" in result.stderr
 
 
 # --------------------------------------------------------------------------- #

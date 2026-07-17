@@ -26,9 +26,16 @@ machine's, and Apple Silicon GPUs are never visible to a container at all.
 This module runs directly on the host (the CLI already does, for every
 other command here) so its detection is authoritative -- see the plan's
 "three sources with strict precedence" table. `write_host_capabilities`
-writes the result into the instance's `data/` directory specifically
-(not the instance root) because `data/` is what's bind-mounted into the
-container, so the running app can read this file too.
+writes the result into the instance's `data/` directory specifically (not
+the instance root). Historically that was also where the running app
+could read it from, since `data/` was bind-mounted into the container
+whole; now that /data is a named Docker volume and only `data/.env` is
+still a host file (ops/compose.py), this file is host-only -- CLI/host
+tooling can still read it via `read_host_capabilities`, but the app itself
+cannot see it without a separate `docker cp` into the volume. The web
+app's onboarding integration mentioned above was never actually built
+(nothing in app/ reads this file), so nothing regresses today; anyone
+picking that up later needs to route it through the volume instead.
 
 **This package still depends on nothing but click + cryptography** (see
 pyproject.toml and ops/secrets_copy.py's module docstring for why): no
@@ -299,10 +306,10 @@ def detect_host_capabilities(
 
 
 def write_host_capabilities(root: Path, caps: HostCapabilities) -> Path:
-    """Write into `data/host_capabilities.json`, not the instance root --
-    `data/` is the directory bind-mounted into the container (paths.py),
-    so the web app can read this file directly. Carries its own
-    `detected_at` timestamp so the app can show when detection last ran."""
+    """Write into `data/host_capabilities.json`, not the instance root.
+    Host-only, not container-visible -- see this module's docstring
+    ("Container Blindness"). Carries its own `detected_at` timestamp so
+    anything reading it later can show when detection last ran."""
     path = paths.data_dir(root) / HOST_CAPABILITIES_FILENAME
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(asdict(caps), indent=2) + "\n")

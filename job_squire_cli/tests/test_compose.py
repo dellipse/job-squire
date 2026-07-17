@@ -76,6 +76,21 @@ def test_render_compose_yaml_local_mode_binds_loopback():
     assert "build:" not in yaml_text  # no repo checkout required to run a CLI-created instance
 
 
+def test_render_compose_yaml_uses_named_volume_not_a_data_host_dir_bind_mount():
+    """/data is a named volume scoped to this container, not a configurable
+    host path -- see this module's docstring for why (WAL-mode SQLite over
+    a bind mount bridged through OrbStack/Docker Desktop's VM filesystem
+    layer). Only data/.env stays a plain host file, since env_file: has to
+    read it before the volume even exists."""
+    yaml_text = compose.render_compose_yaml(
+        container_name="job-squire-castelo", image="ghcr.io/dellipse/job-squire:latest", loopback_only=True,
+    )
+    assert "job-squire-castelo-data:/data" in yaml_text
+    assert "./data/.env:/data/.env:ro" in yaml_text
+    assert "DATA_HOST_DIR" not in yaml_text
+    assert "volumes:\n  job-squire-castelo-data:" in yaml_text
+
+
 def test_render_compose_yaml_network_mode_binds_all_interfaces():
     yaml_text = compose.render_compose_yaml(
         container_name="job-squire-castelo", image="ghcr.io/dellipse/job-squire:latest", loopback_only=False,
@@ -102,7 +117,7 @@ def test_render_compose_env_includes_hostports_when_given():
     assert "APP_HOST_PORT=8081" in env_text
     assert "MCP_HOST_PORT=9001" in env_text
     assert "PUID=1000" in env_text
-    assert "DATA_HOST_DIR=./data" in env_text
+    assert "DATA_HOST_DIR" not in env_text  # /data is a named volume now, not a configurable host path
 
 
 def test_render_compose_env_omits_hostports_when_not_given():
@@ -363,7 +378,7 @@ def test_write_compose_files_never_touches_data_env(tmp_path):
 
     compose.write_compose_files(
         root, container_name="job-squire-castelo", image=compose.DEFAULT_IMAGE,
-        loopback_only=True, app_port=8080, mcp_port=9000, data_host_dir=str(data_dir),
+        loopback_only=True, app_port=8080, mcp_port=9000,
     )
 
     assert (data_dir / ".env").read_text() == "SECRET_KEY=untouched\n"
@@ -371,14 +386,14 @@ def test_write_compose_files_never_touches_data_env(tmp_path):
     assert paths.compose_env_path(root).exists()
 
 
-def test_write_compose_files_preserves_custom_puid_pgid_and_data_host_dir(tmp_path):
+def test_write_compose_files_preserves_custom_puid_pgid(tmp_path):
     root = tmp_path / "existing-install"
     compose.write_compose_files(
         root, container_name="job-squire-castelo", image=compose.DEFAULT_IMAGE,
         loopback_only=True, app_port=8080, mcp_port=9000,
-        puid=2000, pgid=2001, data_host_dir="/srv/job-squire/data",
+        puid=2000, pgid=2001,
     )
     env_text = paths.compose_env_path(root).read_text()
     assert "PUID=2000" in env_text
     assert "PGID=2001" in env_text
-    assert "DATA_HOST_DIR=/srv/job-squire/data" in env_text
+    assert "DATA_HOST_DIR" not in env_text

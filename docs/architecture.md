@@ -5,7 +5,14 @@
 The project builds **one Docker image** (`Dockerfile`, `ghcr.io/linuxserver/baseimage-alpine`
 base) that runs as **one container** (`docker-compose.yml`), generated per instance by the
 `job-squire` CLI's `create` command. The same application code runs three logical processes inside
-that one container, sharing the same `/data` bind mount and therefore the same SQLite database.
+that one container, sharing the same `/data` named Docker volume and therefore the same SQLite
+database. `/data` is a named volume rather than a host bind mount specifically because WAL-mode
+SQLite over a bind mount bridged through a VM (OrbStack/Docker Desktop's filesystem layer on macOS/
+Windows) intermittently throws "disk I/O error" under concurrent access; a named volume is native
+storage managed by the Docker/Podman daemon itself, not bridged through the host filesystem. Only
+`data/.env` (SECRET_KEY and the rest of the container's env vars) is still a plain host file,
+layered on top of the volume as a single-file bind mount, since `env_file:` has to read it before
+the volume even exists.
 
 | Process | Command | Port | Role |
 |---|---|---|---|
@@ -48,10 +55,12 @@ container over a shared Docker network by container name:
                               │   ├─ worker (APScheduler, ↳ web)  │
                               │   └─ mcp    (uvicorn, ↳ web)      │
                               └────────────────┬────────────────┘
-                                               │  bind mount
-                    ~/job-squire/castelo/data/          → /data
+                                               │  named volume
+                    job-squire-castelo-data           → /data
                                         /data/job-squire.db (SQLite, WAL)
                                         /data/uploads/  /data/candidate_profile.md
+                                               │  single-file bind mount
+                    ~/job-squire/castelo/data/.env     → /data/.env (ro)
 ```
 
 In local mode there is no proxy at all — the container publishes its two ports straight to

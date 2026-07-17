@@ -714,8 +714,12 @@ directly on the host (as every other command in this file already does),
 so it's the authoritative source the plan's "Container Blindness" section
 calls for. Passing `NAME` additionally writes the result into that
 instance's `data/host_capabilities.json` -- `data/`, not the instance root,
-because that's the directory bind-mounted into the container, so the
-running app can read it too.
+though note `data/` is host-only now (only `data/.env` is still bind-mounted
+into the container; the rest of `/data` is a named Docker volume, see
+`docs/PLAN-deployment-modes.md`), so this file is CLI/host tooling reading
+CLI/host tooling's own output, not something the running app can see. The
+web app's own onboarding integration this was meant to feed was never
+actually built.
 
 **Tier -> model mapping is data, not doctrine.** `ops/ollama_assist.py`'s
 `TIER_TABLE` maps five tiers (not-reasonable / entry / capable / strong /

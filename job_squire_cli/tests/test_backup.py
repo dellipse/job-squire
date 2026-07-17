@@ -63,7 +63,7 @@ def test_create_backup_writes_encrypted_archive_with_restrictive_permissions(fak
     instance = _make_instance(fake, data_root)
     dest_dir = tmp_path / "backups"
 
-    result = bk.create_backup(instance, dest_dir=dest_dir, passphrase="s3cr3t!", **_CHEAP_ARGON2)
+    result = bk.create_backup(instance, dest_dir=dest_dir, passphrase="s3cr3t!", run=fake.run, **_CHEAP_ARGON2)
 
     assert result.archive_path.exists()
     assert result.archive_path.parent == dest_dir
@@ -90,7 +90,7 @@ def test_create_backup_writes_encrypted_archive_with_restrictive_permissions(fak
 def test_create_backup_zip_format_round_trips(fake, data_root, tmp_path):
     instance = _make_instance(fake, data_root)
     result = bk.create_backup(
-        instance, dest_dir=tmp_path / "backups", passphrase="pw", ext="zip", **_CHEAP_ARGON2
+        instance, dest_dir=tmp_path / "backups", passphrase="pw", ext="zip", run=fake.run, **_CHEAP_ARGON2
     )
     assert result.archive_path.suffix == ".zip"
     opened = bk.open_backup(result.archive_path, "pw")
@@ -111,7 +111,7 @@ def test_create_all_backups_writes_one_archive_per_instance(fake, data_root, tmp
     _make_instance(fake, data_root, name="one")
     _make_instance(fake, data_root, name="two")
 
-    results = bk.create_all_backups(dest_dir=tmp_path / "backups", passphrase="pw", **_CHEAP_ARGON2)
+    results = bk.create_all_backups(dest_dir=tmp_path / "backups", passphrase="pw", run=fake.run, **_CHEAP_ARGON2)
 
     assert sorted(r.instance_name for r in results) == ["one", "two"]
     assert len({r.archive_path for r in results}) == 2
@@ -123,7 +123,7 @@ def test_create_all_backups_writes_one_archive_per_instance(fake, data_root, tmp
 
 def test_open_backup_wrong_passphrase_fails_clearly(fake, data_root, tmp_path):
     instance = _make_instance(fake, data_root)
-    result = bk.create_backup(instance, dest_dir=tmp_path, passphrase="correct-horse", **_CHEAP_ARGON2)
+    result = bk.create_backup(instance, dest_dir=tmp_path, passphrase="correct-horse", run=fake.run, **_CHEAP_ARGON2)
 
     with pytest.raises(bk.WrongPassphraseError):
         bk.open_backup(result.archive_path, "wrong-horse")
@@ -131,7 +131,7 @@ def test_open_backup_wrong_passphrase_fails_clearly(fake, data_root, tmp_path):
 
 def test_open_backup_verifies_checksums_and_reads_manifest(fake, data_root, tmp_path):
     instance = _make_instance(fake, data_root)
-    result = bk.create_backup(instance, dest_dir=tmp_path, passphrase="pw", **_CHEAP_ARGON2)
+    result = bk.create_backup(instance, dest_dir=tmp_path, passphrase="pw", run=fake.run, **_CHEAP_ARGON2)
 
     opened = bk.open_backup(result.archive_path, "pw")
 
@@ -152,7 +152,9 @@ def test_restore_round_trip_preserves_whole_directory_and_registers_instance(fak
     (root / "notes.txt").write_text("hand-written notes\n")
     (paths.data_dir(root) / "candidate_profile.md").write_text("# Candidate\n")
 
-    result = bk.create_backup(instance, dest_dir=tmp_path / "backups", passphrase="s3cr3t!", **_CHEAP_ARGON2)
+    result = bk.create_backup(
+        instance, dest_dir=tmp_path / "backups", passphrase="s3cr3t!", run=fake.run, **_CHEAP_ARGON2
+    )
 
     # Simulate restoring on a machine/registry that has never heard of
     # "castelo" -- the archive is the only thing that travels.
@@ -188,7 +190,7 @@ def test_restore_preserves_stored_secret_key_so_encrypted_settings_still_decrypt
         if line.startswith("SECRET_KEY=")
     ][0]
 
-    result = bk.create_backup(instance, dest_dir=tmp_path, passphrase="pw", **_CHEAP_ARGON2)
+    result = bk.create_backup(instance, dest_dir=tmp_path, passphrase="pw", run=fake.run, **_CHEAP_ARGON2)
     reg.remove_instance("castelo")
     opened = bk.open_backup(result.archive_path, "pw")
     restore_result = bk.restore_instance(opened, data_root=tmp_path / "restored", **create_kwargs(fake))
@@ -205,7 +207,7 @@ def test_restore_preserves_stored_secret_key_so_encrypted_settings_still_decrypt
 
 def test_restore_collision_without_resolution_raises_before_touching_anything(fake, data_root, tmp_path):
     instance = _make_instance(fake, data_root)
-    result = bk.create_backup(instance, dest_dir=tmp_path, passphrase="pw", **_CHEAP_ARGON2)
+    result = bk.create_backup(instance, dest_dir=tmp_path, passphrase="pw", run=fake.run, **_CHEAP_ARGON2)
     opened = bk.open_backup(result.archive_path, "pw")
 
     calls_before = len(fake.calls)
@@ -216,7 +218,7 @@ def test_restore_collision_without_resolution_raises_before_touching_anything(fa
 
 def test_restore_with_rename_registers_under_new_name_and_original_untouched(fake, data_root, tmp_path):
     instance = _make_instance(fake, data_root)
-    result = bk.create_backup(instance, dest_dir=tmp_path, passphrase="pw", **_CHEAP_ARGON2)
+    result = bk.create_backup(instance, dest_dir=tmp_path, passphrase="pw", run=fake.run, **_CHEAP_ARGON2)
     opened = bk.open_backup(result.archive_path, "pw")
 
     restore_result = bk.restore_instance(
@@ -237,7 +239,7 @@ def test_restore_with_rename_registers_under_new_name_and_original_untouched(fak
 
 def test_restore_with_overwrite_replaces_existing_instance_cleanly(fake, data_root, tmp_path):
     instance = _make_instance(fake, data_root)
-    result = bk.create_backup(instance, dest_dir=tmp_path, passphrase="pw", **_CHEAP_ARGON2)
+    result = bk.create_backup(instance, dest_dir=tmp_path, passphrase="pw", run=fake.run, **_CHEAP_ARGON2)
 
     # Mutate the *live* instance after the backup was taken, so overwrite
     # restoring from the (now older) archive should wipe this away.
@@ -261,7 +263,7 @@ def test_restore_reallocates_ports_when_original_ports_are_taken(fake, data_root
     instance = _make_instance(fake, data_root, name="one")
     original_app_port, original_mcp_port = instance.app_port, instance.mcp_port
 
-    result = bk.create_backup(instance, dest_dir=tmp_path, passphrase="pw", **_CHEAP_ARGON2)
+    result = bk.create_backup(instance, dest_dir=tmp_path, passphrase="pw", run=fake.run, **_CHEAP_ARGON2)
     reg.remove_instance("one")  # simulate a fresh machine that never had "one"
 
     # But the target machine already has something else parked on those
@@ -287,8 +289,14 @@ def test_restore_reallocates_ports_when_original_ports_are_taken(fake, data_root
 
 
 def _bare_instance_root(tmp_path) -> "tuple":
+    """A bare-bones instance directory plus a FakeRuntime standing in for
+    its container -- `_gather_and_build` now always needs a running
+    container to pull the data half of the archive from (see
+    ops/backup.py's docstring), even for these otherwise-pure
+    checksum/tamper tests."""
     root = tmp_path / "bare-instance"
-    (root / "data").mkdir(parents=True)
+    data_dir = root / "data"
+    data_dir.mkdir(parents=True)
     db_path = paths.sqlite_db_path(root)
     conn = sqlite3.connect(str(db_path))
     conn.execute("CREATE TABLE t (x INTEGER)")
@@ -302,18 +310,26 @@ def _bare_instance_root(tmp_path) -> "tuple":
         name="bare", mode="local", runtime="docker", data_dir=str(root), app_port=8080, mcp_port=9000,
         cookie_name="bare_session", public_url="http://localhost:8080", created="2026-07-11",
     )
-    return root, instance
+    container_name = reg.derive_compose_project("bare")
+    fake = FakeRuntime()
+    fake.containers[container_name] = {"Status": "running", "Health": {"Status": "healthy"}}
+    fake.data_dirs[container_name] = data_dir
+    return root, instance, fake
 
 
 def test_verify_checksums_passes_for_an_unmodified_payload(tmp_path):
-    root, instance = _bare_instance_root(tmp_path)
-    payload, manifest = bk._gather_and_build(root, instance, image="img", container_format=bk._FORMAT_TAR)
+    root, instance, fake = _bare_instance_root(tmp_path)
+    payload, manifest = bk._gather_and_build(
+        root, instance, image="img", container_format=bk._FORMAT_TAR, run=fake.run,
+    )
     bk._verify_checksums(payload, bk._FORMAT_TAR, manifest["checksums"])  # does not raise
 
 
 def test_verify_checksums_detects_a_mismatched_checksum(tmp_path):
-    root, instance = _bare_instance_root(tmp_path)
-    payload, manifest = bk._gather_and_build(root, instance, image="img", container_format=bk._FORMAT_TAR)
+    root, instance, fake = _bare_instance_root(tmp_path)
+    payload, manifest = bk._gather_and_build(
+        root, instance, image="img", container_format=bk._FORMAT_TAR, run=fake.run,
+    )
     corrupted = dict(manifest["checksums"])
     key = next(iter(corrupted))
     corrupted[key] = "0" * 64
@@ -322,8 +338,10 @@ def test_verify_checksums_detects_a_mismatched_checksum(tmp_path):
 
 
 def test_verify_checksums_detects_a_missing_file(tmp_path):
-    root, instance = _bare_instance_root(tmp_path)
-    payload, manifest = bk._gather_and_build(root, instance, image="img", container_format=bk._FORMAT_TAR)
+    root, instance, fake = _bare_instance_root(tmp_path)
+    payload, manifest = bk._gather_and_build(
+        root, instance, image="img", container_format=bk._FORMAT_TAR, run=fake.run,
+    )
     incomplete = dict(manifest["checksums"])
     incomplete["a-file-that-was-never-included.txt"] = "0" * 64
     with pytest.raises(bk.RestoreError, match="missing"):
@@ -331,10 +349,12 @@ def test_verify_checksums_detects_a_missing_file(tmp_path):
 
 
 def test_open_backup_end_to_end_rejects_tampered_archive(tmp_path):
-    root, instance = _bare_instance_root(tmp_path)
+    root, instance, fake = _bare_instance_root(tmp_path)
     from job_squire_cli.ops import backup_crypto
 
-    payload, manifest = bk._gather_and_build(root, instance, image="img", container_format=bk._FORMAT_TAR)
+    payload, manifest = bk._gather_and_build(
+        root, instance, image="img", container_format=bk._FORMAT_TAR, run=fake.run,
+    )
     sealed = backup_crypto.seal(payload, "pw", **{k[len("argon2_"):]: v for k, v in _CHEAP_ARGON2.items()})
     archive_path = tmp_path / "tampered.tgz"
     tampered = bytearray(sealed)

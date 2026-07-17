@@ -72,9 +72,11 @@ secrets are excluded unless you pass `--copy-keys` explicitly.
 
 Every instance lives in its own directory (`~/job-squire/<name>/` by default), containing a
 generated `docker-compose.yml`, a compose-level `.env` (host ports, `PUID`/`PGID`), and
-`data/.env` plus the SQLite database under `data/`. Nothing about this is proprietary: `cd` into
-the directory and run `docker compose ...` (or `podman compose ...`) directly any time. Read-only
-and operational commands (`logs`, `ps`, `stop`, `restart`, `exec`) are always safe to run this way.
+`data/.env`. The SQLite database and everything else the app itself writes live in a named Docker
+volume, not this directory (see [`backup-restore.md`](backup-restore.md)). Nothing about the
+directory itself is proprietary, though: `cd` into it and run `docker compose ...` (or `podman
+compose ...`) directly any time. Read-only and operational commands (`logs`, `ps`, `stop`,
+`restart`, `exec`) are always safe to run this way.
 Structural changes (renaming a container, changing published ports) should go through the CLI, and
 `job-squire status` reports drift if the registry and reality disagree.
 
@@ -253,11 +255,18 @@ reset passwords instead of rotating.
 
 ## Wiping data (dev / re-init)
 
+`/data` is a named Docker volume, not a host directory, so this can't be a plain host-side `rm -rf`
+anymore — run the removal inside a throwaway container that shares the same volume instead:
+
 ```bash
 job-squire stop NAME
-rm -rf ~/job-squire/NAME/data/{job-squire.db,job-squire.db-*,uploads,.init.lock,provider_cooldowns.json}
+cd ~/job-squire/NAME
+docker compose run --rm job-squire sh -c \
+  "rm -rf /data/job-squire.db /data/job-squire.db-* /data/uploads /data/.init.lock /data/provider_cooldowns.json"
+cd -
 job-squire start NAME
 ```
 
-Leaving `candidate_profile.md` in place keeps the master profile; delete it too for a truly clean
-slate (it's re-seeded from the bundled copy on next boot).
+(Podman users: `podman compose run --rm ...`.) Leaving `/data/candidate_profile.md` out of that
+list keeps the master profile; add it to the `rm -rf` too for a truly clean slate (it's re-seeded
+from the bundled copy on next boot).

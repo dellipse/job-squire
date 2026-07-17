@@ -22,14 +22,26 @@ lands in shell history.
 **Write the passphrase down somewhere safe.** There is no recovery path: a lost passphrase means a
 lost backup. The CLI states this plainly every time you run `backup`.
 
+**The instance must be running.** `/data` is a named Docker volume, not a host directory, so
+`backup` pulls the database, `uploads/`, and the other app-owned files live out of the running
+container rather than reading them off the host. If the instance is stopped, `backup` fails with
+a clear message telling you to start it first — this isn't a new limitation so much as an
+unavoidable one, since the WAL-safe snapshot mechanism below only works against a live database
+anyway.
+
 ### What's inside
 
-- The entire data directory verbatim — the SQLite database, `uploads/`, `candidate_profile.md`,
-  the OAuth token store, and anything else sitting in that folder, so nothing you didn't expect to
+- Everything the data directory would have held if it were still all host-visible — the SQLite
+  database, `uploads/`, `candidate_profile.md`, `profile_prompt.md`, the OAuth token store, the
+  privacy vault (`privacy_vault.json`, needed to rehydrate any `{{PII:KIND_digest}}` placeholder
+  already written into saved AI analysis text), and `data/.env` — so nothing you didn't expect to
   lose a backup of is left out.
-- The database is captured through a WAL-safe snapshot (SQLite's own Online Backup API, the same
-  mechanism the app's own in-app backup uses), so a live instance can be backed up with no
-  downtime and no risk of pairing a `.db` file with a `.db-wal` from a different moment.
+- The database and the other app-owned files are captured live from the running container (SQLite
+  via its own Online Backup API, the same mechanism the app's own in-app backup uses), not read off
+  a host path, so a live instance can be backed up with no downtime and no risk of pairing a `.db`
+  file with a `.db-wal` from a different moment. `data/.env` is the one file still read directly
+  from the host, since it exists there independently of the container (compose's `env_file:` has
+  to read it before the container or its volume exist at all).
 - `backup-manifest.json`: a backup-format version, the timestamp, the instance's full registry
   entry (name, mode, runtime, ports or hostname, cookie name, public URL), the image version the
   instance was running, a fingerprint of the database schema, the CLI version, and a SHA-256
@@ -60,17 +72,23 @@ What happens, in order:
    a corrupted archive fails clearly rather than producing garbage data.
 2. Verifies every file's checksum against the manifest, and the backup-format version, before
    writing anything to disk.
-3. Unpacks the data directory and restores `data/.env`, including `SECRET_KEY` — this is what lets
-   every previously stored secret decrypt correctly on the restored instance.
-4. Re-registers the instance from the manifest's registry entry, reallocating ports or hostname as
-   appropriate if the target machine differs from where the backup was taken.
-5. If an instance of the same name is already registered, prompts to `--rename-to` a different
+3. Restores `docker-compose.yml`, the compose-level `.env`, and `data/.env` (including
+   `SECRET_KEY` — this is what lets every previously stored secret decrypt correctly on the
+   restored instance) straight to the host, same as always.
+4. If an instance of the same name is already registered, prompts to `--rename-to` a different
    name or `--overwrite` the existing one, rather than clobbering it silently.
+5. Re-registers the instance from the manifest's registry entry, reallocating ports or hostname as
+   appropriate if the target machine differs from where the backup was taken.
 6. Ensures a container runtime is available (prompting for consent to install one unless `--yes`
-   was implied elsewhere), then brings the instance up — on the image recorded in the manifest by
-   default, or the one passed via `--image` — unless `--no-up` was given. The app's own additive
-   boot-time migrations carry the schema forward if the target image is newer than the one the
-   backup was taken on.
+   was implied elsewhere), creates the container (`compose create`) so its named volume exists
+   without starting the app yet, then `docker cp`s the restored database/uploads/etc. straight
+   into that volume. Creating before copying means nothing has read or written the volume yet —
+   no race with the app's own first-boot database creation.
+7. Brings the instance up — on the image recorded in the manifest by default, or the one passed
+   via `--image` — unless `--no-up` was given, in which case steps 6's `compose create` and
+   `docker cp` still happen (the data is fully restored either way), just not the final start; run
+   `job-squire start NAME` when you're ready. The app's own additive boot-time migrations carry the
+   schema forward if the target image is newer than the one the backup was taken on.
 
 ## Verifying a restore (worth doing once, before you need it for real)
 
@@ -97,12 +115,14 @@ portable, encrypted single file. Two lighter-weight options still exist undernea
 ad-hoc use without the CLI:
 
 - **Settings → Backup → Download backup**, in the app itself: streams the same kind of WAL-safe
-  snapshot (database + `uploads/` + `candidate_profile.md` + the OAuth token store, optionally
-  `.env`) straight to your browser, unencrypted. No shell or CLI access needed to grab a copy.
+  snapshot (database + `uploads/` + the other app-owned files, optionally `data/.env`) straight to
+  your browser, unencrypted. No shell or CLI access needed to grab a copy.
 - **`scripts/backup.sh`/`scripts/restore.sh`**, if you have a checkout on the host: the same
-  WAL-safe hot-backup mechanism, callable directly. Restoring this way still has to stop the
-  instance itself first, since the app can't safely replace its own data directory out from under
-  itself.
+  WAL-safe hot-backup mechanism, callable directly — `backup.sh` runs `python -m app.backup_cli`
+  inside the running container (same as the CLI's own `backup` command) rather than reading `/data`
+  off the host, since it's a named volume now. `restore.sh` tears the container and its volume down
+  entirely, recreates the container so a fresh volume exists, `docker cp`s the restored data in,
+  then starts it back up.
 
 Neither of these encrypts the archive or bundles the registry/version manifest the CLI's format
 does, so prefer `job-squire backup` for anything you intend to keep or move to another machine.

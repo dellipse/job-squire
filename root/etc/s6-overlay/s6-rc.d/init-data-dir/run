@@ -4,13 +4,15 @@
 # or mcp touch the shared SQLite database there. Runs after init-adduser so
 # abc's PUID/PGID mapping is already applied.
 #
-# -R matters: on a fresh volume this is a no-op either way, but a
-# DATA_HOST_DIR that already has content in it (files written directly by
-# the job-squire CLI on the host, an existing install, a restored backup)
-# only had its top-level entry re-owned without recursion -- everything
-# inside kept whatever ownership it arrived with. On a real Linux host that
-# silently leaves files unwritable by abc; harmless on runtimes whose
-# bind-mount bridge doesn't enforce uid/mode bits, but wrong either way.
+# -R matters: on a brand-new, empty named volume this is a no-op either way,
+# but a /data that already has content in it -- most notably a volume a
+# `job-squire restore`/`scripts/restore.sh` just populated via `docker cp`
+# (which writes as root, since it runs before this container's own init has
+# a chance to apply PUID/PGID) -- would only get its top-level entry
+# re-owned without recursion, leaving everything inside owned by whoever (or
+# whatever process) wrote it. That leaves the app unable to write to its own
+# database on first start after a restore, which is exactly the failure
+# mode this recursive chown exists to prevent.
 
 mkdir -p "${DATA_DIR:-/data}"
 lsiown -R abc:abc "${DATA_DIR:-/data}"

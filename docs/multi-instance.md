@@ -82,9 +82,12 @@ Each instance is a self-contained directory:
   .env                        # compose-level vars (PUID/PGID, host ports)
   data/
     .env                      # container env: SECRET_KEY, DEPLOY_MODE, SESSION_COOKIE_NAME, ...
-    job-squire.db
-    uploads/
 ```
+
+`data/.env` is the only thing still on the host inside `data/` — the database, `uploads/`, and the
+other files the app itself writes live in a named Docker volume, not this directory (see
+[`backup-restore.md`](backup-restore.md) for why, and for how `job-squire backup`/`restore` reach
+into that volume instead of just copying a folder).
 
 Because it's the whole thing an operator needs, direct runtime access always remains available —
 `cd ~/job-squire/castelo && docker compose ...` (or `podman compose ...`) works exactly as if the

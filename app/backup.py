@@ -18,14 +18,23 @@ snapshot + uploads/ + candidate_profile.md + oauth_tokens.json + optionally
 with the existing `scripts/restore.sh` with no format differences.
 
 Restore is deliberately NOT implemented as an in-app HTTP action. A safe
-restore requires stopping the container before the data directory is
-replaced, which is a host-level operation this container has no way to
-perform on itself. `scripts/restore.sh` already does this correctly (stop
--> move current data aside -> extract -> fix ownership -> restart) — see
-docs/backup-restore.md. Re-implementing that dance behind a web request
-would either not actually stop the container (silent data race) or would
-require this container to reach out and manage its own orchestration,
-which is a much larger and riskier change for a two-user app.
+restore requires stopping the container before its data is replaced, which
+is a host-level operation this container has no way to perform on itself.
+`scripts/restore.sh` already does this correctly (stop -> docker cp the
+restored data into the (named-volume-backed) /data -> fix ownership on
+next start -> restart) — see docs/backup-restore.md. Re-implementing that
+dance behind a web request would either not actually stop the container
+(silent data race) or would require this container to reach out and manage
+its own orchestration, which is a much larger and riskier change for a
+two-user app.
+
+`build_backup_archive` is also invoked from inside the container, without
+Flask, by `app/backup_cli.py` — that is how job-squire-cli's own `backup`
+command gets a WAL-safe snapshot out of a /data that may now be a named
+Docker volume rather than a host bind mount: the CLI cannot read a named
+volume's contents directly from the host, so it runs this same function
+via `docker exec` and reads the resulting bytes off the exec's stdout
+instead of walking a host path.
 """
 import io
 import logging
@@ -39,7 +48,12 @@ log = logging.getLogger(__name__)
 
 # Files (besides the DB and uploads/) that travel with a backup, mirroring
 # scripts/backup.sh exactly so archives from either path are interchangeable.
-_SIDE_FILES = ["candidate_profile.md", "oauth_tokens.json"]
+# privacy_vault.json matters as much as the DB itself: without it, any
+# {{PII:KIND_digest}} placeholder already written into saved AI analysis
+# text (app/privacy.py) can never be rehydrated back to the real value after
+# a restore. profile_prompt.md is the user's own edited scoring-guidance
+# text, not a regenerable cache.
+_SIDE_FILES = ["candidate_profile.md", "profile_prompt.md", "oauth_tokens.json", "privacy_vault.json"]
 
 
 def _snapshot_db(db_path, dest_path):
