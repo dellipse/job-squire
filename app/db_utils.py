@@ -62,3 +62,16 @@ def with_db_retry(fn, *, attempts: int = 3, base_delay: float = 0.15):
             db.session.rollback()
             time.sleep(base_delay * attempt)
     raise last_exc  # pragma: no cover — unreachable, loop always returns or raises
+
+
+def commit(*, attempts: int = 3, base_delay: float = 0.15) -> None:
+    """`db.session.commit()`, retried like everything else in this module.
+
+    Use this in place of a bare `db.session.commit()` everywhere in the app.
+    Centralizing it here means new code gets transient-error protection for
+    free, without every call site needing to remember to import and wrap
+    with `with_db_retry` itself -- and it gives us one place to grep for
+    (`db.session.commit(` outside this file is a regression -- see
+    tests/test_no_raw_commits.py) if this convention needs to change again.
+    """
+    with_db_retry(db.session.commit, attempts=attempts, base_delay=base_delay)

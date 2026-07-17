@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 import requests
 
 from . import privacy
-from .db_utils import with_db_retry
+from .db_utils import commit, with_db_retry
 from .extensions import db
 from .models import AIInsight, Job, User
 
@@ -671,7 +671,7 @@ def apply_analysis(parsed, created_by="ai", provider="anthropic"):
             job.ai_analysis = analysis
             job.ai_analysis_at = datetime.now(timezone.utc)
             updated += 1
-    db.session.commit()
+    commit()
     return updated, missing
 
 
@@ -861,7 +861,7 @@ def run_auto_triage(api_key: str = "", model: str = "") -> dict:
 
         # Commit after each batch so partial progress is preserved.
         try:
-            db.session.commit()
+            commit()
         except Exception as exc:  # noqa: BLE001
             db.session.rollback()
             log.warning("auto-triage commit failed: %s", exc)
@@ -1120,7 +1120,7 @@ def run_triage_batch(offset: int, limit: int = 20,
             failed += 1
 
     try:
-        with_db_retry(db.session.commit)
+        commit()
     except Exception as exc:  # noqa: BLE001
         db.session.rollback()
         log.warning("triage-batch commit failed: %s", exc)
@@ -1283,7 +1283,7 @@ def run_followup_drafts(api_key: str = "", model: str = "") -> dict:
             drafted += 1
 
         try:
-            db.session.commit()
+            commit()
         except Exception as exc:  # noqa: BLE001
             db.session.rollback()
             log.warning("auto-followup commit failed: %s", exc)
@@ -1488,7 +1488,7 @@ def run_weekly_review(api_key: str = "", model: str = "",
             source="AI (Weekly Review)",
             created_by="api",
         ))
-        db.session.commit()
+        commit()
 
     log.info("weekly review generated: %d chars, %d recommendations", len(summary), len(recs))
     return parsed
@@ -1556,7 +1556,7 @@ def run_ats_analysis(job, profile_text: str, api_key: str = "", model: str = "")
     # Persist to the job record.
     gap_md = _format_ats_gap_as_markdown(parsed, job)
     job.kit_ats_gap = gap_md
-    db.session.commit()
+    commit()
 
     log.info("ATS analysis complete for job %d (%s @ %s)", job.id, job.title, job.company)
     return parsed
@@ -1817,7 +1817,7 @@ def run_rejection_analysis(api_key: str = "", model: str = "",
             source="AI (Rejection Analysis)",
             created_by="api",
         ))
-        db.session.commit()
+        commit()
 
     log.info("rejection analysis complete: %d rejected jobs analyzed", len(rejected))
     return parsed
@@ -1897,7 +1897,7 @@ def run_score_fit_single(job) -> dict:
     reason = (parsed.get("reason") or "").strip()
     job.ai_fit_score = score
     job.ai_fit_reason = reason
-    db.session.commit()
+    commit()
     log.info("score_fit_single: job %d scored %d", job.id, score)
     return {"score": score, "reason": reason}
 
@@ -1958,7 +1958,7 @@ def run_draft_followup_single(job) -> dict:
     if not email_text:
         raise ValueError("AI returned empty follow-up draft")
     job.followup_draft = email_text
-    db.session.commit()
+    commit()
     log.info("draft_followup_single: follow-up drafted for job %d", job.id)
     return {"email_text": email_text}
 
@@ -2137,7 +2137,7 @@ def _save_kit_docx_attachment(job, kit_md: str, provider: str) -> None:
         size=len(docx_bytes),
         uploaded_by=f"AI ({label})",
     ))
-    db.session.commit()
+    commit()
     log.info("kit docx attached to job %d (%s)", job.id, safe_stem)
 
 
@@ -2192,7 +2192,7 @@ def run_build_kit_api(job) -> str:
         log.warning("run_build_kit_api: job %d vanished mid-request", job_id)
         return kit_md
     job.kit_output = kit_md
-    db.session.commit()
+    commit()
     _save_kit_docx_attachment(job, kit_md, provider)
     log.info("build_kit_api: kit generated for job %d (%s @ %s) via %s",
               job.id, job.title, job.company, provider)
@@ -2230,7 +2230,7 @@ def build_kit_api_adhoc(title: str, company: str, location: str = "",
             log.warning("build_kit_api_adhoc: job %d vanished mid-request", job_id)
             return kit_md
         job.kit_output = kit_md
-        db.session.commit()
+        commit()
         _save_kit_docx_attachment(job, kit_md, provider)
         log.info("build_kit_api_adhoc: kit generated for job %d (%s @ %s) via %s",
                   job.id, title, company, provider)
@@ -2326,7 +2326,7 @@ def run_interview_prep_single(job) -> str:
     else:
         existing = (job.notes or "").rstrip()
         job.notes = (existing + "\n\n--- INTERVIEW PREP ---\n" + prep_md).lstrip()
-    db.session.commit()
+    commit()
     log.info("interview_prep_single: prep guide generated for job %d (%s @ %s)",
              job.id, job.title, job.company)
     return prep_md

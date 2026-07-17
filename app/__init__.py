@@ -18,6 +18,7 @@ from datetime import timedelta, timezone as _utc
 from flask import Flask, current_app
 from sqlalchemy import text
 
+from .db_utils import commit
 from .deploy import apply_proxy_trust, enforce_startup_guard, resolve_deploy_flags
 from .extensions import csrf, db, limiter, login_manager
 
@@ -280,7 +281,7 @@ def _init_database(app, data_dir):
         try:
             if app.config["SQLALCHEMY_DATABASE_URI"].startswith("sqlite"):
                 db.session.execute(text("PRAGMA journal_mode=WAL"))
-                db.session.commit()
+                commit()
             try:
                 db.create_all()
             except OperationalError as e:
@@ -376,7 +377,7 @@ def _run_migrations():
     for stmt in migrations:
         try:
             db.session.execute(text(stmt))
-            db.session.commit()
+            commit()
             log.info("migration applied: %s", stmt[:60])
         except Exception as e:  # noqa: BLE001
             db.session.rollback()
@@ -407,7 +408,7 @@ def _run_migrations():
         db.session.execute(text(
             "UPDATE ai_config SET mcp_enabled=1 WHERE mode='mcp' AND mcp_enabled=0"
         ))
-        db.session.commit()
+        commit()
     except Exception as e:  # noqa: BLE001
         db.session.rollback()
         log.warning("mode migration skipped: %s", e)
@@ -429,7 +430,7 @@ def _run_migrations():
             for _key in _STEP_KEYS:
                 if _step_data_satisfied(_key, _state):
                     _state.mark_visited(_key)
-            db.session.commit()
+            commit()
     except Exception as e:  # noqa: BLE001
         db.session.rollback()
         log.warning("onboarding visited-backfill skipped: %s", e)
@@ -462,7 +463,7 @@ def _run_migrations():
                     "startup: disabled provider '%s' — required credentials not set",
                     _pc.provider,
                 )
-        db.session.commit()
+        commit()
     except Exception as e:  # noqa: BLE001
         db.session.rollback()
         log.warning("provider credential check skipped: %s", e)
@@ -502,7 +503,7 @@ def _seed_task_configs():
         )
         db.session.add(row)
 
-    db.session.commit()
+    commit()
 
 
 def _seed_anthropic_provider(app):
@@ -537,7 +538,7 @@ def _seed_anthropic_provider(app):
         enabled=True,
     )
     db.session.add(p)
-    db.session.commit()
+    commit()
     log.info("Migrated Anthropic API key from AIConfig to AIProviderConfig (rank %d)", p.rank)
 
 
@@ -550,7 +551,7 @@ def _seed_search_defaults():
     cfg = SearchConfig(id=1, titles="", location="",
                        radius_miles=40, max_age_days=14, results_per_query=25, enabled=False)
     db.session.add(cfg)
-    db.session.commit()
+    commit()
 
 
 def _seed_default_providers():
@@ -567,7 +568,7 @@ def _seed_default_providers():
     if ProviderCredential.query.filter_by(provider="themuse").first():
         return
     db.session.add(ProviderCredential(provider="themuse", enabled=True))
-    db.session.commit()
+    commit()
 
 
 def _seed_users(app):
@@ -616,7 +617,7 @@ def _seed_users(app):
                 existing.display_name = display_name
                 if password:
                     existing.set_password(password)
-                db.session.commit()
+                commit()
             continue
         if not password:
             if _bool_env("ALLOW_INSECURE", False):
@@ -634,4 +635,4 @@ def _seed_users(app):
         u.set_password(password)
         db.session.add(u)
         app.logger.info("Seeded %s account: %s", role, username)
-    db.session.commit()
+    commit()

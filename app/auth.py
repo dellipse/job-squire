@@ -15,7 +15,8 @@ from flask import Blueprint, flash, make_response, redirect, render_template, re
 from flask_login import current_user, login_required, login_user, logout_user
 from urllib.parse import urlparse
 
-from .extensions import db, limiter
+from .db_utils import commit
+from .extensions import limiter
 from .forms import ChangePasswordForm, LoginForm
 from .models import User
 
@@ -81,7 +82,7 @@ def account():
             flash("New password must be different from the current password.", "danger")
         else:
             current_user.set_password(form.new_password.data)
-            db.session.commit()
+            commit()
             flash("Password changed.", "success")
             return redirect(url_for("auth.account"))
     return render_template("account.html", form=form)

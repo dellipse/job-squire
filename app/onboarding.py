@@ -31,7 +31,7 @@ from flask import (Blueprint, current_app, flash, redirect, render_template,
                    request, url_for)
 from flask_login import current_user, login_required
 
-from .db_utils import with_db_retry
+from .db_utils import commit, with_db_retry
 from .extensions import db
 from .models import (AIConfig, AIProviderConfig, CandidateAsset,
                      OnboardingState, ProviderCredential, SearchConfig,
@@ -72,7 +72,7 @@ def get_state() -> OnboardingState:
     if state is None:
         state = OnboardingState(id=1)
         db.session.add(state)
-        with_db_retry(db.session.commit)
+        commit()
     return state
 
 
@@ -218,7 +218,8 @@ def save_resume_draft(resume_markdown: str, profile_facts: str = "",
             uploaded_by=created_by or "",
         )
         db.session.add(asset)
-    db.session.commit()
+
+    commit()
 
     if profile_facts and profile_facts.strip():
         _append_profile_section("From resume interview", profile_facts.strip())
@@ -386,7 +387,7 @@ def overview():
 def dismiss():
     state = get_state()
     state.dismissed = True
-    db.session.commit()
+    commit()
     flash("Getting Started hidden from the dashboard. It stays available "
           "from the navigation menu whenever you need it.", "info")
     return redirect(url_for("main.dashboard"))
@@ -400,7 +401,7 @@ def skip(step):
         return redirect(url_for("onboarding.overview"))
     state = get_state()
     state.set_step(step, "skipped")
-    db.session.commit()
+    commit()
     nxt = _next_todo(build_checklist(state), after=step)
     if nxt:
         return redirect(url_for("onboarding.step", step=nxt))
@@ -419,7 +420,7 @@ def step(step):
         return redirect(url_for("onboarding.overview"))
     state = get_state()
     state.mark_visited(step)
-    db.session.commit()
+    commit()
     checklist = build_checklist(state)
     item = next(i for i in checklist if i["key"] == step)
     ctx = {
@@ -504,7 +505,7 @@ def save_persona():
         return redirect(url_for("onboarding.step", step="persona"))
     state = get_state()
     state.persona = choice
-    db.session.commit()
+    commit()
     return redirect(url_for("onboarding.step", step="accounts"))
 
 
@@ -516,7 +517,7 @@ def save_accounts():
     action = request.form.get("action", "")
     if action == "just_me":
         state.set_step("accounts", "answered")
-        db.session.commit()
+        commit()
         flash("No problem — you can add a second account later from this page.", "info")
         return redirect(url_for("onboarding.step", step="ai"))
 
@@ -543,7 +544,7 @@ def save_accounts():
     user.set_password(password)
     db.session.add(user)
     state.set_step("accounts", "answered")
-    db.session.commit()
+    commit()
     log.info("onboarding: second account %r created", username)
     flash(f"Account \"{username}\" created.", "success")
     return redirect(url_for("onboarding.step", step="ai"))
@@ -557,7 +558,7 @@ def save_ai():
     action = request.form.get("action", "")
     if action == "no_ai":
         state.set_step("ai", "no_ai")
-        db.session.commit()
+        commit()
         flash("Continuing without AI. Job search, tracking, and follow-up "
               "reminders all work normally; automatic job scoring, tailored "
               "resumes/cover letters, and weekly reviews stay off. Manual "
@@ -565,7 +566,7 @@ def save_ai():
               "you can add a provider under Settings → AI at any time.", "info")
     else:
         state.set_step("ai", "answered")
-        db.session.commit()
+        commit()
     return redirect(url_for("onboarding.step", step="profile"))
 
 

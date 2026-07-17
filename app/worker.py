@@ -137,6 +137,7 @@ def _run_auto_triage_if_enabled(app, search_run):
     """
     with app.app_context():
         try:
+            from .db_utils import commit
             from .extensions import db
             from .models import AIConfig, AITaskConfig, SearchRun
             from datetime import datetime, timezone
@@ -164,7 +165,7 @@ def _run_auto_triage_if_enabled(app, search_run):
                 run_row = db.session.get(SearchRun, search_run.id)
                 if run_row:
                     run_row.last_triage_at = datetime.now(timezone.utc)
-                    db.session.commit()
+                    commit()
 
         except Exception:  # noqa: BLE001
             log.exception("auto-triage failed")
@@ -278,6 +279,7 @@ def _check_rejection_threshold(app):
     with app.app_context():
         try:
             from datetime import datetime, timedelta, timezone
+            from .db_utils import commit
             from .extensions import db
             from .models import AIConfig, AITaskConfig, Job, SmtpConfig
             from .notify import build_rejection_alert_email, send_email
@@ -322,7 +324,7 @@ def _check_rejection_threshold(app):
 
             # Stamp the config so we don't re-alert this week.
             cfg.last_rejection_analysis_at = datetime.now(timezone.utc)
-            db.session.commit()
+            commit()
 
             smtp = db.session.get(SmtpConfig, 1)
             base_url = os.environ.get("PUBLIC_URL", "")

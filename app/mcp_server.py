@@ -64,6 +64,7 @@ from . import create_app
 from . import privacy
 from .ai import apply_analysis, build_export_dict
 from .crypto import dump_encrypted_json, load_encrypted_json
+from .db_utils import commit
 from .extensions import db
 from .mcp_auth import verify_static_token
 from .models import AIConfig, AIInsight, CandidateAsset, Contact, Interview, Job, JobNote, Submission
@@ -396,7 +397,7 @@ def update_job_notes(job_id: int, notes: str) -> dict:
         if not j:
             return {"error": f"no job with id {job_id}"}
         j.notes = (notes or "").strip()
-        db.session.commit()
+        commit()
         return {"ok": True, "job_id": job_id, "company": j.company, "title": j.title,
                 "message": f"Notes updated for {j.company} — {j.title}."}
 
@@ -418,7 +419,7 @@ def save_kit(job_id: int, kit_markdown: str) -> dict:
             return {"error": f"no job with id {job_id}"}
         j.kit_output = kit_markdown
         j.kit_generated_at = _dt.now(timezone.utc)
-        db.session.commit()
+        commit()
         result = {"ok": True, "job_id": job_id, "company": j.company, "title": j.title,
                   "message": f"Kit saved to job record for {j.company} — {j.title}."}
 
@@ -467,7 +468,7 @@ def set_follow_up(job_id: int, days_out: int = 6) -> dict:
             return {"error": f"no job with id {job_id}"}
         date = _dt.now(timezone.utc).date() + timedelta(days=days_out)
         j.follow_up_date = date
-        db.session.commit()
+        commit()
         return {"ok": True, "job_id": job_id, "follow_up_date": str(date)}
 
 
@@ -542,7 +543,7 @@ def add_contact(name: str, agency: str = "", contact_type: str = "Recruiter",
         if not c.name:
             return {"error": "name is required"}
         db.session.add(c)
-        db.session.commit()
+        commit()
         return {"id": c.id, "name": c.name}
 
 
@@ -582,7 +583,7 @@ def log_submission(contact_id: int = 0, company: str = "", role_title: str = "",
             created_by="Claude (MCP)",
         )
         db.session.add(s)
-        db.session.commit()
+        commit()
         return {"id": s.id, "contact_id": s.contact_id, "company": s.company,
                 "role_title": s.role_title, "status": s.status}
 
@@ -627,7 +628,7 @@ def set_job_fit(job_id: int, score: int, reason: str) -> dict:
             return {"error": f"no job with id {job_id}"}
         j.ai_fit_score = max(1, min(10, int(score)))
         j.ai_fit_reason = (reason or "").strip()
-        db.session.commit()
+        commit()
         return {"ok": True, "job_id": job_id, "score": j.ai_fit_score}
 
 
@@ -696,7 +697,7 @@ def save_followup_draft(job_id: int, email_text: str) -> dict:
         if not j:
             return {"error": f"no job with id {job_id}"}
         j.followup_draft = (email_text or "").strip()
-        db.session.commit()
+        commit()
         return {"ok": True, "job_id": job_id, "company": j.company, "title": j.title}
 
 
@@ -718,14 +719,14 @@ def save_interview_prep(job_id: int, prep_notes: str) -> dict:
             # Save to the most recent interview record.
             iv = sorted(j.interviews, key=lambda x: x.created_at, reverse=True)[0]
             iv.prep_notes = (prep_notes or "").strip()
-            db.session.commit()
+            commit()
             return {"ok": True, "job_id": job_id, "interview_id": iv.id,
                     "message": f"Prep guide saved to interview record for {j.company}."}
         else:
             # No interview record yet — append to job notes.
             existing = (j.notes or "").rstrip()
             j.notes = (existing + "\n\n--- INTERVIEW PREP ---\n" + (prep_notes or "").strip()).lstrip()
-            db.session.commit()
+            commit()
             return {"ok": True, "job_id": job_id, "interview_id": None,
                     "warning": "No interview record found — prep notes saved to job notes instead. "
                                "Add an interview debrief record when ready."}
@@ -1199,7 +1200,7 @@ async def asgi_app(scope, receive, send):
             expires_at=cfg.mcp_api_key_expires_at,
         ):
             cfg.mcp_api_key_last_used_at = _dt.now(_tz.utc)
-            db.session.commit()
+            commit()
             await _inner(_scope_for_inner(scope, "/mcp"), receive, send)
             return
 

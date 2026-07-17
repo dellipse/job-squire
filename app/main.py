@@ -47,6 +47,7 @@ from werkzeug.utils import secure_filename
 from . import ai, privacy
 from .backup import build_backup_archive
 from .crypto import decrypt, dump_encrypted_json, encrypt, load_encrypted_json
+from .db_utils import commit
 from .mcp_auth import expires_at_from_ttl_hours, generate_token, is_network_reachable
 
 log = logging.getLogger(__name__)
@@ -271,7 +272,7 @@ def _business_days_from(start, n):
 
 
 def _add_job_note(job_id, content, note_type="note"):
-    """Append a timestamped log entry to a job. Must be followed by db.session.commit()."""
+    """Append a timestamped log entry to a job. Must be followed by commit()."""
     author = ""
     try:
         from flask_login import current_user as _cu
@@ -611,7 +612,7 @@ def jobs_save_default_view():
 
     current_user.jobs_default_status = status
     current_user.jobs_default_per_page = per_page
-    db.session.commit()
+    commit()
     flash("Default view saved.", "success")
     return redirect(url_for("main.jobs_list", sort=sort_str, status=status, per_page=per_page))
 
@@ -623,7 +624,7 @@ def jobs_clear_default_view():
     current_user.jobs_default_sort = None
     current_user.jobs_default_status = None
     current_user.jobs_default_per_page = None
-    db.session.commit()
+    commit()
     flash("Default view cleared.", "success")
     return redirect(url_for("main.jobs_list"))
 
@@ -651,7 +652,7 @@ def job_new():
         job = Job(created_by=current_user.display_name or current_user.username)
         _apply_job_form(job, form)
         db.session.add(job)
-        db.session.commit()
+        commit()
         flash("Job added.", "success")
         return redirect(url_for("main.job_detail", job_id=job.id))
     return render_template("job_form.html", form=form, mode="new")
@@ -689,7 +690,7 @@ def job_edit(job_id):
                               note_type="follow_up")
             else:
                 _add_job_note(job.id, "Follow-up date cleared.", note_type="follow_up")
-        db.session.commit()
+        commit()
         flash("Job updated.", "success")
         return redirect(url_for("main.job_detail", job_id=job.id))
     return render_template("job_form.html", form=form, mode="edit", job=job)
@@ -708,7 +709,7 @@ def _run_single_job_ai_task(job_id: int, task_name: str, label: str, work_fn):
 
     work_fn(job) must return a dict of extra fields to merge into the status result
     (e.g. {"score": .., "reason": ..}) and is expected to persist its own changes
-    (db.session.commit()) before returning.
+    (commit()) before returning.
     """
     job = db.get_or_404(Job, job_id)
     ai_cfg = _singleton(AIConfig)
@@ -869,7 +870,7 @@ def job_delete(job_id):
     for sub in list(job.submissions):
         sub.job_id = None
     db.session.delete(job)
-    db.session.commit()
+    commit()
     flash("Job deleted.", "success")
     return redirect(url_for("main.jobs_list"))
 
@@ -925,7 +926,7 @@ def jobs_bulk_update():
             _add_job_note(job.id, f"Status changed: {old_status} → {new_status}.",
                           note_type="status_change")
             updated += 1
-    db.session.commit()
+    commit()
     flash(f"{updated} job{'s' if updated != 1 else ''} updated to {new_status}.", "success")
     return redirect(url_for("main.jobs_list"))
 
@@ -945,7 +946,7 @@ def job_add_note(job_id):
         flash("Note cannot be empty.", "error")
         return redirect(url_for("main.job_detail", job_id=job_id))
     _add_job_note(job.id, content, note_type="note")
-    db.session.commit()
+    commit()
     flash("Note added.", "success")
     return redirect(url_for("main.job_detail", job_id=job_id))
 
@@ -970,7 +971,7 @@ def job_set_followup(job_id):
     job.follow_up_date = new_date
     if new_date != old_followup:
         _add_job_note(job.id, f"Follow-up date set to {new_date}.", note_type="follow_up")
-    db.session.commit()
+    commit()
     flash(f"Follow-up date set to {new_date}.", "success")
     return redirect(url_for("main.job_detail", job_id=job_id))
 
@@ -987,7 +988,7 @@ def interview_new(job_id):
         iv = Interview(job_id=job.id)
         _apply_interview_form(iv, form)
         db.session.add(iv)
-        db.session.commit()
+        commit()
         flash("Interview debrief saved.", "success")
         return redirect(url_for("main.job_detail", job_id=job.id))
     return render_template("interview_form.html", form=form, job=job, mode="new",
@@ -1003,7 +1004,7 @@ def interview_edit(iv_id):
         form.self_rating.data = str(iv.self_rating)
     if form.validate_on_submit():
         _apply_interview_form(iv, form)
-        db.session.commit()
+        commit()
         flash("Interview debrief updated.", "success")
         return redirect(url_for("main.job_detail", job_id=iv.job_id))
     gcal_url = _gcal_interview_url(iv, iv.job) if iv.interview_date else None
@@ -1020,7 +1021,7 @@ def interview_delete(iv_id):
     iv = db.get_or_404(Interview, iv_id)
     job_id = iv.job_id
     db.session.delete(iv)
-    db.session.commit()
+    commit()
     flash("Debrief removed.", "success")
     return redirect(url_for("main.job_detail", job_id=job_id))
 
@@ -1107,7 +1108,7 @@ def contact_new():
         contact = Contact(created_by=current_user.display_name or current_user.username)
         _apply_contact_form(contact, form)
         db.session.add(contact)
-        db.session.commit()
+        commit()
         flash("Contact added.", "success")
         return redirect(url_for("main.contact_detail", contact_id=contact.id))
     return render_template("contact_form.html", form=form, mode="new")
@@ -1128,7 +1129,7 @@ def contact_edit(contact_id):
     form = ContactForm(obj=contact)
     if form.validate_on_submit():
         _apply_contact_form(contact, form)
-        db.session.commit()
+        commit()
         flash("Contact updated.", "success")
         return redirect(url_for("main.contact_detail", contact_id=contact.id))
     return render_template("contact_form.html", form=form, mode="edit", contact=contact)
@@ -1141,7 +1142,7 @@ def contact_delete(contact_id):
         abort(400)
     contact = db.get_or_404(Contact, contact_id)
     db.session.delete(contact)
-    db.session.commit()
+    commit()
     flash("Contact deleted.", "success")
     return redirect(url_for("main.contacts_list"))
 
@@ -1181,7 +1182,7 @@ def submission_new():
         sub = Submission(created_by=current_user.display_name or current_user.username)
         _apply_submission_form(sub, form)
         db.session.add(sub)
-        db.session.commit()
+        commit()
         flash("Submission logged.", "success")
         if sub.contact_id:
             return redirect(url_for("main.contact_detail", contact_id=sub.contact_id))
@@ -1204,7 +1205,7 @@ def submission_edit(sub_id):
         form.job_id.data = str(sub.job_id) if sub.job_id else ""
     if form.validate_on_submit():
         _apply_submission_form(sub, form)
-        db.session.commit()
+        commit()
         flash("Submission updated.", "success")
         if sub.contact_id:
             return redirect(url_for("main.contact_detail", contact_id=sub.contact_id))
@@ -1220,7 +1221,7 @@ def submission_delete(sub_id):
     sub = db.get_or_404(Submission, sub_id)
     contact_id = sub.contact_id
     db.session.delete(sub)
-    db.session.commit()
+    commit()
     flash("Submission removed.", "success")
     if contact_id:
         return redirect(url_for("main.contact_detail", contact_id=contact_id))
@@ -1261,7 +1262,7 @@ def attachment_upload(job_id):
             uploaded_by=current_user.display_name or current_user.username,
         )
         db.session.add(att)
-        db.session.commit()
+        commit()
         flash("File uploaded.", "success")
     else:
         msg = "Upload failed."
@@ -1292,7 +1293,7 @@ def attachment_delete(att_id):
     job_id = att.job_id
     _delete_attachment_file(att)
     db.session.delete(att)
-    db.session.commit()
+    commit()
     flash("Attachment removed.", "success")
     return redirect(url_for("main.job_detail", job_id=job_id))
 
@@ -1919,7 +1920,7 @@ def kit_hub():
                 created_by=current_user.display_name or current_user.username,
             )
             db.session.add(job)
-            db.session.commit()
+            commit()
             kit_job_id = job.id
             flash(f'Saved "{job.title}" to Job Squire as a job.', "success")
         else:
@@ -2006,7 +2007,7 @@ def kit_run():
                 created_by=current_user.display_name or current_user.username,
             )
             db.session.add(job)
-            db.session.commit()
+            commit()
             flash(f'Saved "{job.title}" to Job Squire as a job.', "success")
 
         title = form.job_title.data.strip()
@@ -2293,7 +2294,7 @@ def ai_run_task(task):
                         .update({Job.ai_fit_score: None, Job.ai_fit_reason: None},
                                 synchronize_session=False)
                     )
-                    db.session.commit()
+                    commit()
                     status.log(f"INFO Cleared {reset} existing score(s) — rescoring against the current candidate profile")
                     result = ai.run_auto_triage()
                 elif task == "followup":
@@ -2383,7 +2384,7 @@ def settings_ai_mode():
         cfg.mode = "mcp"
     else:
         cfg.mode = "manual"
-    db.session.commit()
+    commit()
     flash("AI features saved.", "success")
     return redirect(url_for("main.settings"))
 
@@ -2409,7 +2410,7 @@ def settings_claude_pro():
         cfg.mode = "mcp"
     else:
         cfg.mode = "manual"
-    db.session.commit()
+    commit()
     db.session.expire(cfg)
     log.info(
         "settings_claude_pro: post-commit DB read → mcp_enabled=%s claude_buttons_enabled=%s",
@@ -2428,7 +2429,7 @@ def settings_ai():
     connector_name = request.form.get("connector_name", "").strip()
     if connector_name:
         cfg.connector_name = connector_name
-    db.session.commit()
+    commit()
     flash("Connector settings saved.", "success")
     return redirect(url_for("main.settings") + "#tab-claude")
 
@@ -2451,7 +2452,7 @@ def settings_mcp_api_key():
         cfg.mcp_api_key_created_at = None
         cfg.mcp_api_key_last_used_at = None
         cfg.mcp_api_key_expires_at = None
-        db.session.commit()
+        commit()
         flash("MCP API key revoked.", "success")
 
     elif action == "set_network_override":
@@ -2459,7 +2460,7 @@ def settings_mcp_api_key():
         # used at all on a network-reachable instance -- generating or
         # rotating a key never turns this on implicitly.
         cfg.mcp_api_key_allow_network = bool(request.form.get("allow_network"))
-        db.session.commit()
+        commit()
         flash(
             "Static key allowed on this network-reachable instance."
             if cfg.mcp_api_key_allow_network else
@@ -2475,7 +2476,7 @@ def settings_mcp_api_key():
         cfg.mcp_api_key_last_used_at = None
         cfg.mcp_api_key_expires_at = expires_at_from_ttl_hours(
             request.form.get("ttl_hours"), now=now)
-        db.session.commit()
+        commit()
         flash(f"New MCP API key generated: {key}", "success")
 
     return redirect(url_for("main.settings") + "#tab-claude")
@@ -2588,7 +2589,7 @@ def settings_ai_tasks():
         cfg.rejection_alert_threshold = max(1, int(request.form.get("rejection_alert_threshold") or 5))
     except (ValueError, TypeError):
         cfg.rejection_alert_threshold = 5
-    db.session.commit()
+    commit()
     flash("Task settings saved.", "success")
     return redirect(url_for("main.settings"))
 
@@ -2639,7 +2640,7 @@ def ai_provider_add():
         use_for_analysis=use_for_analysis,
     )
     db.session.add(p)
-    db.session.commit()
+    commit()
     flash(f"Added {p.display_name} (rank {p.rank}).", "success")
     return redirect(url_for("main.settings") + "#tab-claude")
 
@@ -2670,7 +2671,7 @@ def ai_provider_edit(pid):
     # Capability flags — use_for_triage is checked via checkbox presence
     p.use_for_triage = "use_for_triage" in request.form
     p.use_for_analysis = "use_for_analysis" in request.form
-    db.session.commit()
+    commit()
     flash(f"Updated {p.display_name}.", "success")
     return redirect(url_for("main.settings") + "#tab-claude")
 
@@ -2693,13 +2694,13 @@ def ai_provider_delete(pid):
         if tc.backup_provider_id == pid:
             tc.backup_provider_id = None
     db.session.delete(p)
-    db.session.commit()
+    commit()
     # Re-sequence ranks so there are no gaps
     for i, row in enumerate(
         AIProviderConfig.query.order_by(AIProviderConfig.rank).all(), start=1
     ):
         row.rank = i
-    db.session.commit()
+    commit()
     flash(f"Removed {name}.", "success")
     return redirect(url_for("main.settings") + "#tab-claude")
 
@@ -2712,7 +2713,7 @@ def ai_provider_toggle(pid):
     if not p:
         abort(404)
     p.enabled = not p.enabled
-    db.session.commit()
+    commit()
     state = "enabled" if p.enabled else "disabled"
     flash(f"{p.display_name} {state}.", "success")
     return redirect(url_for("main.settings") + "#tab-claude")
@@ -2731,7 +2732,7 @@ def ai_provider_move_up(pid):
         ).first()
         if prev:
             prev.rank, p.rank = p.rank, prev.rank
-            db.session.commit()
+            commit()
     return redirect(url_for("main.settings") + "#tab-claude")
 
 
@@ -2747,7 +2748,7 @@ def ai_provider_move_down(pid):
     ).first()
     if nxt:
         nxt.rank, p.rank = p.rank, nxt.rank
-        db.session.commit()
+        commit()
     return redirect(url_for("main.settings") + "#tab-claude")
 
 
@@ -2817,7 +2818,7 @@ def settings_ai_privacy():
     cfg.redaction_enabled = bool(request.form.get("redaction_enabled"))
     cfg.redact_strict = bool(request.form.get("redact_strict"))
     cfg.redact_local = bool(request.form.get("redact_local"))
-    db.session.commit()
+    commit()
     if not cfg.redaction_enabled:
         flash("Privacy redaction disabled — personal identifiers will be sent "
               "to AI providers as-is.", "warning")
@@ -2837,7 +2838,7 @@ def settings_ai_privacy():
 def ai_provider_fallback_toggle():
     cfg = _singleton(AIConfig)
     cfg.fallback_to_anthropic = bool(request.form.get("fallback_to_anthropic"))
-    db.session.commit()
+    commit()
     state = "enabled" if cfg.fallback_to_anthropic else "disabled"
     flash(f"Anthropic fallback {state}.", "success")
     return redirect(url_for("main.settings") + "#tab-claude")
@@ -2869,7 +2870,7 @@ def _singleton(model):
     if not row:
         row = model(id=1)
         db.session.add(row)
-        db.session.commit()
+        commit()
     return row
 
 
@@ -3076,7 +3077,7 @@ def settings_search():
     cfg.results_per_query = max(1, min(50, _int(request.form.get("results_per_query"), 25)))
     cfg.enabled = request.form.get("enabled") == "on"
     cfg.include_remote = request.form.get("include_remote") == "on"
-    db.session.commit()
+    commit()
     flash("Search settings saved.", "success")
     return redirect(back)
 
@@ -3087,7 +3088,7 @@ def settings_search():
 def settings_kit():
     cfg = _singleton(KitConfig)
     cfg.fit_salary_floor = _int(request.form.get("fit_salary_floor"), 60000)
-    db.session.commit()
+    commit()
     flash("Application Kit settings saved.", "success")
     return redirect(url_for("main.settings"))
 
@@ -3114,7 +3115,7 @@ def settings_providers_keyless_save():
         if pc.enabled != wants:
             changed.append(meta["label"])
         pc.enabled = wants
-    db.session.commit()
+    commit()
     flash(f"Job boards updated: {', '.join(changed)}." if changed else "No changes to job boards.", "success")
     return redirect(_safe_next(url_for("main.settings")))
 
@@ -3156,7 +3157,7 @@ def settings_provider(provider):
         )
         if missing_label:
             pc.enabled = False
-            db.session.commit()
+            commit()
             flash(
                 f"{PROVIDERS[provider]['label']} saved but not enabled — "
                 f"{missing_label} is required.",
@@ -3164,7 +3165,7 @@ def settings_provider(provider):
             )
             return redirect(_safe_next(url_for("main.settings")))
     pc.enabled = wants_enabled
-    db.session.commit()
+    commit()
     flash(f"{PROVIDERS[provider]['label']} settings saved.", "success")
     return redirect(_safe_next(url_for("main.settings")))
 
@@ -3235,14 +3236,14 @@ def settings_provider_pull(provider):
     # instead of silently vanishing after the flash message disappears.
     run = SearchRun(trigger="manual", status="running", providers=provider)
     db.session.add(run)
-    db.session.commit()
+    commit()
 
     results, err = search_provider(provider, creds, titles, cfg)
     if err:
         run.finished_at = datetime.now(timezone.utc)
         run.status = "error"
         run.detail = err[:1000]
-        db.session.commit()
+        commit()
         flash(f"{label} pull failed: {err}", "danger")
         return redirect(url_for("main.settings"))
 
@@ -3258,7 +3259,7 @@ def settings_provider_pull(provider):
     run.created = len(created)
     run.skipped = skipped
     run.status = "ok"
-    db.session.commit()
+    commit()
     flash(
         f"{label}: fetched {len(results)}, {len(created)} new"
         + (f", {skipped} already in Job Squire" if skipped else "") + ".",
@@ -3284,7 +3285,7 @@ def settings_smtp():
     smtp.from_addr = request.form.get("from_addr", "").strip()
     smtp.to_addr = request.form.get("to_addr", "").strip()
     smtp.admin_email = request.form.get("admin_email", "").strip()
-    db.session.commit()
+    commit()
     flash("Email settings saved.", "success")
     return redirect(url_for("main.settings"))
 
@@ -3368,7 +3369,7 @@ def settings_asset_upload():
             uploaded_by=current_user.display_name or current_user.username,
         )
         db.session.add(asset)
-        db.session.commit()
+        commit()
         flash(f"Uploaded \"{asset.display_name}\".", "success")
 
         # A "Base Resume" upload is the user's actual resume, uploaded as a
@@ -3436,7 +3437,7 @@ def asset_edit(asset_id):
         asset.kind = form.kind.data
         asset.label = (form.label.data or "").strip()
         asset.notes = form.notes.data or ""
-        db.session.commit()
+        commit()
         flash("Document updated.", "success")
     else:
         flash("Could not save changes.", "danger")
@@ -3458,7 +3459,7 @@ def asset_delete(asset_id):
     except OSError:
         current_app.logger.warning("Could not delete asset file %s", path)
     db.session.delete(asset)
-    db.session.commit()
+    commit()
     flash("Document removed.", "success")
     return redirect(url_for("main.settings", _anchor="tab-documents"))
 
