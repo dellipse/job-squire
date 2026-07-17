@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows the `VERSION` file at the repo root, displayed in the app
 footer as `<VERSION>-<build-sha>`.
 
+## [Unreleased]
+
+### Fixed
+
+- Getting Started → "Resume & documents" step never marked complete for a user who uploaded
+  their own resume file: the step's completion check only recognized a `kind="Resume"`
+  `CandidateAsset`, which was reserved for the AI-generated draft produced by the resume
+  interview. A resume uploaded through the normal document form (correctly filed as
+  `kind="Base Resume"`) was invisible to that check, so uploading a resume plus adding an
+  online-profile link never satisfied the step.
+
+### Added
+
+- `app/resume_convert.py`: deterministic, non-AI conversion of an uploaded resume document to
+  markdown -- docx (via `python-docx`, mapping headings/bold/italic/lists/simple tables), pdf
+  (via new dependency `pypdf`, plain text only), and txt/md (passthrough). Uploading a document
+  as `kind="Base Resume"` (`app/main.py:settings_asset_upload`) now automatically converts it and
+  saves the result as the same `kind="Resume"` markdown draft the resume interview produces
+  (`app/onboarding.py:save_resume_draft`), so a plain upload satisfies the Getting Started
+  profile step the same way the interview does, with no AI provider required. The converted
+  markdown is read back into the "paste your finished resume" box on the Getting Started profile
+  step for review/editing. Conversion failures (unsupported file type, corrupted/password-protected
+  file, no extractable text) fall back gracefully with a flash message -- the original upload
+  always succeeds regardless.
+
 ## [0.7.8] - 2026-07-17
 
 ### Added

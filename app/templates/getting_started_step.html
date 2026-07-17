@@ -150,13 +150,16 @@
   </ul>
   {% endif %}
   {% if resume_asset %}
-  <p><strong>&#10003; AI-generated resume on file:</strong> {{ resume_asset.display_name }}
-    <span class="muted small">({{ resume_asset.size_kb }} KB, from the resume interview below —
-    re-run it any time to replace this)</span></p>
+  <p><strong>&#10003; Markdown resume on file:</strong> {{ resume_asset.display_name }}
+    <span class="muted small">({{ resume_asset.size_kb }} KB, from your uploaded document or the
+    resume interview below — either one any time replaces this)</span></p>
   {% endif %}
   <p>Upload your current resume — it becomes the base for tailored versions per
     application. Certifications, recommendation letters, and portfolio samples
-    help too: the AI mines them for specifics.</p>
+    help too: the AI mines them for specifics. Pick <strong>Base Resume</strong> as
+    the document type for your resume itself (PDF, DOCX, TXT, or MD) and Job Squire
+    converts it to markdown automatically, no AI needed — the result lands in the
+    box below for you to review.</p>
   <form method="post" action="{{ url_for('main.settings_asset_upload') }}"
         enctype="multipart/form-data" class="form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -225,7 +228,11 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="field field-wide">
         <label>Paste your finished resume (markdown)</label>
-        <textarea name="resume_markdown" rows="8" placeholder="Paste the complete resume here..."></textarea>
+        {% if resume_markdown_draft %}
+        <p class="muted small" style="margin:0 0 .35rem">Auto-converted from your uploaded
+          document — review it, fix anything the conversion missed, and save again.</p>
+        {% endif %}
+        <textarea name="resume_markdown" rows="8" placeholder="Paste the complete resume here...">{{ resume_markdown_draft }}</textarea>
       </div>
       <div class="actions" style="margin-top:.5rem">
         <button class="btn btn-primary" type="submit">Save resume</button>

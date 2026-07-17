@@ -3370,6 +3370,42 @@ def settings_asset_upload():
         db.session.add(asset)
         db.session.commit()
         flash(f"Uploaded \"{asset.display_name}\".", "success")
+
+        # A "Base Resume" upload is the user's actual resume, uploaded as a
+        # document rather than produced through the Getting Started resume
+        # interview. Convert it to markdown here (no AI needed) and save it
+        # as the same kind="Resume" draft the interview produces, so a plain
+        # upload satisfies the Getting Started "Resume & documents" step the
+        # same way the interview does. See app/resume_convert.py and
+        # app/onboarding.py:save_resume_draft.
+        if form.kind.data == "Base Resume":
+            from .onboarding import save_resume_draft
+            from .resume_convert import ResumeConversionError, SUPPORTED_EXTENSIONS, convert_to_markdown
+            if ext in SUPPORTED_EXTENSIONS:
+                try:
+                    with open(dest, "rb") as fh:
+                        raw = fh.read()
+                    markdown = convert_to_markdown(raw, ext)
+                    result = save_resume_draft(
+                        markdown,
+                        created_by=current_user.display_name or current_user.username)
+                    if result.get("ok"):
+                        flash("Converted it to markdown and saved as your base resume — "
+                              "review it below and edit if anything needs cleanup.", "success")
+                    else:
+                        flash(f"Uploaded, but couldn't auto-convert it: {result.get('error')}",
+                              "warning")
+                except ResumeConversionError as exc:
+                    flash(f"Uploaded, but couldn't auto-convert it: {exc}", "warning")
+                except Exception:
+                    log.exception("resume auto-convert failed for asset %s", asset.id)
+                    flash("Uploaded, but the automatic markdown conversion hit an "
+                          "unexpected error. Use the resume interview below, or paste "
+                          "the text into the markdown box yourself.", "warning")
+            else:
+                flash(f"Uploaded. Automatic markdown conversion isn't available for "
+                      f".{ext or 'this'} files yet — use the resume interview below, or "
+                      "paste the text into the markdown box yourself.", "warning")
     else:
         msg = "Upload failed."
         for errs in form.errors.values():

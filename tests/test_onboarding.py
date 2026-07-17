@@ -343,6 +343,103 @@ class TestResumeInterview:
         assert "operations manager" in result2["profile_facts"].lower()
 
 
+class TestResumeUploadAutoConvert:
+    """Uploading a "Base Resume" document should auto-convert it to markdown
+    (app/resume_convert.py) and save it as the kind="Resume" draft, so a
+    plain upload satisfies the Getting Started "profile" step the same way
+    the resume interview does -- no AI required. See app/main.py:
+    settings_asset_upload.
+    """
+
+    def _docx_bytes(self):
+        import io
+        from docx import Document
+        doc = Document()
+        doc.add_heading("Jordan Lee", level=1)
+        doc.add_paragraph("Operations manager with 8 years experience.")
+        buf = io.BytesIO()
+        doc.save(buf)
+        return buf.getvalue()
+
+    def test_base_resume_docx_upload_creates_resume_draft(self, clean_state, client, app):
+        import io
+        _login_admin(client, app)
+        r = client.post(
+            "/settings/assets/upload",
+            data={
+                "kind": "Base Resume",
+                "label": "My resume",
+                "file": (io.BytesIO(self._docx_bytes()), "resume.docx"),
+            },
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+        assert r.status_code == 200
+        # Both the original upload and the converted markdown draft exist.
+        assert CandidateAsset.query.filter_by(kind="Base Resume").count() == 1
+        resume_asset = CandidateAsset.query.filter_by(kind="Resume").first()
+        assert resume_asset is not None
+
+        from app.onboarding import _read_resume_asset_markdown
+        markdown = _read_resume_asset_markdown(resume_asset)
+        assert "# Jordan Lee" in markdown
+        assert "Operations manager" in markdown
+
+    def test_base_resume_upload_satisfies_profile_step(self, clean_state, client, app):
+        import io
+        _login_admin(client, app)
+        client.post(
+            "/settings/assets/upload",
+            data={
+                "kind": "Base Resume",
+                "label": "",
+                "file": (io.BytesIO(self._docx_bytes()), "resume.docx"),
+            },
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+        # Visiting the profile step marks it visited; the upload above should
+        # already satisfy the underlying data condition either way.
+        client.get("/getting-started/profile")
+
+        from app.onboarding import _step_data_satisfied, get_state
+        state = get_state()
+        assert _step_data_satisfied("profile", state) is True
+
+    def test_unsupported_extension_upload_warns_but_does_not_crash(self, clean_state, client, app):
+        import io
+        _login_admin(client, app)
+        r = client.post(
+            "/settings/assets/upload",
+            data={
+                "kind": "Base Resume",
+                "label": "",
+                "file": (io.BytesIO(b"{\\rtf1 fake rtf}"), "resume.rtf"),
+            },
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+        assert r.status_code == 200
+        assert CandidateAsset.query.filter_by(kind="Base Resume").count() == 1
+        assert CandidateAsset.query.filter_by(kind="Resume").count() == 0
+
+    def test_non_base_resume_upload_does_not_trigger_conversion(self, clean_state, client, app):
+        import io
+        _login_admin(client, app)
+        client.post(
+            "/settings/assets/upload",
+            data={
+                "kind": "Certification",
+                "label": "",
+                "file": (io.BytesIO(self._docx_bytes()), "cert.docx"),
+            },
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+        assert CandidateAsset.query.filter_by(kind="Certification").count() == 1
+        assert CandidateAsset.query.filter_by(kind="Resume").count() == 0
+
+
 class TestRemoteGate:
     def _run(self, monkeypatch, include_remote):
         import app.search as search_mod

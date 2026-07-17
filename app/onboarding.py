@@ -230,6 +230,22 @@ def save_resume_draft(resume_markdown: str, profile_facts: str = "",
     }
 
 
+def _read_resume_asset_markdown(asset) -> str:
+    """The saved text of the kind="Resume" markdown draft, for read-back into
+    the paste-back textarea on the Getting Started profile step -- whether it
+    came from the resume interview or from auto-converting an uploaded
+    "Base Resume" document (see app/resume_convert.py and
+    app/main.py:settings_asset_upload)."""
+    if not asset:
+        return ""
+    path = os.path.join(current_app.config["UPLOAD_DIR"], asset.stored_name)
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
 def _step_data_satisfied(key: str, state: OnboardingState) -> bool:
     """Whether the step's underlying data/answer condition is met, ignoring
     whether its page has ever been visited.
@@ -430,11 +446,15 @@ def step(step):
         ctx["saved_profile_links"] = _saved_profile_links()
         from .forms import CandidateAssetForm
         ctx["asset_form"] = CandidateAssetForm()
-        # Resume-interview options (Phase 2): an AI-generated "Resume" asset is
-        # tracked separately from uploaded documents so it can be replaced by
-        # re-running the interview without touching anything the user uploaded.
+        # Resume-interview options (Phase 2): a "Resume"-kind asset is the
+        # markdown draft -- either AI-generated via the interview, or
+        # produced by auto-converting an uploaded "Base Resume" document (see
+        # app/resume_convert.py) -- tracked separately from uploaded
+        # documents so either path can replace it without touching anything
+        # else the user uploaded.
         ctx["resume_asset"] = CandidateAsset.query.filter_by(kind="Resume").first()
         ctx["uploaded_assets"] = [a for a in ctx["assets"] if a.kind != "Resume"]
+        ctx["resume_markdown_draft"] = _read_resume_asset_markdown(ctx["resume_asset"])
         from .ai import _has_ranked_providers
         ai_cfg_for_resume = db.session.get(AIConfig, 1)
         ctx["ai_cfg"] = ai_cfg_for_resume
