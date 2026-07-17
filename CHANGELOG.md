@@ -6,6 +6,54 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows the `VERSION` file at the repo root, displayed in the app
 footer as `<VERSION>-<build-sha>`.
 
+## [Unreleased]
+
+### Added
+
+- `job-squire ollama check` / `job-squire ollama setup` (job_squire_cli/ops/ollama_assist.py):
+  CLI-side implementation of `docs/PLAN-ollama-assist.md`. `check` detects this *host's* real
+  RAM/CPU/GPU (authoritative, unlike an in-container detector, which only ever sees the Docker
+  Desktop/Podman VM's allocation) and reports a capability tier with recommended triage/analysis
+  models; `setup` installs Ollama via the official channel for the OS if needed, pulls the
+  recommended models, bakes the tier's recommended context window into a derived model via a
+  generated Modelfile (`ollama create <tag>-ctx<n>` — Ollama's OpenAI-compatible endpoint has no
+  per-request way to set context size, confirmed against docs.ollama.com), writes the
+  `ai_provider_configs` row for an instance, and runs an end-to-end round-trip test — every step
+  reviewable first with `--dry-run`. Model tags (Qwen3.6, Gemma 4, Qwen3, Gemma 3) verified against
+  the Ollama library 2026-07-16.
+- `AIProviderConfig.num_ctx` (additive migration) and a context-capacity check in
+  `call_with_fallback` (app/ai.py): a provider configured with a known context window that's too
+  small for a given prompt is now skipped in favor of the next provider in the ranked chain, instead
+  of silently sending a request Ollama would truncate without error and returning a plausible-looking
+  but degraded answer. If every eligible provider gets skipped this way the resulting error names the
+  reason explicitly — meant to surface cleanly through the existing per-batch/per-job error handling
+  in unattended worker runs (auto-triage, weekly review, etc.), not just interactive use.
+- Settings → AI providers: `triage_model` and `num_ctx` are now editable on the add/edit provider
+  forms.
+- Prompt chunking for context-constrained providers (app/ai.py): rather than just skipping an
+  under-sized provider, tasks that hit `ContextCapacityError` (new — a `RuntimeError` subclass so
+  existing callers are unaffected) now shrink the prompt to fit instead of giving up outright. The
+  full single-shot prompt is always tried first; chunking is a fallback, never the default, so
+  analysis quality is unaffected whenever the configured provider has room. Two strategies, matched
+  to the shape of each task: `run_auto_triage`/`run_followup_drafts` batch independent jobs, so a
+  capacity failure just means retrying with a smaller batch (`_call_batched_with_capacity_shrink`,
+  recursive halving down to one job per call — no reassembly needed, each job is already scored/
+  drafted independently). `run_weekly_review`/`run_rejection_analysis` build one aggregate prompt
+  over the whole pipeline, so a capacity failure triggers real map-reduce
+  (`_run_chunked_or_single` + `_reduce_partial_analyses`): the job list is split into chunks, each
+  chunk gets its own analysis pass, then one final call synthesizes the partial results into a
+  single coherent review. Whenever the map-reduce path runs, the returned `overall_summary` is
+  prefixed with an explicit note that the analysis was chunked due to the model's context window —
+  visible in the UI, not just the worker logs — since cross-job pattern detection can be less
+  precise across chunk boundaries than a single-pass review.
+
+### Fixed
+
+- `call_with_fallback` (app/ai.py) was reading `AIProviderConfig.model` for every task regardless of
+  `is_triage`, so a provider's `triage_model` — settable via `job-squire ollama setup` since it was
+  added, but with no Settings form field until this change — was silently ignored in favor of the
+  (larger, slower) analysis model on every triage/follow-up call.
+
 ## [0.7.7] - 2026-07-13
 
 ### Fixed

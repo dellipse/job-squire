@@ -42,7 +42,7 @@ MIGRATED_COLUMNS = {
     "interviews": ["prep_notes"],
     "search_runs": ["last_triage_at"],
     "users": ["jobs_default_sort", "jobs_default_status", "jobs_default_per_page"],
-    "ai_provider_configs": ["use_for_triage", "use_for_analysis", "thinking_mode"],
+    "ai_provider_configs": ["use_for_triage", "use_for_analysis", "thinking_mode", "num_ctx"],
     "search_config": ["country"],
 }
 
@@ -86,6 +86,7 @@ def test_upgrade_adds_missing_columns(mdb):
         ("search_runs", "last_triage_at"),
         ("smtp_config", "admin_email"),
         ("ai_provider_configs", "use_for_triage"),
+        ("ai_provider_configs", "num_ctx"),
         ("search_config", "country"),
     ]
     for table, col in old_schema_drops:

@@ -11,3 +11,4 @@ htmlcov/
 CLAUDE.md
 AGENTS.md
 .DS_Store
+.claude/settings.local.json

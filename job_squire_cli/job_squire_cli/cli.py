@@ -18,6 +18,11 @@ Command grammar (settled in docs/job-squire-cli.md):
              uninstall|adopt|configure|backup|restore
                                                 -- deployment/lifecycle group,
                                                    flat at the top level.
+  job-squire dns duckdns|cloudflare            -- DNS/TLS group.
+  job-squire tailscale enable|disable|status   -- Tailscale Serve group.
+  job-squire ollama check|setup                -- local-AI capability detection
+                                                   and guided Ollama install
+                                                   (docs/PLAN-ollama-assist.md).
   job-squire query health|list|pipeline|contacts|job|contact|followups
                                                 -- query group, namespaced so
                                                    its own `list` (jobs) never

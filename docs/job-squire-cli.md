@@ -58,6 +58,8 @@ own subcommand:
 |---|---|---|
 | Deployment/lifecycle | `job-squire <cmd>` (flat, top level) | `create`, `start`, `stop`, `restart`, `status`, `list`, `update`, `remove`, `uninstall`, `adopt`, `configure`, `backup`, `restore`, `proxy` |
 | DNS/TLS | `job-squire dns <cmd>` | `duckdns`, `cloudflare` |
+| Tailscale | `job-squire tailscale <cmd>` | `enable`, `disable`, `status` |
+| Ollama | `job-squire ollama <cmd>` | `check`, `setup` |
 | Query | `job-squire query <cmd>` | `health`, `list`, `pipeline`, `contacts`, `job`, `contact`, `followups` |
 
 The deployment group is new in this fold-in; its commands are structural
@@ -697,6 +699,80 @@ refused the static token exactly like a `network`-mode one, unless the
 operator passes the *same* `--allow-network` opt-in C6 defines -- never a
 separate flag, never implicit. OAuth remains preferred there, same as any
 instance reachable beyond the one machine.
+
+## Local AI capability detection and guided Ollama install (docs/PLAN-ollama-assist.md)
+
+```
+job-squire ollama check                          # host-only: RAM/CPU/GPU, tier verdict, recommended models
+job-squire ollama check NAME                      # also writes NAME's data/host_capabilities.json
+job-squire ollama setup NAME                      # full chain: install, pull, configure, test
+job-squire ollama setup NAME --dry-run            # print every step, change nothing
+job-squire ollama setup NAME --triage-model qwen3:8b --analysis-model gemma4:12b
+job-squire ollama setup NAME --num-ctx 16384       # override the tier's recommended context window
+job-squire ollama setup NAME --skip-pull           # already pulled the base models
+job-squire ollama setup NAME --skip-derive         # write the base tags as-is (Ollama's 2048-token default applies)
+job-squire ollama setup NAME --skip-test           # skip the round-trip generation check
+job-squire ollama setup NAME --rank 2              # provider chain position (default: append, or keep existing)
+job-squire ollama setup NAME --base-url http://host.docker.internal:11434
+job-squire ollama setup NAME --yes                 # don't ask before installing Ollama
+```
+
+**Why `check` runs on the host.** A containerized in-app detector sees the
+Docker Desktop/Podman machine VM's RAM allocation, not the real machine's --
+and never sees an Apple Silicon GPU at all. `job-squire ollama check` runs
+directly on the host (as every other command in this file already does),
+so it's the authoritative source the plan's "Container Blindness" section
+calls for. Passing `NAME` additionally writes the result into that
+instance's `data/host_capabilities.json` -- `data/`, not the instance root,
+because that's the directory bind-mounted into the container, so the
+running app can read it too.
+
+**Tier -> model mapping is data, not doctrine.** `ops/ollama_assist.py`'s
+`TIER_TABLE` maps five tiers (not-reasonable / entry / capable / strong /
+workstation) to a triage model and an analysis model each, verified
+against https://ollama.com/library on 2026-07-16. It will age -- re-check
+before trusting it far into the future. Below the entry tier, `check`
+explains *why* Ollama isn't recommended rather than hiding it, and points
+at a free cloud provider instead.
+
+**`setup`'s chain, each step skippable or dry-run-able:** detect -> install
+(official channel only -- Homebrew formula on macOS, the official install
+script on Linux, winget on Windows; skipped if Ollama already works) ->
+start/verify the service -> `ollama pull` the two recommended (or
+overridden) base tags -> derive a context-sized model from each
+(`ollama create <tag>-ctx<n>` from a generated Modelfile -- see below) ->
+write the `ai_provider_configs` row directly via `sqlite3` (this package
+never depends on Flask/SQLAlchemy/the app package, same as
+`ops/secrets_copy.py`) -> a direct round-trip generation request against
+Ollama's own API to confirm it actually answers.
+
+**Why there's a "derive" step.** Ollama's OpenAI-compatible endpoint (what
+app/ai.py calls) has no per-request way to set context size -- confirmed
+against https://docs.ollama.com/api/openai-compatibility, which prescribes
+exactly one method: a Modelfile's `PARAMETER num_ctx`, applied when the
+model is created, then referenced by its derived name. `setup` does this
+automatically (e.g. `qwen3:8b` -> `qwen3:8b-ctx16384`) and writes the
+*derived* name into the provider row, not the base tag. `--skip-derive`
+opts out (the base tag is used as-is, at Ollama's 2048-token default).
+
+**The `num_ctx` gap is closed app-side too (2026-07-16).**
+`AIProviderConfig.num_ctx` (app/models.py, additive migration in
+app/__init__.py) records what a provider's model was actually built with.
+`call_with_fallback` (app/ai.py) estimates whether a prompt will fit before
+calling a provider with `num_ctx` set, skipping to the next provider in the
+chain instead of risking a silently truncated response -- the same
+mechanism an unmet `use_for_triage`/`use_for_analysis` flag already uses.
+If every eligible provider gets skipped this way, the error says so
+explicitly. `triage_model` and `num_ctx` are also now editable directly in
+Settings → AI providers (previously `triage_model` had no form field at
+all, and was actually being ignored by every triage call regardless --
+both fixed in the same change).
+
+**Not the app's own "Test Ollama" button.** Step 6 above talks to Ollama's
+API directly rather than through `app/ai.py`'s provider adapter, which
+runs inside the container this host-side CLI doesn't import. It's a
+useful pre-flight check, not a substitute for the in-app check the plan's
+web-onboarding/Settings work will eventually add.
 
 ## Versioning
 

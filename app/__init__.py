@@ -366,6 +366,12 @@ def _run_migrations():
         # with data-derived completion (e.g. providers, seeded with a default
         # job board enabled) isn't marked done until the user has seen it.
         "ALTER TABLE onboarding_state ADD COLUMN visited_json TEXT DEFAULT '[]'",
+        # docs/PLAN-ollama-assist.md: context window (tokens) a local provider's model was
+        # built with, so call_with_fallback() (app/ai.py) can skip a provider whose window
+        # is too small for a given prompt instead of silently sending a request Ollama
+        # would truncate without error. NULL for cloud providers and any provider that
+        # hasn't been through `job-squire ollama setup` yet.
+        "ALTER TABLE ai_provider_configs ADD COLUMN num_ctx INTEGER",
     ]
     for stmt in migrations:
         try:

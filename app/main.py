@@ -2615,6 +2615,9 @@ def ai_provider_add():
     api_key = request.form.get("api_key", "").strip()
     base_url = request.form.get("base_url", "").strip()
     model = request.form.get("model", "").strip()
+    triage_model = request.form.get("triage_model", "").strip()
+    num_ctx_raw = request.form.get("num_ctx", "").strip()
+    num_ctx = int(num_ctx_raw) if num_ctx_raw.isdigit() else None
     thinking_mode_raw = request.form.get("thinking_mode", "disabled")
     thinking_mode = thinking_mode_raw if thinking_mode_raw in ("disabled", "low", "medium", "high") else "disabled"
     # Assign the next rank
@@ -2628,6 +2631,8 @@ def ai_provider_add():
         api_key_enc=encrypt(secret, api_key) if api_key else "",
         base_url=base_url,
         model=model,
+        triage_model=triage_model,
+        num_ctx=num_ctx,
         thinking_mode=thinking_mode if provider == "anthropic" else None,
         enabled=True,
         use_for_triage=use_for_triage,
@@ -2655,6 +2660,9 @@ def ai_provider_edit(pid):
     if base_url:
         p.base_url = base_url
     p.model = request.form.get("model", "").strip()
+    p.triage_model = request.form.get("triage_model", "").strip()
+    num_ctx_raw = request.form.get("num_ctx", "").strip()
+    p.num_ctx = int(num_ctx_raw) if num_ctx_raw.isdigit() else None
     # thinking_mode only applies to Anthropic providers
     if p.provider == "anthropic":
         thinking_mode_raw = request.form.get("thinking_mode", "disabled")

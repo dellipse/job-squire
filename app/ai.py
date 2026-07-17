@@ -69,6 +69,79 @@ _PROVIDER_EXTRA_HEADERS = {
 # HTTP status codes that mean "transient capacity problem — try the next provider".
 _FALLBACK_STATUS_CODES = {429, 503, 529}
 
+# ---------------------------------------------------------------------------
+# Context-window capacity check (docs/PLAN-ollama-assist.md)
+#
+# Ollama's OpenAI-compatible endpoint has no per-request way to set context
+# size — the only supported method is baking it into the model itself via a
+# Modelfile (see job_squire_cli/ops/ollama_assist.py's setup flow). When a
+# prompt exceeds whatever context size the configured model actually has,
+# Ollama does not error: it silently drops the earliest part of the input and
+# answers anyway, so a naive caller gets a normal-looking 200 response
+# generated from a truncated prompt with no signal anything went wrong. The
+# check below estimates whether a prompt will fit before the call is made, so
+# an under-provisioned local provider gets skipped in call_with_fallback's
+# existing ranked-chain-with-fallback loop — same as an unmet use_for_triage/
+# use_for_analysis flag already skips a provider — instead of silently
+# returning a bad answer. `AIProviderConfig.num_ctx` (app/models.py) is what a
+# provider is known to be configured for; it's left blank for cloud providers
+# (already generous, fixed windows) and for any provider not yet run through
+# `job-squire ollama setup`, in which case this check is a no-op.
+# ---------------------------------------------------------------------------
+
+# ~4 characters per token for English text. A heuristic, not real
+# tokenization (deliberately avoiding a tiktoken/tokenizers dependency for
+# this one guard) — leaning conservative via _CONTEXT_SAFETY_MARGIN_TOKENS
+# below, since undercounting the prompt is exactly what would let a
+# truncation slip through undetected.
+_CHARS_PER_TOKEN_ESTIMATE = 4
+
+# Reserved off the top of num_ctx for chat-template/role overhead (message
+# framing, special tokens) beyond the raw system+user text — on top of the
+# response's own max_tokens, which the caller already budgets for separately.
+_CONTEXT_SAFETY_MARGIN_TOKENS = 256
+
+
+def estimate_tokens(text: str) -> int:
+    """Rough token count for the capacity pre-check below — not real
+    tokenization, just len(text) // 4."""
+    return max(1, len(text or "") // _CHARS_PER_TOKEN_ESTIMATE)
+
+
+def fits_in_context(
+    num_ctx: int | None, system: str, user_content: str, max_tokens: int,
+) -> tuple[bool, int, int]:
+    """Whether (system, user_content) plus a max_tokens response is likely to
+    fit inside num_ctx. Returns (fits, estimated_input_tokens, available_budget).
+
+    `fits` is always True when num_ctx is falsy — nothing is configured to
+    check against (a cloud provider, or a provider that hasn't been through
+    `job-squire ollama setup` yet), so this guard stays out of the way
+    entirely rather than guessing.
+    """
+    if not num_ctx:
+        return True, 0, 0
+    estimated = estimate_tokens(system) + estimate_tokens(user_content)
+    available = max(0, num_ctx - max_tokens - _CONTEXT_SAFETY_MARGIN_TOKENS)
+    return estimated <= available, estimated, available
+
+
+class ContextCapacityError(RuntimeError):
+    """Raised by call_with_fallback() when every eligible provider was skipped
+    specifically because the prompt doesn't fit any of their configured context
+    windows (num_ctx) — as opposed to no providers being configured at all, or
+    a genuine API/network failure. Subclasses RuntimeError so existing
+    `except RuntimeError` / `except Exception` callers are unaffected.
+
+    Callers that can shrink or split their prompt catch this specifically to
+    trigger chunking rather than giving up outright: run_auto_triage() and
+    run_followup_drafts() shrink their batch size (_call_batched_with_capacity_shrink);
+    run_weekly_review() and run_rejection_analysis() fall back to a map-reduce
+    pass (_run_chunked_or_single() + _reduce_partial_analyses()) — full-pipeline
+    single-shot analysis is always tried first and is preferred when it fits;
+    chunking only kicks in when it doesn't. See docs/PLAN-ollama-assist.md.
+    """
+
 # Display names for the AIInsight source field.
 _PROVIDER_LABELS = {
     "openrouter":    "OpenRouter",
@@ -218,6 +291,7 @@ def call_with_fallback(system: str, user_content: str,
 
     last_exc = None
     tried_ids: set[int] = set()
+    capacity_skips: list[str] = []
 
     def _try_one(p) -> str | None:
         """Attempt p. Returns text on success, None on skip/transient failure, raises on hard error."""
@@ -235,7 +309,10 @@ def call_with_fallback(system: str, user_content: str,
                         getattr(p, "use_for_analysis", "MISSING"))
             return None
 
-        model = (p.model or "").strip()
+        # Triage gets the row's triage_model when one is set (fast/cheap model for the
+        # high-frequency triage/follow-up tasks); every other task, and any row that
+        # hasn't set triage_model, uses the row's model (the analysis model).
+        model = ((p.triage_model or "").strip() if is_triage else "") or (p.model or "").strip()
         api_key = decrypt(secret, p.api_key_enc).strip() if p.api_key_enc else ""
 
         if not model:
@@ -243,8 +320,25 @@ def call_with_fallback(system: str, user_content: str,
                         p.provider, getattr(p, "rank", "?"))
             return None
 
-        tried_ids.add(p.id)
         out_system, out_user, was_redacted = _outbound_for(p)
+
+        # Context-capacity check — see this module's "Context-window capacity check"
+        # section above for why this exists. A skip here is deliberately silent-to-the-
+        # user in the same way a use_for_triage/use_for_analysis mismatch is: it just
+        # moves to the next provider in the chain. If every provider gets skipped for
+        # this reason, the final RuntimeError below says so explicitly.
+        fits, estimated, available = fits_in_context(getattr(p, "num_ctx", None), out_system, out_user, max_tokens)
+        if not fits:
+            log.warning(
+                "provider %s (rank %s) skipped — estimated prompt ~%d tokens exceeds its "
+                "configured context budget of %d (num_ctx=%s, %d reserved for response/overhead)",
+                p.provider, getattr(p, "rank", "?"), estimated, available, p.num_ctx,
+                max_tokens + _CONTEXT_SAFETY_MARGIN_TOKENS,
+            )
+            capacity_skips.append(f"{p.display_name} (~{estimated} tokens needed, {available} available)")
+            return None
+
+        tried_ids.add(p.id)
         try:
             # Anthropic uses its own SDK path; all others use OpenAI-compat HTTP.
             if p.provider == "anthropic":
@@ -351,8 +445,20 @@ def call_with_fallback(system: str, user_content: str,
 
     if last_exc:
         raise last_exc
-    log.warning("call_with_fallback: exhausted all options — task=%s use_chain=%s tried=%s",
-                task_name, use_chain, tried_ids)
+    log.warning("call_with_fallback: exhausted all options — task=%s use_chain=%s tried=%s capacity_skips=%s",
+                task_name, use_chain, tried_ids, capacity_skips)
+    if capacity_skips:
+        # Every candidate that would otherwise have run this got skipped for context-
+        # capacity reasons specifically (fits_in_context() above) — distinct from "no
+        # providers configured at all" so whoever reads this (a log line during an
+        # unattended worker run, or a flashed error from a manual Analyze click) knows
+        # immediately this is a context-window sizing problem, not a missing API key.
+        raise ContextCapacityError(
+            f"No AI providers available{' for task ' + task_name if task_name else ''} — every "
+            f"eligible provider was skipped because this prompt is too large for its configured "
+            f"context window: {'; '.join(capacity_skips)}. Raise num_ctx (docs/PLAN-ollama-assist.md) "
+            f"or add/enable a provider with a larger context window as a fallback."
+        )
     raise RuntimeError(
         f"No AI providers available{' for task ' + task_name if task_name else ''}. "
         "Add a provider in Settings → AI → AI Providers."
@@ -614,6 +720,53 @@ Every job in the input must appear in the output. Do not add prose before or aft
 """
 
 
+def _call_batched_with_capacity_shrink(
+    items: list,
+    build_content,
+    call,
+    parse,
+    min_chunk: int = 1,
+) -> tuple[list, list]:
+    """Call `call(build_content(items))` as one chunk; on ContextCapacityError,
+    split `items` in half and retry each half recursively, down to `min_chunk`.
+
+    Returns (parsed_results_concatenated, items_that_still_didn't_fit_at_min_chunk).
+    Any exception other than ContextCapacityError (parse error, network failure,
+    a genuine provider error, ...) propagates to the caller unchanged — only a
+    capacity failure triggers a shrink, so this never masks a real error as a
+    silent partial-failure.
+
+    Used by run_auto_triage()/run_followup_drafts(): these batch several
+    independent jobs into one prompt, so shrinking the batch size is free and
+    lossless — every job still gets scored/drafted individually once the batch
+    is small enough, no reassembly beyond what the caller already does.
+    """
+    try:
+        raw = call(build_content(items))
+        return parse(raw), []
+    except ContextCapacityError as exc:
+        if len(items) <= min_chunk:
+            log.warning(
+                "capacity shrink: %d item(s) still exceed the configured provider's context "
+                "window even at the minimum chunk size — giving up on these: %s",
+                len(items), exc,
+            )
+            return [], list(items)
+        mid = len(items) // 2
+        log.warning(
+            "capacity shrink: a batch of %d item(s) exceeded the configured provider's "
+            "context window — splitting into %d + %d and retrying (expected on small local "
+            "models; raise num_ctx or use a larger model to avoid the extra calls — see "
+            "docs/PLAN-ollama-assist.md)",
+            len(items), mid, len(items) - mid,
+        )
+        left_results, left_failed = _call_batched_with_capacity_shrink(
+            items[:mid], build_content, call, parse, min_chunk)
+        right_results, right_failed = _call_batched_with_capacity_shrink(
+            items[mid:], build_content, call, parse, min_chunk)
+        return left_results + right_results, left_failed + right_failed
+
+
 def run_auto_triage(api_key: str = "", model: str = "") -> dict:
     """Score all unanalyzed 'Saved' jobs via the configured provider(s).
 
@@ -650,36 +803,41 @@ def run_auto_triage(api_key: str = "", model: str = "") -> dict:
         batch_num = i // _TRIAGE_BATCH_SIZE + 1
         log.info("auto-triage: batch %d/%d — scoring %d job(s), calling AI provider...",
                   batch_num, total_batches, len(batch))
-        job_list = [
-            {
-                "id": j.id,
-                "title": j.title,
-                "company": j.company,
-                "location": j.location or "",
-                "work_mode": j.work_mode or "",
-                "salary": j.salary or "",
-                "source": j.source or "",
-                "description": (j.notes or "")[:800],
-            }
-            for j in batch
-        ]
 
-        content = (
-            _TRIAGE_INSTRUCTIONS
-            + "\n\nCANDIDATE PROFILE:\n"
-            + profile_text
-            + "\n\nJOBS TO SCORE:\n"
-            + json.dumps(job_list)
-        )
+        def _build(batch_jobs):
+            job_list = [
+                {
+                    "id": j.id,
+                    "title": j.title,
+                    "company": j.company,
+                    "location": j.location or "",
+                    "work_mode": j.work_mode or "",
+                    "salary": j.salary or "",
+                    "source": j.source or "",
+                    "description": (j.notes or "")[:800],
+                }
+                for j in batch_jobs
+            ]
+            return (
+                _TRIAGE_INSTRUCTIONS
+                + "\n\nCANDIDATE PROFILE:\n"
+                + profile_text
+                + "\n\nJOBS TO SCORE:\n"
+                + json.dumps(job_list)
+            )
+
+        def _invoke(call_content):
+            return _call_no_thinking(_TRIAGE_SYSTEM, call_content, 1024,
+                                      use_triage_model=True, task_name="triage")
 
         try:
-            raw = _call_no_thinking(_TRIAGE_SYSTEM, content, 1024,
-                                     use_triage_model=True, task_name="triage")
-            results = _parse_triage_response(raw)
+            results, unresolved = _call_batched_with_capacity_shrink(
+                batch, _build, _invoke, _parse_triage_response)
         except Exception as exc:  # noqa: BLE001
             log.warning("auto-triage batch %d/%d failed: %s", batch_num, total_batches, exc)
             failed += len(batch)
             continue
+        failed += len(unresolved)
         log.info("auto-triage: batch %d/%d — response received, applying scores...",
                   batch_num, total_batches)
 
@@ -1062,35 +1220,42 @@ def run_followup_drafts(api_key: str = "", model: str = "") -> dict:
         batch_num = i // _TRIAGE_BATCH_SIZE + 1
         log.info("auto-followup: batch %d/%d — drafting %d email(s), calling AI provider...",
                   batch_num, total_batches, len(batch))
-        job_list = [
-            {
-                "id": j.id,
-                "title": j.title,
-                "company": j.company,
-                "status": j.status,
-                "follow_up_date": str(j.follow_up_date),
-                "contact_name": j.contact_name or "",
-                "contact_email": j.contact_email or "",
-                "date_applied": str(j.date_applied) if j.date_applied else None,
-                "notes": (j.notes or "")[:400],
-            }
-            for j in batch
-        ]
-        content = (
-            _FOLLOWUP_INSTRUCTIONS
-            + "\n\nCANDIDATE PROFILE:\n"
-            + profile_text
-            + "\n\nJOBS NEEDING FOLLOW-UP:\n"
-            + json.dumps(job_list)
-        )
+
+        def _build(batch_jobs):
+            job_list = [
+                {
+                    "id": j.id,
+                    "title": j.title,
+                    "company": j.company,
+                    "status": j.status,
+                    "follow_up_date": str(j.follow_up_date),
+                    "contact_name": j.contact_name or "",
+                    "contact_email": j.contact_email or "",
+                    "date_applied": str(j.date_applied) if j.date_applied else None,
+                    "notes": (j.notes or "")[:400],
+                }
+                for j in batch_jobs
+            ]
+            return (
+                _FOLLOWUP_INSTRUCTIONS
+                + "\n\nCANDIDATE PROFILE:\n"
+                + profile_text
+                + "\n\nJOBS NEEDING FOLLOW-UP:\n"
+                + json.dumps(job_list)
+            )
+
+        def _invoke(call_content):
+            return _call_no_thinking(_FOLLOWUP_SYSTEM, call_content, 2048,
+                                      use_triage_model=True, task_name="followup")
+
         try:
-            raw = _call_no_thinking(_FOLLOWUP_SYSTEM, content, 2048,
-                                     use_triage_model=True, task_name="followup")
-            results = _parse_triage_response(raw)  # reuse array parser
+            results, unresolved = _call_batched_with_capacity_shrink(
+                batch, _build, _invoke, _parse_triage_response)  # reuse array parser
         except Exception as exc:  # noqa: BLE001
             log.warning("auto-followup batch %d/%d failed: %s", batch_num, total_batches, exc)
             failed += len(batch)
             continue
+        failed += len(unresolved)
         log.info("auto-followup: batch %d/%d — response received, saving drafts...",
                   batch_num, total_batches)
 
@@ -1150,6 +1315,62 @@ No jobs array is needed. Do not add prose before or after the object.
 """
 
 
+def _run_chunked_or_single(items: list, build_content, call, min_chunk: int = 1) -> list:
+    """Try `call(build_content(items))` as one shot; on ContextCapacityError, split
+    `items` in half and recurse, returning the list of parsed partial results.
+
+    `build_content` must return prompt text asking for the SAME
+    {"overall_summary","recommendations"} schema regardless of chunk size — the
+    only thing that changes per call is which subset of items is included (see
+    run_weekly_review()/run_rejection_analysis()'s closures, which also add a
+    "this is a partial chunk" note once `items` is smaller than the full set).
+
+    Returns a list of length 1 (the normal, unchunked case) when the full set
+    fits; a list of length >1 when it had to split. Re-raises ContextCapacityError
+    if even `min_chunk` items don't fit — that's a genuinely too-small provider,
+    not something more splitting can fix.
+    """
+    try:
+        raw = call(build_content(items))
+        return [extract_json(raw)]
+    except ContextCapacityError:
+        if len(items) <= min_chunk:
+            raise
+        mid = len(items) // 2
+        return (
+            _run_chunked_or_single(items[:mid], build_content, call, min_chunk)
+            + _run_chunked_or_single(items[mid:], build_content, call, min_chunk)
+        )
+
+
+def _reduce_partial_analyses(partials: list, label: str, task_name: str, system: str) -> dict:
+    """Synthesize N partial {"overall_summary","recommendations"} results — each
+    produced by analyzing one chunk of a pipeline too large for a single pass —
+    into one coherent result.
+
+    This call only ever sees the already-condensed partial summaries, never the
+    raw job data, so it stays small regardless of pipeline size and should fit
+    even a small context window without needing capacity handling of its own.
+    """
+    joined = "\n\n".join(
+        f"--- Chunk {i + 1} of {len(partials)} ---\n"
+        f"Summary: {(p.get('overall_summary') or '').strip()}\n"
+        f"Recommendations: {'; '.join(str(r) for r in (p.get('recommendations') or []))}"
+        for i, p in enumerate(partials)
+    )
+    content = (
+        f"This {label} was produced in {len(partials)} separate passes because the "
+        "candidate's full pipeline didn't fit in the configured AI model's context window "
+        "in one call. Synthesize the per-chunk notes below into ONE coherent result: merge "
+        "overlapping points, resolve contradictions using the more specific/concrete version, "
+        "and deduplicate recommendations rather than just concatenating them.\n\n"
+        + joined
+        + '\n\nReturn ONLY a JSON object: {"overall_summary": string, "recommendations": [string, ...]}'
+    )
+    text = _call_with_thinking(system, content, 4096, task_name=task_name)
+    return extract_json(text)
+
+
 def run_weekly_review(api_key: str = "", model: str = "",
                       thinking_mode: str = "medium") -> dict:
     """Generate the weekly strategy review via the API.
@@ -1197,19 +1418,58 @@ def run_weekly_review(api_key: str = "", model: str = "",
         ],
     }
 
-    content = (
-        _WEEKLY_REVIEW_INSTRUCTIONS
-        + "\n\nCANDIDATE: " + pipeline["candidate"]
-        + "\n\nWEEKLY ACTIVITY:\n" + json.dumps(weekly_summary)
-        + "\n\nFULL PIPELINE:\n" + json.dumps({"jobs": pipeline["jobs"]})
-    )
+    full_jobs = pipeline["jobs"]
+
+    def _content(job_subset):
+        c = (
+            _WEEKLY_REVIEW_INSTRUCTIONS
+            + "\n\nCANDIDATE: " + pipeline["candidate"]
+            + "\n\nWEEKLY ACTIVITY:\n" + json.dumps(weekly_summary)
+        )
+        if len(job_subset) < len(full_jobs):
+            c += (
+                "\n\n(NOTE: this is one chunk of a larger pipeline, being analyzed in parts "
+                "because the configured AI model's context window is limited. Analyze only "
+                "the jobs given below; a separate pass will combine all chunks.)"
+            )
+        c += "\n\nFULL PIPELINE:\n" + json.dumps({"jobs": job_subset})
+        return c
+
+    def _call(content):
+        return _call_with_thinking(_WEEKLY_REVIEW_SYSTEM, content, 4096, task_name="weekly_review")
 
     log.info("weekly review: pipeline data assembled (%d jobs), calling AI provider...",
-              len(pipeline["jobs"]))
-    text = _call_with_thinking(_WEEKLY_REVIEW_SYSTEM, content, 4096,
-                                task_name="weekly_review")
-    log.info("weekly review: response received, parsing...")
-    parsed = extract_json(text)
+              len(full_jobs))
+    try:
+        partials = _run_chunked_or_single(full_jobs, _content, _call)
+    except ContextCapacityError:
+        log.error(
+            "weekly review: even a single job exceeds the configured provider's context "
+            "window — raise num_ctx (docs/PLAN-ollama-assist.md) or configure a provider "
+            "with more headroom"
+        )
+        raise
+
+    if len(partials) == 1:
+        log.info("weekly review: response received, parsing...")
+        parsed = partials[0]
+    else:
+        log.warning(
+            "weekly review: pipeline (%d jobs) didn't fit the configured provider's context "
+            "window in one pass — split into %d chunk(s) and synthesized; cross-job patterns "
+            "spanning chunk boundaries may be less precise than a single-pass review",
+            len(full_jobs), len(partials),
+        )
+        parsed = _reduce_partial_analyses(
+            partials, "weekly strategy review", "weekly_review", _WEEKLY_REVIEW_SYSTEM)
+        summary_note = (parsed.get("overall_summary") or "").strip()
+        if summary_note:
+            parsed["overall_summary"] = (
+                "[Note: the configured AI model's context window couldn't fit the full "
+                "pipeline in one pass, so this review was assembled from a chunked analysis "
+                "and may miss some cross-job patterns a single-pass review would catch.] "
+                + summary_note
+            )
 
     # Save to AIInsight.
     summary = (parsed.get("overall_summary") or "").strip()
@@ -1465,8 +1725,15 @@ def run_rejection_analysis(api_key: str = "", model: str = "",
                                                "Interview", "Final Interview",
                                                "Offer", "Hired"])).all()
 
-    pipeline_data = {
-        "rejected_or_ghosted": [
+    active_light = [
+        {"id": j.id, "title": j.title, "company": j.company,
+         "status": j.status, "source": j.source,
+         "work_mode": j.work_mode, "salary": j.salary}
+        for j in active
+    ]
+
+    def _rejected_dicts(subset):
+        return [
             {
                 "id": j.id, "title": j.title, "company": j.company,
                 "status": j.status, "source": j.source,
@@ -1480,26 +1747,58 @@ def run_rejection_analysis(api_key: str = "", model: str = "",
                     for iv in j.interviews
                 ],
             }
-            for j in rejected
-        ],
-        "active_or_succeeded": [
-            {"id": j.id, "title": j.title, "company": j.company,
-             "status": j.status, "source": j.source,
-             "work_mode": j.work_mode, "salary": j.salary}
-            for j in active
-        ],
-        "total_rejected": len(rejected),
-        "total_active": len(active),
-    }
+            for j in subset
+        ]
 
-    content = (
-        _REJECTION_INSTRUCTIONS
-        + "\n\nPIPELINE DATA:\n"
-        + json.dumps(pipeline_data)
-    )
-    text = _call_with_thinking(_REJECTION_SYSTEM, content, 4096,
-                                task_name="rejection_alert")
-    parsed = extract_json(text)
+    def _content(rejected_subset):
+        pipeline_data = {
+            "rejected_or_ghosted": _rejected_dicts(rejected_subset),
+            "active_or_succeeded": active_light,
+            "total_rejected": len(rejected),
+            "total_active": len(active),
+        }
+        c = _REJECTION_INSTRUCTIONS + "\n\nPIPELINE DATA:\n" + json.dumps(pipeline_data)
+        if len(rejected_subset) < len(rejected):
+            c += (
+                "\n\n(NOTE: 'rejected_or_ghosted' above is one chunk of a larger set, being "
+                "analyzed in parts because the configured AI model's context window is "
+                "limited — total_rejected reflects the true full count across all chunks.)"
+            )
+        return c
+
+    def _call(content):
+        return _call_with_thinking(_REJECTION_SYSTEM, content, 4096, task_name="rejection_alert")
+
+    try:
+        partials = _run_chunked_or_single(rejected, _content, _call)
+    except ContextCapacityError:
+        log.error(
+            "rejection analysis: even a single job exceeds the configured provider's context "
+            "window — raise num_ctx (docs/PLAN-ollama-assist.md) or configure a provider "
+            "with more headroom"
+        )
+        raise
+
+    if len(partials) == 1:
+        parsed = partials[0]
+    else:
+        log.warning(
+            "rejection analysis: %d rejected/ghosted job(s) didn't fit the configured "
+            "provider's context window in one pass — split into %d chunk(s) and synthesized; "
+            "cross-job patterns spanning chunk boundaries may be less precise than a "
+            "single-pass analysis",
+            len(rejected), len(partials),
+        )
+        parsed = _reduce_partial_analyses(
+            partials, "rejection pattern analysis", "rejection_alert", _REJECTION_SYSTEM)
+        summary_note = (parsed.get("overall_summary") or "").strip()
+        if summary_note:
+            parsed["overall_summary"] = (
+                "[Note: the configured AI model's context window couldn't fit all "
+                "rejected/ghosted jobs in one pass, so this analysis was assembled from a "
+                "chunked pass and may miss some cross-job patterns a single-pass analysis "
+                "would catch.] " + summary_note
+            )
 
     # Save to AIInsight.
     summary = (parsed.get("overall_summary") or "").strip()

@@ -397,6 +397,15 @@
                     <label>Model <span class="muted">(leave blank for provider default)</span></label>
                     <input type="text" name="model" value="{{ p.model }}" placeholder="e.g. google/gemini-2.0-flash">
                   </div>
+                  <div class="field field-wide">
+                    <label>Triage model <span class="muted">(optional — falls back to Model above for triage/follow-up)</span></label>
+                    <input type="text" name="triage_model" value="{{ p.triage_model }}" placeholder="a faster/cheaper model for the high-frequency triage task">
+                  </div>
+                  <div class="field">
+                    <label>Context window <span class="muted">(tokens, optional)</span></label>
+                    <input type="number" name="num_ctx" value="{{ p.num_ctx or '' }}" min="256" step="256" placeholder="e.g. 16384">
+                    <span class="muted small">Local providers (Ollama, LiteLLM) only. Job Squire estimates whether a prompt fits before calling this provider and skips to the next one in the chain rather than risk a silently truncated response — see docs/PLAN-ollama-assist.md. Leave blank for cloud providers or if unknown.</span>
+                  </div>
                   {% if p.provider == 'anthropic' %}
                   <div class="field field-wide">
                     <label>Thinking mode</label>
@@ -511,6 +520,15 @@
             <div class="field field-wide">
               <label>Model <span class="muted">(leave blank for provider default)</span></label>
               <input type="text" name="model" placeholder="e.g. google/gemini-2.0-flash, meta-llama/llama-3.3-70b">
+            </div>
+            <div class="field field-wide">
+              <label>Triage model <span class="muted">(optional — falls back to Model above for triage/follow-up)</span></label>
+              <input type="text" name="triage_model" placeholder="a faster/cheaper model for the high-frequency triage task">
+            </div>
+            <div class="field">
+              <label>Context window <span class="muted">(tokens, optional)</span></label>
+              <input type="number" name="num_ctx" min="256" step="256" placeholder="e.g. 16384">
+              <span class="muted small">Local providers (Ollama, LiteLLM) only. Leave blank for cloud providers or if unknown.</span>
             </div>
             <div class="field field-wide">
               <label>Capabilities</label>

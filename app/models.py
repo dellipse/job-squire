@@ -488,6 +488,17 @@ class AIProviderConfig(db.Model):
     # Model for triage and follow-up drafts. Falls back to `model` if blank.
     # Prefer a fast, cheap model here — this runs on every job after each search.
     triage_model = db.Column(db.String(120), default="")
+    # Context window this provider is configured for, in tokens. Local providers only
+    # (Ollama/LiteLLM/custom) — cloud providers already have generous, fixed windows and
+    # leave this blank/None. Ollama's OpenAI-compatible endpoint has no per-request way to
+    # set context size (confirmed against docs.ollama.com/api/openai-compatibility — the
+    # only supported method is a Modelfile's `PARAMETER num_ctx`, applied when the model
+    # was created — see job_squire_cli/ops/ollama_assist.py's setup flow), so this column
+    # is metadata describing what the *configured model* was built with, not a value sent
+    # per request. call_with_fallback() (app/ai.py) uses it to estimate whether a given
+    # prompt will fit before attempting the call, skipping to the next provider in the
+    # chain rather than silently sending a request Ollama would truncate without error.
+    num_ctx = db.Column(db.Integer, nullable=True, default=None)
     # Capability flags — control which task types this provider appears for.
     # Set use_for_analysis=False for providers with small context windows (e.g. Cerebras free tier).
     use_for_triage   = db.Column(db.Boolean, default=True)

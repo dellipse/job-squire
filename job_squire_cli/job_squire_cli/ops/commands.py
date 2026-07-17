@@ -39,6 +39,7 @@ import click
 from . import backup, compose, lifecycle, mcp_token, secrets_copy
 from . import self_update
 from . import dns as dns_ops
+from . import ollama_assist
 from . import proxy as proxy_ops
 from . import tailscale as tailscale_ops
 from . import uninstall as uninstall_ops
@@ -1064,6 +1065,142 @@ def tailscale_status_cmd(name):
     click.echo(f"  MCP port: {state.mcp_port}")
 
 
+# ── ollama (docs/PLAN-ollama-assist.md) ─────────────────────────────────
+# CLI side of "PLAN: Ollama Assist -- Capability Detection, Guided Install,
+# Model Selection" (agreed 2026-07-12). `check` is the host-detection half
+# (Section "Container Blindness" -- authoritative because it runs on the
+# host, not inside the app's container); `setup` is the "CLI (automation
+# with consent)" install flow. Every real decision lives in
+# ops/ollama_assist.py; these are thin adapters, same as every other
+# command in this file.
+
+
+@click.group(name="ollama", help="Detect this machine's capacity for local AI via Ollama, and "
+                                  "install/configure a recommended model for an instance.")
+def ollama_group():
+    pass
+
+
+def _print_capabilities(caps: ollama_assist.HostCapabilities) -> None:
+    click.echo(f"Detected at: {caps.detected_at}  (source: {caps.source})")
+    click.echo(f"  OS: {caps.os}" + (" (Apple Silicon)" if caps.apple_silicon else ""))
+    click.echo(f"  RAM: {caps.ram_gb} GB" if caps.ram_gb is not None else "  RAM: could not detect")
+    click.echo(
+        f"  CPU cores: {caps.cpu_cores}" if caps.cpu_cores is not None else "  CPU cores: could not detect"
+    )
+    if caps.gpu_vendor:
+        vram = f", {caps.gpu_vram_gb} GB VRAM" if caps.gpu_vram_gb is not None else ""
+        click.echo(f"  GPU: {caps.gpu_vendor}{vram}")
+    else:
+        click.echo("  GPU: none detected")
+    click.echo(f"  Ollama installed: {'yes' if caps.ollama_installed else 'no'}")
+    click.echo(f"  Ollama running: {'yes' if caps.ollama_running else 'no'}")
+
+
+@ollama_group.command(name="check", help="Detect this machine's RAM/CPU/GPU and report which local-AI "
+                                          "tier it falls into, with recommended models. Pass NAME to also "
+                                          "write the result into that instance's data dir for the web app.")
+@click.argument("name", required=False)
+def ollama_check_cmd(name):
+    caps = ollama_assist.detect_host_capabilities()
+    _print_capabilities(caps)
+
+    rec = ollama_assist.recommend(caps)
+    click.echo()
+    if rec is None:
+        click.echo(ollama_assist.not_reasonable_message(caps))
+    else:
+        click.echo(f"Tier: {rec.tier}")
+        click.echo(f"  {rec.description}")
+        click.echo(f"  Recommended triage model:   {rec.triage_model}")
+        click.echo(f"  Recommended analysis model: {rec.analysis_model}")
+        click.echo(f"  Approx. combined download:  ~{rec.approx_download_gb:.0f} GB")
+
+    if name:
+        instance = _require_instance(name)
+        # Path(instance.data_dir), not paths.instance_root(instance.name): same
+        # reason as _print_mcp_config above.
+        root = Path(instance.data_dir)
+        path = ollama_assist.write_host_capabilities(root, caps)
+        click.echo(f"\nWrote {path}")
+
+
+@ollama_group.command(name="setup", help="Install Ollama if needed, pull the recommended models for this "
+                                          "machine, and write the Ollama provider row into NAME's database. "
+                                          "Review every step first with --dry-run.")
+@click.argument("name")
+@click.option("--base-url", default=ollama_assist.OLLAMA_DEFAULT_HOST, show_default=True,
+              help="Where NAME's container reaches Ollama. localhost only resolves for the container if "
+                   "the compose file maps host.docker.internal (Mac/Windows) or --add-host=host.docker."
+                   "internal:host-gateway (Linux) -- point this at that host instead if not.")
+@click.option("--triage-model", default=None, help="Override the tier's recommended triage model (base tag, "
+                                                    "e.g. 'qwen3:8b' -- the context-sized derived model is "
+                                                    "computed from this, not pulled/used directly).")
+@click.option("--analysis-model", default=None, help="Override the tier's recommended analysis model (base tag).")
+@click.option("--num-ctx", type=int, default=None,
+              help="Override the tier's recommended context window (tokens) baked into the derived model. "
+                   "Default: the tier's own recommendation (8192 or 16384).")
+@click.option("--rank", type=int, default=None,
+              help="Provider chain rank (default: keep the existing row's rank, or append after the last).")
+@click.option("--skip-pull", is_flag=True, default=False, help="Don't pull models (e.g. already pulled).")
+@click.option("--skip-derive", is_flag=True, default=False,
+              help="Don't create a context-sized derived model -- write the base tags as-is. Ollama's "
+                   "OpenAI-compatible endpoint then uses its own default context window (2048 tokens), "
+                   "which app/ai.py's capacity check will treat as unconfigured (no truncation guard).")
+@click.option("--skip-test", is_flag=True, default=False, help="Don't run the end-to-end round-trip test.")
+@click.option("--dry-run", is_flag=True, default=False, help="Print every step without changing anything.")
+@click.option("--yes", "assume_yes", is_flag=True, default=False, help="Don't ask before installing Ollama.")
+def ollama_setup_cmd(name, base_url, triage_model, analysis_model, num_ctx, rank, skip_pull, skip_derive,
+                      skip_test, dry_run, assume_yes):
+    instance = _require_instance(name)
+    # Path(instance.data_dir), not paths.instance_root(instance.name): same
+    # reason as _print_mcp_config above.
+    root = Path(instance.data_dir)
+    confirm = (lambda _msg: True) if assume_yes else click.confirm
+
+    try:
+        result = ollama_assist.run_setup(
+            root, base_url=base_url, triage_model=triage_model, analysis_model=analysis_model,
+            num_ctx=num_ctx, rank=rank, confirm=confirm, dry_run=dry_run, skip_pull=skip_pull,
+            skip_derive=skip_derive, skip_test=skip_test,
+        )
+    except ollama_assist.OllamaAssistError as exc:
+        _fail(str(exc))
+
+    click.echo()
+    _print_capabilities(result.capabilities)
+    if result.recommendation is None:
+        return  # run_setup already raised for "not reasonable" -- unreachable, kept defensive.
+    click.echo(f"Tier: {result.tier}")
+
+    if dry_run:
+        click.echo("\nDry run only -- nothing was installed, pulled, or written.")
+        return
+
+    if result.host_capabilities_path:
+        click.echo(f"\nWrote {result.host_capabilities_path}")
+    if result.models_pulled:
+        click.echo(f"Pulled: {', '.join(result.models_pulled)}")
+    elif skip_pull:
+        click.echo("Skipped pulling models (--skip-pull).")
+    if result.models_derived:
+        for base_tag, derived in result.models_derived.items():
+            click.echo(f"Created {derived} (num_ctx={result.num_ctx}, from {base_tag})")
+    elif skip_derive:
+        click.echo(
+            "Skipped creating context-sized models (--skip-derive) -- Ollama's own default context "
+            "window (2048 tokens) applies; app/ai.py has no configured num_ctx to check prompts against."
+        )
+    if result.provider_configured:
+        click.echo(f"Configured Ollama provider for {instance.name!r}: base_url={base_url}")
+    if skip_test:
+        click.echo("Skipped the round-trip test (--skip-test).")
+    elif result.roundtrip_ok is True:
+        click.echo(f"Round-trip test: ok (model replied: {result.roundtrip_detail!r})")
+    elif result.roundtrip_ok is False:
+        click.echo(f"Round-trip test: FAILED -- {result.roundtrip_detail}")
+
+
 # ── registration ─────────────────────────────────────────────────────────
 
 
@@ -1076,3 +1213,4 @@ def register_ops_commands(group: click.Group) -> None:
         group.add_command(command)
     group.add_command(dns_group)
     group.add_command(tailscale_group)
+    group.add_command(ollama_group)
