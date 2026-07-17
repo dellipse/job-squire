@@ -2256,6 +2256,44 @@
       "version": "3.3.2"
     },
     {
+      "bom-ref": "pypdf==6.14.2",
+      "description": "A pure-python PDF library capable of splitting, merging, cropping, and transforming PDF files",
+      "externalReferences": [
+        {
+          "comment": "from packaging metadata Project-URL: Documentation",
+          "type": "documentation",
+          "url": "https://pypdf.readthedocs.io/en/latest/"
+        },
+        {
+          "comment": "from packaging metadata Project-URL: Bug Reports",
+          "type": "issue-tracker",
+          "url": "https://github.com/py-pdf/pypdf/issues"
+        },
+        {
+          "comment": "from packaging metadata Project-URL: Source",
+          "type": "other",
+          "url": "https://github.com/py-pdf/pypdf"
+        },
+        {
+          "comment": "from packaging metadata Project-URL: Changelog",
+          "type": "release-notes",
+          "url": "https://pypdf.readthedocs.io/en/latest/meta/CHANGELOG.html"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "acknowledgement": "declared",
+            "id": "BSD-3-Clause"
+          }
+        }
+      ],
+      "name": "pypdf",
+      "purl": "pkg:pypi/pypdf@6.14.2",
+      "type": "library",
+      "version": "6.14.2"
+    },
+    {
       "bom-ref": "python-dateutil==2.9.0.post0",
       "description": "Extensions to the standard Python datetime module",
       "externalReferences": [
@@ -3483,6 +3521,13 @@
     },
     {
       "dependsOn": [
+        "cryptography==49.0.0",
+        "typing_extensions==4.16.0"
+      ],
+      "ref": "pypdf==6.14.2"
+    },
+    {
+      "dependsOn": [
         "six==1.17.0"
       ],
       "ref": "python-dateutil==2.9.0.post0"
@@ -3610,7 +3655,7 @@
     }
   ],
   "metadata": {
-    "timestamp": "2026-07-17T07:00:15.772945+00:00",
+    "timestamp": "2026-07-17T08:01:32.117305+00:00",
     "tools": {
       "components": [
         {
@@ -3717,7 +3762,7 @@
       "bom-ref": "root-component",
       "type": "application",
       "name": "job-squire",
-      "version": "0.7.8",
+      "version": "0.7.9",
       "description": "Self-hosted, two-user job-search companion: automates job discovery, tracks applications through a hiring funnel, and integrates with Claude as an AI coach via MCP.",
       "licenses": [
         {
@@ -3734,7 +3779,7 @@
       ]
     }
   },
-  "serialNumber": "urn:uuid:dc9a7dba-8282-471a-839b-2711c43df50e",
+  "serialNumber": "urn:uuid:61a03944-24d5-40bd-b6c1-08a5a1a61525",
   "version": 1,
   "$schema": "http://cyclonedx.org/schema/bom-1.6.schema.json",
   "bomFormat": "CycloneDX",
