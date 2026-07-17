@@ -16,12 +16,12 @@ Prompt C1 settled the full grammar and shipped every command as a
 structural stub. Prompt C5 made `create`, `start`, `stop`, `restart`,
 `status`, `list`, and `remove` real, wired to ops/lifecycle.py. Prompt C6
 made MCP authentication real too (`configure`). Prompt C7 made version
-movement and adopting an existing install real (`update`/`adopt`). Prompt
-C8 (this file, as of `backup`/`restore` below) makes passphrase-encrypted
-backup and restore real, wired to ops/backup.py. `adopt` is a new verb not
-in C1's original grammar table (docs/job-squire-cli.md) -- C1 deliberately
-deferred it, along with update/rollback's exact shape, to its own prompt;
-see that doc's updated table. Every real command here is a thin click
+movement real (`update`). Prompt C8 (this file, as of `backup`/`restore`
+below) makes passphrase-encrypted backup and restore real, wired to
+ops/backup.py. (Prompt C7 also shipped an `adopt` command for migrating an
+existing three-container install onto the single-container image; removed
+2026-07-17 once no installs remained on the old topology to migrate.)
+Every real command here is a thin click
 adapter: it does the interactive prompting and prints results, and
 delegates every actual decision to ops/lifecycle.py (or, for `configure`,
 ops/mcp_token.py and query/config.py; for `backup`/`restore`,
@@ -447,51 +447,6 @@ def uninstall(keep_data, remove_runtime, remove_image, assume_yes):
         )
 
 
-# ── adopt (Prompt C7) ────────────────────────────────────────────────────
-
-
-@click.command(help="Register an existing (three-container) install as a single-container instance.")
-@click.argument("install_dir", type=click.Path(exists=True, file_okay=False, path_type=Path))
-@click.option("--name", default=None,
-              help="Registry name to use (default: derived from the install's own INSTANCE_NAME).")
-@click.option("--image", default=DEFAULT_IMAGE, show_default=True)
-@click.option("--up/--no-up", "bring_up", default=None,
-              help="Bring the instance up on the single-container image immediately after adopting. "
-                   "Without this flag, prompts interactively (skipped entirely with --yes, which "
-                   "then defaults to not bringing it up).")
-@click.option("--yes", "assume_yes", is_flag=True, default=False,
-              help="Don't ask before installing a container runtime or bringing the instance up.")
-def adopt(install_dir, name, image, bring_up, assume_yes):
-    if bring_up is None:
-        bring_up = False if assume_yes else click.confirm(
-            "Bring the instance up on the single-container image now and verify health?", default=True,
-        )
-
-    confirm = (lambda _msg: True) if assume_yes else click.confirm
-
-    try:
-        result = lifecycle.adopt_instance(install_dir, name=name, image=image, bring_up=bring_up, confirm=confirm)
-    except (NameCollisionError, InvalidNameError, RegistryError) as exc:
-        _fail(str(exc))
-    except lifecycle.LifecycleError as exc:
-        _handle_lifecycle_error(exc)
-
-    inst = result.instance
-    click.echo(f"Instance {inst.name!r} adopted from {install_dir} ({inst.mode} mode, runtime={inst.runtime}).")
-    click.echo(f"  Cookie name: {result.cookie_name}")
-    click.echo(f"  data/.env backed up to: {result.env_backup}")
-    if result.env_appended:
-        click.echo(f"  Appended to data/.env: {', '.join(result.env_appended)}")
-    else:
-        click.echo("  No changes needed -- data/.env already set TRUST_PROXY and SESSION_COOKIE_SECURE explicitly.")
-    if result.health is not None:
-        click.echo(f"  Health: {result.health.get('Health', {}).get('Status') or result.health.get('Status')}")
-    elif bring_up:
-        click.echo("  Instance registered but did not come up cleanly -- see the error above.")
-    else:
-        click.echo(f"  Not brought up yet. Run `job-squire start {inst.name}` when you're ready.")
-
-
 # ── configure (MCP authentication + query-group token-config plumbing) ────
 # Prompt C6: docs/PLAN-deployment-modes.md Section 5 ("MCP authentication").
 # OAuth 2.0/PKCE stays the default, untouched MCP flow in every mode --
@@ -527,10 +482,10 @@ def _existing_or_derived_endpoint(instance: Instance) -> str:
 
 
 def _print_mcp_config(instance: Instance) -> None:
-    # Path(instance.data_dir), not paths.instance_root(instance.name):
-    # for an adopted instance (Prompt C7) those two disagree -- adopt
-    # registers whatever directory the operator's existing install already
-    # lived in, not the default per-user data root.
+    # Path(instance.data_dir), not paths.instance_root(instance.name): the
+    # registry's own recorded value is the source of truth for where an
+    # instance actually lives, rather than re-deriving the default path and
+    # assuming it matches.
     root = Path(instance.data_dir)
     click.echo(f"Instance: {instance.name}  (mode={instance.mode})")
     try:
@@ -596,10 +551,10 @@ def configure(name, mcp_token_action, ttl_hours, allow_network, manual_token, ma
         _print_mcp_config(instance)
         return
 
-    # Path(instance.data_dir), not paths.instance_root(instance.name):
-    # for an adopted instance (Prompt C7) those two disagree -- adopt
-    # registers whatever directory the operator's existing install already
-    # lived in, not the default per-user data root.
+    # Path(instance.data_dir), not paths.instance_root(instance.name): the
+    # registry's own recorded value is the source of truth for where an
+    # instance actually lives, rather than re-deriving the default path and
+    # assuming it matches.
     root = Path(instance.data_dir)
 
     if allow_network is not None and mcp_token_action is None:
@@ -1225,7 +1180,7 @@ def ollama_setup_cmd(name, base_url, triage_model, analysis_model, num_ctx, rank
 def register_ops_commands(group: click.Group) -> None:
     """Attach the flat deployment/lifecycle verbs directly onto `group`."""
     for command in (
-        create, start, stop, restart, update, status, list_instances_cmd, remove, uninstall, adopt, configure,
+        create, start, stop, restart, update, status, list_instances_cmd, remove, uninstall, configure,
         backup_cmd, restore_cmd, proxy_cmd,
     ):
         group.add_command(command)

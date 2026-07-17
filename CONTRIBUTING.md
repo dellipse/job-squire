@@ -12,8 +12,8 @@ By participating, you're expected to follow the [Code of Conduct](CODE_OF_CONDUC
 
 - **Bug reports** — use the [bug report template](.github/ISSUE_TEMPLATE/bug_report.md).
   Include the running version (shown in the app footer), steps to reproduce, and
-  relevant container logs (`docker logs job-squire`, `job-squire-worker`, or
-  `job-squire-mcp`).
+  the container logs (`docker logs <instance>` — web, worker, and mcp all share
+  one container's log).
 - **Feature requests** — use the [feature request template](.github/ISSUE_TEMPLATE/feature_request.md).
 - **Security vulnerabilities** — do **not** open a public issue. See [SECURITY.md](SECURITY.md)
   for the private disclosure process.

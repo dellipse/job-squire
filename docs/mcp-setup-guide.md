@@ -14,7 +14,8 @@ This guide covers the three supported connection methods:
 
 Before connecting any agent, confirm:
 
-1. The `job-squire-mcp` container is running.
+1. The Job Squire container is running (the MCP process is one of three s6-supervised
+   processes inside it, alongside web and worker).
 2. `PUBLIC_MCP_URL` is set in `data/.env` to the publicly reachable HTTPS base URL of the MCP service, e.g.:
    ```
    PUBLIC_MCP_URL=https://mcp-squire.yourdomain.com
@@ -59,10 +60,11 @@ Tokens are persisted to `DATA_DIR/oauth_tokens.json`. A container restart does n
 To verify the connection while adding the connector:
 
 ```bash
-docker logs -f job-squire-mcp
+docker logs -f <instance>
 ```
 
-You should see: discovery → register → authorize → token → `ListToolsRequest 200`.
+You should see: discovery → register → authorize → token → `ListToolsRequest 200`,
+interleaved with web/worker output since all three processes share the one container's log.
 
 ---
 
@@ -239,10 +241,10 @@ All tools run against the shared SQLite database. Writes are committed immediate
 ## Troubleshooting
 
 **Health check fails (`curl .../health` returns nothing or an error):**
-Confirm the container is running (`docker compose ps`) and `PUBLIC_MCP_URL` is set. Check `docker logs job-squire-mcp` for startup errors.
+Confirm the container is running (`docker compose ps`) and `PUBLIC_MCP_URL` is set. Check `docker logs <instance>` for startup errors.
 
 **Claude shows "connector unavailable" or can't complete OAuth:**
-The URL must be HTTPS with a valid cert. Try the health check first. Watch `docker logs -f job-squire-mcp` while re-adding the connector to see where the handshake fails.
+The URL must be HTTPS with a valid cert. Try the health check first. Watch `docker logs -f <instance>` while re-adding the connector to see where the handshake fails.
 
 **Static key returns 401:**
 The key may have been regenerated. Copy the current key from **Settings → AI → MCP Connector** and update your agent config.

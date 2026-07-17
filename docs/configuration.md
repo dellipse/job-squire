@@ -72,9 +72,7 @@ known-unsafe combinations into an early, explicit signal rather than a silent mi
 
 Every message names the offending variable, its value, why it's unsafe, and the fix. See
 `app/deploy.py` and [`PLAN-deployment-modes.md`](PLAN-deployment-modes.md) Section 3 for the full
-precedence rules and guard logic, and
-[`adopt-single-container.md`](adopt-single-container.md) if you're moving an existing install onto
-the single-container image and want to know exactly which of these to set.
+precedence rules and guard logic.
 
 ### Scheduler (worker)
 

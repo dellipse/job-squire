@@ -37,7 +37,7 @@ def test_instance_root_uses_default_root_when_omitted(monkeypatch, tmp_path):
 
 def test_derived_paths_layout(tmp_path):
     root = tmp_path / "castelo"
-    assert paths.compose_path(root) == root / "docker-compose.single.yml"
+    assert paths.compose_path(root) == root / "docker-compose.yml"
     assert paths.compose_env_path(root) == root / ".env"
     assert paths.data_dir(root) == root / "data"
     assert paths.data_env_path(root) == root / "data" / ".env"

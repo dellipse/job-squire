@@ -2,7 +2,7 @@
 
 **Companion to:** `docs/PLAN-deployment-modes.md` (Sections 6 and 7, plus the deferred items in Section 8) and `docs/PROMPTS-deployment-modes.md` (the app and image work that must ship first).
 
-**Read this first.** This prompt set builds the `job-squire` deployment CLI: the single front door for bootstrapping, runtime selection, instance creation, lifecycle, backup and restore, and provisioning. It assumes the entire `PROMPTS-deployment-modes.md` set has already landed and been committed, because the CLI generates the env file and `docker-compose.single.yml`, relies on the `DEPLOY_MODE` and `TRUST_PROXY` resolution, catches the startup safety guard's non-zero exit, and manages the `jsq_mcp_` static token. Do not start this set until that one is done.
+**Read this first.** This prompt set builds the `job-squire` deployment CLI: the single front door for bootstrapping, runtime selection, instance creation, lifecycle, backup and restore, and provisioning. It assumes the entire `PROMPTS-deployment-modes.md` set has already landed and been committed, because the CLI generates the env file and `docker-compose.yml`, relies on the `DEPLOY_MODE` and `TRUST_PROXY` resolution, catches the startup safety guard's non-zero exit, and manages the `jsq_mcp_` static token. Do not start this set until that one is done.
 
 **A crucial current-state fact.** The existing `jobsquire-cli` project (sibling folder `jobsquire-cli/`) is **not** a deployment tool. It is a thin MCP-client wrapper: a `click` + `rich` CLI whose commands (`health`, `list`, `pipeline`, `contacts`, `job`, `contact`, `followups`) query a running Job Squire over MCP. Today it reaches the MCP server through the Hermes `mcp_client` sidecar at `~/.hermes/`. Its entry point is `jobsquire = jobsquire.cli:main`, it builds with hatchling, and its version is `0.1.0+<sha>` (PEP 440 local version). The Job Squire app repo versions as `0.1.0-<sha>` (hyphen).
 
@@ -174,7 +174,7 @@
 
 ## Prompt C5 — Instance lifecycle core
 
-**Depends on:** C3 (runtime), C4 (registry), and the app set's `docker-compose.single.yml`, `DEPLOY_MODE`/`TRUST_PROXY` resolution, and startup safety guard.
+**Depends on:** C3 (runtime), C4 (registry), and the app set's `docker-compose.yml`, `DEPLOY_MODE`/`TRUST_PROXY` resolution, and startup safety guard.
 
 **Reference:** `docs/PLAN-deployment-modes.md` Section 7 ("Instance lifecycle operations", "Direct runtime access remains available", "Surfacing failures").
 
@@ -182,7 +182,7 @@
 
 **Do this:**
 
-1. `create`: run setup end to end. Choose mode (`local` or `network`), name the instance (slug + collision check via C4), offer to import basic non-secret settings from an existing instance (search titles, location, radius, schedule hours and timezone, enabled providers by name, SMTP host and port, AI provider selection, interface preferences), with secrets excluded by default and an explicit opt-in to also copy provider keys. Generate a fresh random `SECRET_KEY`. Allocate the next free web and MCP port pair in local mode (record it), or set the hostname in network mode. Write the instance's `data/.env` and its `docker-compose.single.yml` from the app set. Register it in C4. Bring it up on the recorded runtime.
+1. `create`: run setup end to end. Choose mode (`local` or `network`), name the instance (slug + collision check via C4), offer to import basic non-secret settings from an existing instance (search titles, location, radius, schedule hours and timezone, enabled providers by name, SMTP host and port, AI provider selection, interface preferences), with secrets excluded by default and an explicit opt-in to also copy provider keys. Generate a fresh random `SECRET_KEY`. Allocate the next free web and MCP port pair in local mode (record it), or set the hostname in network mode. Write the instance's `data/.env` and its `docker-compose.yml` from the app set. Register it in C4. Bring it up on the recorded runtime.
 2. `start` / `stop` / `restart`: bring the instance's single container up or down through the recorded runtime, translating to that runtime's compose invocation (`docker compose`, `podman compose`, and their differences stay hidden).
 3. `status` / `list`: show each registered instance and its health using the aggregated container healthcheck from the app set, and report any registry-vs-reality divergence from C4.
 4. `remove`: tear down the instance, update the registry, and ask whether to keep or delete that instance's data directory so history is never destroyed silently.
@@ -383,7 +383,7 @@
 
 These CLI prompts consume work delivered by `PROMPTS-deployment-modes.md`:
 
-- The single-container image and `docker-compose.single.yml` (Prompts 1 and 2) are what `create` generates and `start` drives.
+- The single-container image and `docker-compose.yml` (Prompts 1 and 2) are what `create` generates and `start` drives.
 - The aggregated healthcheck (Prompt 2) backs `status`.
 - `DEPLOY_MODE` and `TRUST_PROXY` (Prompt 4) are what `create` writes into each instance's env.
 - The startup safety guard (Prompt 5) is what C5's "surfacing failures" reprints on the command line.

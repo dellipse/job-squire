@@ -131,7 +131,7 @@ When the MCP connector is active, each job detail page shows action buttons that
 
 **Connector name mismatch** — if routines say they can't find your Job Squire, check that the connector name in Claude's Settings → Connectors matches the Connector name field in Job Squire Settings exactly, including capitalization and hyphens.
 
-**OAuth loop / can't authorize** — confirm the MCP container is running (`docker ps` should show `job-squire-mcp`) and that `PUBLIC_MCP_URL` is set and reachable from your browser.
+**OAuth loop / can't authorize** — confirm the container is running and healthy (`docker ps`) and that `PUBLIC_MCP_URL` is set and reachable from your browser.
 
 **Token expired** — access tokens last 30 days. Remove the connector from Claude and re-add it to go through OAuth again.
 

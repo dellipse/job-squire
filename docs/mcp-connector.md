@@ -7,10 +7,11 @@ Free/Pro/Max/Team/Enterprise (launched March 2026).
 
 ## How it works
 
-- `app/mcp_server.py` runs a `FastMCP` server over **Streamable HTTP** (uvicorn, port 9000), in
-  its own container `job-squire-mcp`.
-- SWAG proxies `mcp-squire.yourdomain.com` → `job-squire-mcp:9000`, over **HTTP/1.1**
-  (`http2 off`, because MCP streaming/SSE breaks nginx HTTP/2).
+- `app/mcp_server.py` runs a `FastMCP` server over **Streamable HTTP** (uvicorn, port 9000), as
+  one of three s6-supervised processes inside the app's single container, alongside web and worker.
+- SWAG proxies `mcp-squire.yourdomain.com` → `<instance>:9000` (the same container the web app
+  runs in, just a different port), over **HTTP/1.1** (`http2 off`, because MCP streaming/SSE
+  breaks nginx HTTP/2).
 - **Auth is OAuth 2.0 Authorization Code with PKCE**, which is what Claude's connector handshake
   requires. The user adds the **base URL** (`https://mcp-squire.<domain>`, no path, no token).
   Claude discovers the OAuth endpoints, registers a client, and opens a login page the MCP server
@@ -95,7 +96,7 @@ Claude's connector handshake). The Job Squire login page IS the OAuth authorizat
 in-memory and valid for 30 days; the container must be running for them to persist. After a
 restart or expiry, the user removes and re-adds the connector (~60 seconds).
 
-**Confirmed working** with claude.ai as of June 2026. Verified via `docker logs job-squire-mcp`:
+**Confirmed working** with claude.ai as of June 2026. Verified via `docker logs <instance>`:
 full OAuth flow (discovery → register → authorize → token) followed by live `ListToolsRequest`,
 `ListResourcesRequest`, and `ListPromptsRequest` all returning 200.
 
@@ -134,4 +135,5 @@ The prompts enforce the writing style rules (no em-dashes, no AI-tell phrasing, 
 - The tools can be exercised in Python against the FastMCP instance
   (`await mcp.call_tool("get_search_targets", {})`), which is how they were unit-tested. The
   claude.ai connector handshake itself can only be verified by adding the connector and watching
-  `docker logs -f job-squire-mcp` for incoming tool calls.
+  `docker logs -f <instance>` for incoming tool calls (interleaved with web/worker output, since
+  all three processes share the one container's log).

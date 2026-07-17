@@ -17,16 +17,15 @@ snapshot + uploads/ + candidate_profile.md + oauth_tokens.json + optionally
 .env), tarred into a single `.tgz`, so a file downloaded here can be restored
 with the existing `scripts/restore.sh` with no format differences.
 
-Restore is deliberately NOT implemented as an in-app HTTP action. Job Squire
-runs as three separate containers (web, worker, MCP) sharing one data
-directory; a safe restore requires stopping all three before the data
-directory is replaced, which is a host-level operation this container has no
-way to perform on itself or its siblings. `scripts/restore.sh` already does
-this correctly (stop -> move current data aside -> extract -> fix ownership
--> restart) — see docs/backup-restore.md. Re-implementing that dance behind a
-web request would either not actually stop the other containers (silent data
-race) or would require this container to reach out and manage its own
-orchestration, which is a much larger and riskier change for a two-user app.
+Restore is deliberately NOT implemented as an in-app HTTP action. A safe
+restore requires stopping the container before the data directory is
+replaced, which is a host-level operation this container has no way to
+perform on itself. `scripts/restore.sh` already does this correctly (stop
+-> move current data aside -> extract -> fix ownership -> restart) — see
+docs/backup-restore.md. Re-implementing that dance behind a web request
+would either not actually stop the container (silent data race) or would
+require this container to reach out and manage its own orchestration,
+which is a much larger and riskier change for a two-user app.
 """
 import io
 import logging

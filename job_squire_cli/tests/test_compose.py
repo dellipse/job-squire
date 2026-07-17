@@ -347,13 +347,14 @@ def test_compose_up_passes_through_extra_args(tmp_path):
     assert run.calls[0]["args"][-3:] == ("up", "-d", "--force-recreate")
 
 
-# ── write_compose_files (adopt, Prompt C7) ────────────────────────────────
+# ── write_compose_files ──────────────────────────────────────────────────
 
 
 def test_write_compose_files_never_touches_data_env(tmp_path):
-    """adopt_instance's whole point is that data/.env is pre-existing and
-    must be left alone -- write_compose_files must not create or write it,
-    unlike write_instance_files (which owns a fresh instance's data/.env)."""
+    """write_compose_files must not create or write data/.env, unlike
+    write_instance_files (which owns a fresh instance's data/.env) -- a
+    rewrite of just the compose/env files (e.g. attaching a proxy network)
+    must never risk the container-level secrets in data/.env."""
     root = tmp_path / "existing-install"
     root.mkdir()
     data_dir = root / "data"

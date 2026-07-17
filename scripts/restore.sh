@@ -8,10 +8,10 @@
 #   DATA_HOST_DIR   Path to the data directory (default: ./job-squire/data)
 #
 # What this does:
-#   Stops all three Job Squire containers, moves the current data directory
+#   Stops the Job Squire container, moves the current data directory
 #   aside (never deletes it — see the .pre-restore-<timestamp> path printed
 #   at the end), extracts the backup archive in its place, then restarts.
-#   Stopping the containers for the few seconds this takes is the simplest
+#   Stopping the container for the few seconds this takes is the simplest
 #   way to guarantee nothing writes to the data directory mid-restore.
 #
 # IMPORTANT — SECRET_KEY: the archive includes the .env that was active at
@@ -37,10 +37,10 @@ if [[ ! -f "$BACKUP_FILE" ]]; then
 fi
 
 echo "This will:"
-echo "  1. Stop job-squire, job-squire-worker, job-squire-mcp"
+echo "  1. Stop the job-squire container"
 echo "  2. Move $DATA_DIR aside (kept, not deleted)"
 echo "  3. Extract $BACKUP_FILE into $DATA_DIR"
-echo "  4. Restart the three services"
+echo "  4. Restart the container"
 echo
 read -r -p "Continue? [y/N] " ans
 if [[ "$ans" != "y" && "$ans" != "Y" ]]; then
@@ -48,8 +48,8 @@ if [[ "$ans" != "y" && "$ans" != "Y" ]]; then
   exit 1
 fi
 
-echo "Stopping services..."
-docker compose stop job-squire job-squire-worker job-squire-mcp
+echo "Stopping the container..."
+docker compose stop job-squire
 
 TS="$(date +%Y%m%dT%H%M%S)"
 if [[ -d "$DATA_DIR" ]]; then
@@ -75,19 +75,20 @@ if command -v sudo >/dev/null 2>&1; then
 fi
 
 echo "Restored into $DATA_DIR."
-echo "Starting services..."
-docker compose up -d job-squire job-squire-worker job-squire-mcp
+echo "Starting the container..."
+docker compose up -d job-squire
 
 echo
-echo "Waiting for the web app healthcheck..."
+echo "Waiting for the container's aggregated healthcheck..."
 sleep 10
-docker compose ps job-squire job-squire-worker job-squire-mcp
+docker compose ps job-squire
 
 cat <<'EOF'
 
 Verify the restore:
-  - `docker compose ps` above shows all three as "healthy" (may take up to a
-    minute for job-squire-worker's first heartbeat).
+  - `docker compose ps` above shows the container as "healthy" (the
+    aggregated healthcheck covers web, worker, and mcp together -- it may
+    take up to a minute for the worker's first heartbeat to land).
   - curl -is http://localhost:8080/health           -> {"ok": true}
   - Log in and confirm your jobs/pipeline are present.
   - Settings > History tab shows the SearchRun history you expect (a gap

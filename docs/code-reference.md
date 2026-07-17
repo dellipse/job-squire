@@ -10,7 +10,7 @@ job-squire/
   wsgi.py                  # gunicorn entrypoint: app = create_app()
   requirements.txt
   Dockerfile               # LinuxServer baseimage-alpine + s6-overlay, non-root UID/GID (PUID/PGID)
-  docker-compose.single.yml # web+worker+mcp in one container; `job-squire create` generates a per-instance copy of this
+  docker-compose.yml # web+worker+mcp in one container; `job-squire create` generates a per-instance copy of this
   examples/
     .env.example                     # template for data/.env
     nginx/

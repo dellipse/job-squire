@@ -19,10 +19,13 @@ the whole point of the lazy group is defeated.
 Prompt C5 made create/start/stop/restart/status/list/remove real (see
 ops/lifecycle.py and tests/test_lifecycle.py, tests/test_ops_commands.py
 for their behavior). Prompt C6 made `configure` real too (see
-tests/test_configure.py). Prompt C7 made `update` and `adopt` real (see
+tests/test_configure.py). Prompt C7 made `update` real (see
 tests/test_lifecycle.py and tests/test_ops_commands.py). Prompt C8 made
 `backup`/`restore` real too (see tests/test_backup.py) -- every deployment
 verb is real as of this prompt, so there is no longer a stub set here.
+(Prompt C7 also shipped an `adopt` command for migrating an existing
+three-container install onto the single-container image; removed
+2026-07-17 once no installs remained on the old topology to migrate.)
 """
 import subprocess
 import sys
@@ -33,7 +36,7 @@ from job_squire_cli.cli import main
 
 DEPLOYMENT_COMMANDS = [
     "create", "start", "stop", "restart", "status", "list",
-    "update", "remove", "uninstall", "adopt", "configure", "backup", "restore", "proxy",
+    "update", "remove", "uninstall", "configure", "backup", "restore", "proxy",
 ]
 
 

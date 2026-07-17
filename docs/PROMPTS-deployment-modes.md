@@ -76,12 +76,12 @@
 **Do this:**
 
 1. Replace the image-level HEALTHCHECK in `Dockerfile` with an aggregated check that passes only if all three are healthy: web `/health` on 8000, MCP `/health` on `MCP_PORT` (default 9000), and the worker liveness check, which stays the existing `.worker_heartbeat` freshness test (same threshold logic used in today's compose worker healthcheck). Keep it pure Python so no extra packages are needed.
-2. Add a new `docker-compose.single.yml` that runs the one image as a single service with the aggregated healthcheck, the `data/.env` env_file, the `${DATA_HOST_DIR}:/data` bind mount, and the `PUID`/`PGID`/`UMASK` passthrough. Publish `8000` and `MCP_PORT` on the host per the current port variables (`APP_HOST_PORT`, `MCP_HOST_PORT`), bound to loopback exactly as the current compose does.
+2. Add a new `docker-compose.yml` that runs the one image as a single service with the aggregated healthcheck, the `data/.env` env_file, the `${DATA_HOST_DIR}:/data` bind mount, and the `PUID`/`PGID`/`UMASK` passthrough. Publish `8000` and `MCP_PORT` on the host per the current port variables (`APP_HOST_PORT`, `MCP_HOST_PORT`), bound to loopback exactly as the current compose does.
 3. Keep the existing three-container `docker-compose.yml` unchanged as the documented fallback for anyone who wants component isolation during migration. Add a short comment at the top of each compose file pointing to the other.
 
 **Verify before committing:**
 
-- Bring the stack up with `docker compose -f docker-compose.single.yml up -d`. Confirm the container reports `healthy` only after all three probes pass, and that killing the worker process inside the container (to stale the heartbeat) flips the container to `unhealthy`.
+- Bring the stack up with `docker compose -f docker-compose.yml up -d`. Confirm the container reports `healthy` only after all three probes pass, and that killing the worker process inside the container (to stale the heartbeat) flips the container to `unhealthy`.
 - Confirm the legacy `docker-compose.yml` still stands up the three-container topology unchanged.
 
 **Commit:** `NEW: aggregated container healthcheck and single-container compose`.
@@ -218,7 +218,7 @@
 
 **Do this:**
 
-1. Add an adopt helper under `scripts/` (shell is fine, matching the existing `install.sh`/`update.sh` style) that, given an existing data directory and `.env`, derives the instance name and cookie name from the current `INSTANCE_NAME`, keeps the existing `SECRET_KEY` so stored secrets stay decryptable, and generates a `docker-compose.single.yml`-based configuration pointed at that data directory. It must be additive: existing environment variables continue to be honored, nothing is rewritten or re-encrypted.
+1. Add an adopt helper under `scripts/` (shell is fine, matching the existing `install.sh`/`update.sh` style) that, given an existing data directory and `.env`, derives the instance name and cookie name from the current `INSTANCE_NAME`, keeps the existing `SECRET_KEY` so stored secrets stay decryptable, and generates a `docker-compose.yml`-based configuration pointed at that data directory. It must be additive: existing environment variables continue to be honored, nothing is rewritten or re-encrypted.
 2. Confirm the config model from Prompt 4 preserves current behavior for an existing `.env` that has neither `DEPLOY_MODE` nor `TRUST_PROXY`: it should resolve to the same effective flags the install runs with today (secure cookies as currently set, proxy trust matching today's always-on `ProxyFix` only if the operator was actually behind a proxy). Note any behavior change explicitly and default toward preserving the current install's semantics.
 3. Document the adopt steps in `docs/` (a short runbook, superseded later by the CLI): stop the three-container stack, run the adopt helper, start the single-container stack, verify.
 

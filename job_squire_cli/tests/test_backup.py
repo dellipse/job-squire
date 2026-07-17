@@ -295,7 +295,7 @@ def _bare_instance_root(tmp_path) -> "tuple":
     conn.execute("INSERT INTO t VALUES (1)")
     conn.commit()
     conn.close()
-    (root / "docker-compose.single.yml").write_text("image: ghcr.io/dellipse/job-squire:latest\n")
+    (root / "docker-compose.yml").write_text("image: ghcr.io/dellipse/job-squire:latest\n")
     (root / ".env").write_text("PUID=1000\n")
     paths.data_env_path(root).write_text("SECRET_KEY=abc\n")
     instance = reg.Instance(

@@ -33,4 +33,4 @@ If helpful, paste screenshots or a screen recording.
 
 ## Additional context
 
-Logs from `docker logs job-squire`, `docker logs job-squire-worker`, or `docker logs job-squire-mcp` help a lot.
+Logs from `docker logs <instance>` help a lot (web, worker, and mcp all share one container's log).

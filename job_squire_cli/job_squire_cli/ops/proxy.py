@@ -41,7 +41,7 @@ operator already has in hand (or empty placeholders C10 fills in later).
 
 **Why the nginx conf text is a hand-rolled template here rather than read
 from examples/nginx/ at runtime**: exactly the reason compose.py's own
-docstring gives for not reading docker-compose.single.yml from the repo --
+docstring gives for not reading docker-compose.yml from the repo --
 this package is `pip install`-able as `job-squire-cli` from PyPI/GitHub
 with no repo checkout on disk, and `pyproject.toml` only ships the
 `job_squire_cli` package itself, not the repo's `examples/` directory. The

@@ -179,8 +179,8 @@ def add_instance(
 ) -> Instance:
     """Sanitize and register a new instance. Raises NameCollisionError if
     the sanitized name already exists. `cookie_name`/`created` are derived
-    automatically when omitted; pass them explicitly only to adopt an
-    existing instance (C7) whose values must be preserved verbatim.
+    automatically when omitted; pass them explicitly only when preserving
+    values from an existing record (e.g. `restore`).
     """
     slug = sanitize_slug(name)
     data = load_registry()

@@ -62,7 +62,7 @@ curl -s -X POST https://squire.yourdomain.com/api/ingest \
 
 ## MCP Connector
 
-The MCP server (`app/mcp_server.py`) runs as a separate container (`job-squire-mcp`) and is reached at `https://mcp-squire.<domain>`. It exposes 23 tools over Streamable HTTP (uvicorn + FastMCP).
+The MCP server (`app/mcp_server.py`) runs as one of three s6-supervised processes inside Job Squire's single container (alongside web and worker) and is reached at `https://mcp-squire.<domain>`. It exposes 23 tools over Streamable HTTP (uvicorn + FastMCP).
 
 **Authentication.** OAuth 2.0 Authorization Code flow with PKCE. Claude handles the handshake automatically when the connector is added. The user signs in with their Job Squire credentials on the OAuth page; Claude stores a 30-day Bearer token. Tokens are persisted to `DATA_DIR/oauth_tokens.json`.
 

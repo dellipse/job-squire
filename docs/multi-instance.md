@@ -78,7 +78,7 @@ Each instance is a self-contained directory:
 
 ```
 ~/job-squire/castelo/
-  docker-compose.single.yml   # generated; image pinned
+  docker-compose.yml   # generated; image pinned
   .env                        # compose-level vars (PUID/PGID, host ports)
   data/
     .env                      # container env: SECRET_KEY, DEPLOY_MODE, SESSION_COOKIE_NAME, ...

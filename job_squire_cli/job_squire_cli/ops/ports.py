@@ -28,8 +28,8 @@ from typing import Callable, Iterable
 
 from .registry import Instance
 
-DEFAULT_APP_PORT = 8080  # matches docker-compose.single.yml's APP_HOST_PORT default
-DEFAULT_MCP_PORT = 9000  # matches docker-compose.single.yml's MCP_HOST_PORT default
+DEFAULT_APP_PORT = 8080  # matches docker-compose.yml's APP_HOST_PORT default
+DEFAULT_MCP_PORT = 9000  # matches docker-compose.yml's MCP_HOST_PORT default
 MAX_SCAN = 1000
 
 PortFree = Callable[[int], bool]

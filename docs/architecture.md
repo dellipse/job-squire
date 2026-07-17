@@ -3,7 +3,7 @@
 ## Containers
 
 The project builds **one Docker image** (`Dockerfile`, `ghcr.io/linuxserver/baseimage-alpine`
-base) that runs as **one container** (`docker-compose.single.yml`), generated per instance by the
+base) that runs as **one container** (`docker-compose.yml`), generated per instance by the
 `job-squire` CLI's `create` command. The same application code runs three logical processes inside
 that one container, sharing the same `/data` bind mount and therefore the same SQLite database.
 
@@ -28,7 +28,7 @@ pass: `web`'s `/health` on 8000, `mcp`'s `/health` on `MCP_PORT`, and the worker
 
 The container runs as a non-root user (`abc`) via the LinuxServer `PUID`/`PGID`/`UMASK`
 convention — the base image itself must start as root so s6's init can apply that mapping and
-drop each service to `abc` itself, which is why `docker-compose.single.yml` deliberately does not
+drop each service to `abc` itself, which is why `docker-compose.yml` deliberately does not
 set a compose `user:` directive.
 
 In network mode, an external reverse proxy (SWAG or nginx, provisioned by `job-squire proxy` — see
@@ -58,12 +58,6 @@ In local mode there is no proxy at all — the container publishes its two ports
 `127.0.0.1` and the browser talks to it directly (see
 [`PLAN-deployment-modes.md`](PLAN-deployment-modes.md) Section 5 for why loopback is a safe,
 warning-free trust boundary on its own).
-
-A prior three-container topology (`docker-compose.yml`, one process per container) existed during
-the migration to this single-container image and has been removed now that the single-container
-image is proven in practice (`PLAN-deployment-modes.md` Section 8). Anyone still running that
-topology can move onto this one with `job-squire adopt` — see
-[`adopt-single-container.md`](adopt-single-container.md).
 
 ## Request lifecycle (web)
 

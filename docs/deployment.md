@@ -9,9 +9,6 @@ what it does, and the network-mode/proxy mechanics behind it. The full design ra
 [`PLAN-deployment-modes.md`](PLAN-deployment-modes.md); the exact command grammar and internals are
 in [`job-squire-cli.md`](job-squire-cli.md).
 
-If you're moving an existing three-container install onto this CLI, see
-[`adopt-single-container.md`](adopt-single-container.md) or run `job-squire adopt` directly, below.
-
 ---
 
 ## The three deployment modes
@@ -74,7 +71,7 @@ settings (search targets, schedule, enabled providers, SMTP host/port, AI provid
 secrets are excluded unless you pass `--copy-keys` explicitly.
 
 Every instance lives in its own directory (`~/job-squire/<name>/` by default), containing a
-generated `docker-compose.single.yml`, a compose-level `.env` (host ports, `PUID`/`PGID`), and
+generated `docker-compose.yml`, a compose-level `.env` (host ports, `PUID`/`PGID`), and
 `data/.env` plus the SQLite database under `data/`. Nothing about this is proprietary: `cd` into
 the directory and run `docker compose ...` (or `podman compose ...`) directly any time. Read-only
 and operational commands (`logs`, `ps`, `stop`, `restart`, `exec`) are always safe to run this way.
@@ -99,20 +96,6 @@ The new image is pulled before the running container is touched, so a failed pul
 Only then is the container stopped with a graceful `SIGTERM` (which s6-overlay forwards so the app
 checkpoints its SQLite WAL before exiting), the image swapped, and the container recreated. Each
 rollback swaps current and previous again, so rolling back twice returns to where you started.
-
-### Adopting an existing three-container install
-
-```bash
-job-squire adopt /path/to/existing/install [--name NAME] [--up]
-```
-
-Given an existing install's directory (it already has `data/.env`), this derives the instance name
-and cookie name from `INSTANCE_NAME`, keeps the existing `SECRET_KEY` so stored secrets stay
-decryptable, additively patches `data/.env` (only `TRUST_PROXY=1` and `SESSION_COOKIE_SECURE=true`
-if not already set — never `SECRET_KEY` or anything else), writes the single-container compose
-file, registers the instance, and — with `--up` — brings it up on the single-container image and
-verifies health. See [`adopt-single-container.md`](adopt-single-container.md) for the exact
-before/after and what to check.
 
 ---
 

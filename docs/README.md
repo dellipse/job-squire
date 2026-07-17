@@ -16,7 +16,6 @@ re-reading all the source first.
 | [deployment.md](deployment.md) | Operator's runbook for the CLI: instance lifecycle, updating/rollback, reverse-proxy and DNS/TLS provisioning for network mode, password reset, `SECRET_KEY` rotation. |
 | [backup-restore.md](backup-restore.md) | The CLI's passphrase-encrypted backup/restore archive: what's inside, how it's encrypted, the restore procedure and verification checklist. |
 | [multi-instance.md](multi-instance.md) | Running more than one independent instance on the same host (e.g. one per job seeker): the instance model, the cross-platform registry, per-instance isolation. |
-| [adopt-single-container.md](adopt-single-container.md) | Runbook for moving an existing three-container install onto the single-container image with data and secrets intact — either via `job-squire adopt` or the manual script it wraps. |
 | [mcp-connector.md](mcp-connector.md) | The MCP server: its 23 tools (17 core + 6 routine-support), the OAuth auth flow, and how to connect it in Claude or another MCP-capable agent. |
 | [mcp-setup-guide.md](mcp-setup-guide.md) | Developer-focused MCP setup guide: all three connection methods (Claude Pro OAuth, Hermes Agent, OpenClaw), full tool listing, and ready-to-use config blocks. |
 | [Setup-Guide.md](Setup-Guide.md) | The narrative, non-technical walkthrough: the one-line bootstrap, creating an instance, in-app configuration, and the three deployment modes. Start here if you're setting Job Squire up for the first time. |
@@ -61,7 +60,7 @@ under the instance's own data directory.
 
 - App source: `app/`. CLI source: `job_squire_cli/`.
 - Each instance the CLI creates is a self-contained directory, `~/job-squire/<instance-name>/` by
-  default: a generated `docker-compose.single.yml`, a compose-level `.env`, and `data/` (the SQLite
+  default: a generated `docker-compose.yml`, a compose-level `.env`, and `data/` (the SQLite
   DB, uploads, `candidate_profile.md`, the OAuth token store, and the instance's own `.env` with
   its `SECRET_KEY`). See [multi-instance.md](multi-instance.md).
 - The CLI's own per-user state (the instance registry, MCP endpoint/token config) lives at the

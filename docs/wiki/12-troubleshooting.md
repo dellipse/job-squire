@@ -36,9 +36,9 @@ Check that:
 1. **Automatic Features** is enabled in Settings → AI → AI Features.
 2. At least one AI provider is configured under **Settings → AI → AI Providers**, or an Anthropic API key is saved.
 3. The relevant toggle is enabled (Auto-triage new jobs / Auto-draft follow-ups).
-4. The scheduler worker container is running (`docker compose logs job-squire-worker`).
+4. The container is healthy and running (`docker compose ps`).
 
-If a provider is configured but the feature still skips, check the worker logs for a message like `auto-triage: enabled but no API key or ranked providers set`. This means the provider row exists but may be disabled — check the Enabled toggle on the provider card.
+If a provider is configured but the feature still skips, check the container logs (`docker compose logs`) for a message like `auto-triage: enabled but no API key or ranked providers set`. This means the provider row exists but may be disabled — check the Enabled toggle on the provider card.
 
 ## An AI provider returns errors or is skipped
 

@@ -11,15 +11,13 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """Minimal, line-preserving `KEY=value` env-file read/append/set helpers
-(Prompt C7), shared by ops/compose.py (compose-level bookkeeping like
-`update`'s `PREVIOUS_IMAGE`) and ops/lifecycle.py (`adopt`'s additive
-`data/.env` edits, mirroring scripts/adopt-single-container.sh).
+(Prompt C7), used by ops/compose.py (compose-level bookkeeping like
+`update`'s `PREVIOUS_IMAGE`), ops/tailscale.py, and ops/backup.py's restore.
 
 `set_line`/`append_if_absent` never reorder or rewrite a file's other
 lines -- each is a targeted single-line change, which is what "additive,
-never assumed" (CLAUDE.md's migration convention, and this prompt's own
-adopt design) requires of anything that touches an *existing* install's
-`data/.env`.
+never assumed" (CLAUDE.md's migration convention) requires of anything
+that touches an *existing* install's `data/.env`.
 """
 from __future__ import annotations
 

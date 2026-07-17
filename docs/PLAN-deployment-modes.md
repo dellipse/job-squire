@@ -81,7 +81,7 @@ With three containers, each has its own healthcheck. In one container we aggrega
 
 ### Isolation trade-off, stated honestly
 
-Consolidation costs one thing worth naming: with three containers you can restart or inspect a single component in isolation, and a crash is contained to that container. In one container, s6 will restart an individual failed service, which covers the common case, but the three services now share a container lifecycle and a kernel namespace. For a two-user-per-instance application running at most a handful of instances on a machine, this is an acceptable trade for the large gains in simplicity and footprint. Anyone who genuinely needs component-level isolation can still run the legacy three-container compose, which remains in the repository during migration.
+Consolidation costs one thing worth naming: with three containers you can restart or inspect a single component in isolation, and a crash is contained to that container. In one container, s6 will restart an individual failed service, which covers the common case, but the three services now share a container lifecycle and a kernel namespace. For a two-user-per-instance application running at most a handful of instances on a machine, this is an acceptable trade for the large gains in simplicity and footprint. The legacy three-container compose file has since been retired from the repository entirely -- no installs remained on that topology to migrate, so there was no reason to keep it around.
 
 ### Multi-architecture build
 

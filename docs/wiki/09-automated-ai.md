@@ -111,7 +111,7 @@ When Anthropic handles analysis tasks, you can enable extended thinking in Setti
 
 ## Troubleshooting
 
-**Tasks not running** — verify Automatic Features is checked and the worker container is running (`docker compose ps`). Check worker logs: `docker compose logs job-squire-worker`.
+**Tasks not running** — verify Automatic Features is checked and the container is healthy (`docker compose ps`). Check the logs (web, worker, and mcp all share one container): `docker compose logs`.
 
 **Provider errors** — use the **Test** button on a provider row in Settings → AI to verify connectivity. Check the provider's dashboard for quota usage.
 

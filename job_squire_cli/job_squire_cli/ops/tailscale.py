@@ -52,7 +52,7 @@ instead of leaving them to discover it as a surprise banner.
 dataclass is a fixed, non-secret schema with no room for this without a
 migration, and this is a toggle on an *existing* field's meaning, not new
 instance identity). Instead, a small `tailscale.json` manifest sits beside
-`docker-compose.single.yml` in the instance's own root -- the same
+`docker-compose.yml` in the instance's own root -- the same
 per-instance-directory precedent `ops/mcp_token.py`'s module docstring
 already establishes for state that belongs to one instance but has no
 natural home in the fixed registry schema. `read_state`/`is_tailnet_

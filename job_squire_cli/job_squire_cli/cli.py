@@ -15,7 +15,7 @@
 Command grammar (settled in docs/job-squire-cli.md):
 
   job-squire create|start|stop|restart|status|list|update|remove|
-             uninstall|adopt|configure|backup|restore
+             uninstall|configure|backup|restore
                                                 -- deployment/lifecycle group,
                                                    flat at the top level.
   job-squire dns duckdns|cloudflare            -- DNS/TLS group.

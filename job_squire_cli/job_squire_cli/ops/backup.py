@@ -99,8 +99,7 @@ def _now_iso() -> str:
 
 def _utc_stamp_minutes() -> str:
     """`YYYYMMDDTHHMMZ` -- matches the plan's own example filename
-    (`job-squire-castelo-20260711T1830Z.tgz`), minute resolution, not the
-    seconds resolution lifecycle._utc_stamp() uses for adopt's env backups."""
+    (`job-squire-castelo-20260711T1830Z.tgz`), minute resolution."""
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%MZ")
 
 

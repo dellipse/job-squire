@@ -314,11 +314,12 @@ def _worker_heartbeat_status(max_age_seconds=900):
     app/worker.py touches DATA_DIR/.worker_heartbeat on startup and every
     HEARTBEAT_INTERVAL_MINUTES thereafter (default 5), independent of whether
     automated search is enabled or due to run. So "stale" here means the
-    worker container's process/scheduler has died or wedged -- it is not a
+    worker process/scheduler has died or wedged -- it is not a
     statement about search being disabled or merely idle between runs. This
-    backs the same signal the job-squire-worker Docker healthcheck uses, but
-    surfaced in-app (Dashboard + Settings > History) so it doesn't require
-    running `docker ps` to notice.
+    backs the same signal the container's own aggregated healthcheck probes
+    (see root/etc/s6-overlay/scripts/healthcheck), but surfaced in-app
+    (Dashboard + Settings > History) so it doesn't require running
+    `docker ps` to notice.
 
     Returns a dict: {"last_seen": aware datetime | None, "stale": bool}.
     """

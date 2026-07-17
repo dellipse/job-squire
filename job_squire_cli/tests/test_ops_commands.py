@@ -644,56 +644,6 @@ def test_update_cli_version_passed_through_to_self_update(runner, monkeypatch):
     assert captured["version"] == "0.6.0"
 
 
-# ── adopt (Prompt C7) ────────────────────────────────────────────────────
-
-
-def test_adopt_missing_install_dir_fails_cleanly(runner, tmp_path):
-    result = runner.invoke(main, ["adopt", str(tmp_path / "does-not-exist")])
-    assert result.exit_code != 0
-    assert "Traceback" not in result.output
-
-
-def test_adopt_reports_success_and_env_changes(runner, monkeypatch, tmp_path):
-    captured = {}
-
-    def fake_adopt_instance(install_dir, *, name, image, bring_up, confirm):
-        captured.update(install_dir=install_dir, name=name, bring_up=bring_up)
-        inst = reg.Instance(
-            name="castelo", mode="local", runtime="docker", data_dir=str(install_dir),
-            app_port=8080, mcp_port=9000, cookie_name="castelo_session",
-            public_url="http://localhost:8080", created="2026-07-11",
-        )
-        return lc.AdoptResult(
-            instance=inst, cookie_name="castelo_session",
-            env_appended=["TRUST_PROXY=1"], env_backup=tmp_path / "install" / "data" / ".env.bak.x",
-            health=None,
-        )
-
-    monkeypatch.setattr(lc, "adopt_instance", fake_adopt_instance)
-    install_dir = tmp_path / "install"
-    install_dir.mkdir()
-    result = runner.invoke(main, ["adopt", str(install_dir), "--no-up"])
-    assert result.exit_code == 0
-    assert captured["bring_up"] is False
-    assert "adopted from" in result.output
-    assert "castelo_session" in result.output
-    assert "TRUST_PROXY=1" in result.output
-    assert "Not brought up yet" in result.output
-
-
-def test_adopt_surfaces_not_a_legacy_install_error_cleanly(runner, monkeypatch, tmp_path):
-    def fake_adopt_instance(install_dir, *, name, image, bring_up, confirm):
-        raise lc.NotALegacyInstallError(f"No data/.env found at {install_dir}/data/.env")
-
-    monkeypatch.setattr(lc, "adopt_instance", fake_adopt_instance)
-    install_dir = tmp_path / "install"
-    install_dir.mkdir()
-    result = runner.invoke(main, ["adopt", str(install_dir), "--no-up"])
-    assert result.exit_code == 1
-    assert "No data/.env found" in result.output
-    assert "Traceback" not in result.output
-
-
 # ── backup / restore (Prompt C8) ─────────────────────────────────────────
 # ops/backup.py's own behavior (real encryption, real files) is covered in
 # tests/test_backup.py; these only prove the click adapter's argument

@@ -12,10 +12,11 @@
 #
 """Retry helper for transient SQLite errors.
 
-Job Squire's three containers (web, worker, mcp) share one SQLite database
-via a bind-mounted host data directory (see CLAUDE.md). On some container
-runtimes that bind mount is backed by a virtualized filesystem bridge (e.g.
-OrbStack or Docker Desktop's file-sharing layer on macOS), which can
+Job Squire's three internal processes (web, worker, mcp) run inside one
+container, s6-supervised, sharing one SQLite database via a bind-mounted
+host data directory (see CLAUDE.md). On some container runtimes that bind
+mount is backed by a virtualized filesystem bridge (e.g. OrbStack or Docker
+Desktop's file-sharing layer on macOS), which can
 occasionally surface a transient `disk I/O error` or `database is locked`
 from SQLite's WAL-mode locking under concurrent access -- with nothing
 actually wrong with the data or the query. That's environmental flakiness,

@@ -88,13 +88,13 @@ OLLAMA_DEFAULT_HOST = "http://localhost:11434"
 # natively on this same host -- the common case (per docs/PLAN-ollama-
 # assist.md, Ollama is a native install, never dockerized itself). Plain
 # "localhost" only resolves to the container itself (single-container
-# topology, docker-compose.single.yml), never this host, so that can never
+# topology, docker-compose.yml), never this host, so that can never
 # be a correct default here even though it's OLLAMA_DEFAULT_HOST's value for
 # host-side checks above. "host.docker.internal" resolves out of the box on
 # Docker Desktop/OrbStack (macOS, Windows); on Linux it requires the
 # compose file's `extra_hosts: ["host.docker.internal:host-gateway"]` entry
 # (Docker Engine 20.10+), which ops/compose.py's render_compose_yaml() (and
-# the repo's own docker-compose.single.yml, kept in sync by hand) now set
+# the repo's own docker-compose.yml, kept in sync by hand) now set
 # unconditionally -- so this default is uniform across platforms rather
 # than branching on `system`. An operator whose Ollama lives on a different
 # machine on the network still overrides this with `--base-url` as before.

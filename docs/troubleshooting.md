@@ -37,14 +37,17 @@ The stack was started with only Job Squire service names, so SWAG was never brou
 **Fix:** Start SWAG from your orchestrator compose, or run `docker compose up -d` with no
 service name to start everything.
 
-### `docker compose ps` shows `job-squire-worker` as `unhealthy`
-The worker has no HTTP endpoint, so its healthcheck instead checks that
-`DATA_DIR/.worker_heartbeat` was touched within the last 15 minutes (the worker touches it every
-`HEARTBEAT_INTERVAL_MINUTES`, default 5). The same signal shows in-app: a banner on the Dashboard
-and a status line on Settings → History. **Fix:** check `sudo docker logs job-squire-worker` for a
-crash/traceback first. If the process looks alive but the heartbeat is still stale, restart it:
-`sudo docker compose restart job-squire-worker`. Note this only detects a dead/wedged *process* —
-it says nothing about whether automated search is enabled; that's a separate check (see the
+### `docker compose ps` shows the container as `unhealthy`
+The container's one aggregated healthcheck (`root/etc/s6-overlay/scripts/healthcheck`) fails if
+any of its three internal processes look unhealthy: web's `/health`, mcp's `/health`, or the
+worker's heartbeat file. The worker has no HTTP endpoint, so its part of the check instead verifies
+that `DATA_DIR/.worker_heartbeat` was touched within the last 15 minutes (the worker touches it
+every `HEARTBEAT_INTERVAL_MINUTES`, default 5). The same worker signal also shows in-app: a banner
+on the Dashboard and a status line on Settings → History. **Fix:** check `sudo docker logs
+<instance>` for a crash/traceback first — all three processes' output goes to the one container log.
+If a process looks alive but the healthcheck is still failing, restart the container:
+`sudo docker compose restart`. Note the worker heartbeat check only detects a dead/wedged *process*
+— it says nothing about whether automated search is enabled; that's a separate check (see the
 `SearchRun` history on the same Settings tab).
 
 ### Certificate stuck "Attempting to renew" / `All renewals failed`
@@ -132,8 +135,9 @@ in the flashed UI message.
 `curl https://mcp-squire.<domain>/health` must return `{"ok": true}` first. The connector URL is
 the **base** URL (`https://mcp-squire.<domain>`) — no `/mcp/...` path. Auth is OAuth: Claude opens
 a sign-in page where you enter your **Job Squire** username/password (not your Claude password). Watch
-`docker logs -f job-squire-mcp` while connecting — you should see discovery → register → authorize
-→ token, then `ListToolsRequest` returning 200. Confirm `PUBLIC_MCP_URL` (and `PUBLIC_MCP_HOST` if
+`docker logs -f <instance>` while connecting — you should see discovery → register → authorize
+→ token, then `ListToolsRequest` returning 200 (interleaved with web/worker output, since all three
+processes share the one container's log). Confirm `PUBLIC_MCP_URL` (and `PUBLIC_MCP_HOST` if
 the public host differs) are set in `data/.env`.
 
 ### MCP connector worked, then stopped after a restart
@@ -160,9 +164,8 @@ re-entry steps; there is no way to recover the old secrets without the original 
 
 ## General diagnostics
 
-- Web app logs: `sudo docker logs job-squire`
-- Scheduler logs: `sudo docker logs job-squire-worker`
-- MCP logs: `sudo docker logs -f job-squire-mcp`
+- All logs (web, worker, and mcp share one container): `sudo docker logs <instance>`
+- Follow live: `sudo docker logs -f <instance>`
 - Confirm the running image has a given change:
   `sudo docker exec job-squire grep -c <marker> /app/app/<file>`
 - nginx config test (after any proxy-conf edit): `sudo docker exec swag nginx -t`

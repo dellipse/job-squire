@@ -24,7 +24,7 @@ job_squire_cli/
     ops/dotenv.py      # line-preserving .env read/append/set helpers (Prompt C7)
     ops/crypto_mirror.py  # HKDF-SHA256 -> Fernet derivation mirrored from app/crypto.py (C5/C6)
     ops/secrets_copy.py  # Fernet-aware settings import between instances (Prompt C5)
-    ops/lifecycle.py   # create/start/stop/restart/status/list/remove/update/adopt orchestration (C5/C7)
+    ops/lifecycle.py   # create/start/stop/restart/status/list/remove/update orchestration (C5/C7)
     ops/mcp_token.py   # jsq_mcp_ static token generate/rotate/revoke (Prompt C6)
     ops/backup.py      # backup/restore orchestration (Prompt C8)
     ops/backup_crypto.py  # Argon2id + AES-256-GCM archive encryption (Prompt C8)
@@ -56,7 +56,7 @@ own subcommand:
 
 | Group | Invocation | Commands |
 |---|---|---|
-| Deployment/lifecycle | `job-squire <cmd>` (flat, top level) | `create`, `start`, `stop`, `restart`, `status`, `list`, `update`, `remove`, `uninstall`, `adopt`, `configure`, `backup`, `restore`, `proxy` |
+| Deployment/lifecycle | `job-squire <cmd>` (flat, top level) | `create`, `start`, `stop`, `restart`, `status`, `list`, `update`, `remove`, `uninstall`, `configure`, `backup`, `restore`, `proxy` |
 | DNS/TLS | `job-squire dns <cmd>` | `duckdns`, `cloudflare` |
 | Tailscale | `job-squire tailscale <cmd>` | `enable`, `disable`, `status` |
 | Ollama | `job-squire ollama <cmd>` | `check`, `setup` |
@@ -65,10 +65,9 @@ own subcommand:
 The deployment group is new in this fold-in; its commands are structural
 placeholders as of Prompt C1 (grammar and `--help` text are real, behavior
 is not) and land incrementally in Prompts C2-C11 of
-`docs/PROMPTS-deployment-cli.md`. `adopt` and `proxy` weren't part of C1's
-original table either -- C1 deliberately deferred `adopt`'s exact shape
-(along with `update`'s rollback design) to Prompt C7, the dedicated session
-for version movement and adopting existing data (PLAN Section 8), and
+`docs/PROMPTS-deployment-cli.md`. `proxy` wasn't part of C1's
+original table either -- C1 deliberately deferred `update`'s rollback
+design to Prompt C7, the dedicated session for version movement, and
 deferred `proxy` to Prompt C9, the dedicated session for reverse-proxy
 provisioning (PLAN Section 5). `dns` is namespaced under its own subcommand
 for the same reason `query` is (a natural home for two related verbs,
@@ -112,27 +111,6 @@ container recreated. The image the instance was running is recorded in
 its compose-level `.env` (`PREVIOUS_IMAGE`) before the swap, which is what
 `--rollback` reads; each rollback swaps current and previous again, so
 rolling back twice returns to where you started.
-
-### Adopting an existing install (Prompt C7)
-
-```
-job-squire adopt /path/to/existing/install [--name NAME] [--up]
-```
-
-Wraps `scripts/adopt-single-container.sh`'s exact logic (`docs/
-adopt-single-container.md`) as a first-class command: given an existing
-three-container install's directory (it already has `data/.env` right
-where the CLI's own per-instance layout expects it), derive the instance
-name and cookie name from the current `INSTANCE_NAME`, back up and
-additively patch `data/.env` (only `TRUST_PROXY=1` and
-`SESSION_COOKIE_SECURE=true` if not already set -- never `SECRET_KEY` or
-anything else), write `docker-compose.single.yml` and a compose-level
-`.env` alongside it, and register it. `--up` (or the interactive prompt)
-then offers to bring it up on the single-container image and verify
-health, refusing if the old three-container stack still looks like it's
-running so nothing writes to the database while the image switches.
-Scoped to the documented standalone/host-port topology; a shared-Docker-
-network (SWAG) install isn't adopted automatically today.
 
 The query group is the old `jobsquire-cli` project's command set, moved
 over with its observable behavior unchanged, with two grammar changes
@@ -327,7 +305,7 @@ self-contained directory, `~/job-squire/<name>/` by default
 
 ```
 <name>/
-  docker-compose.single.yml   # generated; image pinned, no build: block
+  docker-compose.yml   # generated; image pinned, no build: block
   .env                        # compose-level vars (PUID/PGID, host ports)
   data/
     .env                      # container env (SECRET_KEY, DEPLOY_MODE, ...)
@@ -342,7 +320,7 @@ directory registered as the instance's `data_dir`, since a future backup
 archive (Prompt C8) needs to capture `SECRET_KEY` along with the database.
 
 **Compose/env rendering** (`ops/compose.py`). The generated
-`docker-compose.single.yml` is *not* a copy of the repo's own file of the
+`docker-compose.yml` is *not* a copy of the repo's own file of the
 same name -- that one has a `build:` block for local development from a
 checkout, which a CLI-created instance (no checkout involved) must not
 have. `render_compose_yaml`/`render_compose_env`/`render_data_env` are
@@ -515,7 +493,7 @@ loopback only and need no proxy). `ops/proxy.py` covers the two cases from
 
 **The nginx conf templates are hand-rolled in `ops/proxy.py`, not read from
 `examples/nginx/` at runtime**, for the same reason `ops/compose.py`
-doesn't read the repo's own `docker-compose.single.yml`: this package is
+doesn't read the repo's own `docker-compose.yml`: this package is
 `pip install`-able with no repo checkout on disk, and `pyproject.toml`
 only ships the `job_squire_cli` package itself. `_WEB_CONF_TEMPLATE`/
 `_MCP_CONF_TEMPLATE` mirror `examples/nginx/job-squire.subdomain.conf` and
@@ -535,10 +513,8 @@ so more than one CLI-managed instance can share a proxy.
   reuses the proxy's existing custom network if it has one, otherwise
   creates `--network`'s value and attaches both sides to it), and the conf
   resolves the instance by container name over Docker's embedded DNS
-  (`resolver 127.0.0.11`) -- the same pattern the app repo's own
-  `docker-compose.swag.yml` already documents for the legacy
-  three-container topology, just for one container instead of three. The
-  instance's `docker-compose.single.yml` is rewritten in place with the
+  (`resolver 127.0.0.11`). The
+  instance's `docker-compose.yml` is rewritten in place with the
   new `networks:` block (`compose.write_compose_files`'s `proxy_network`
   parameter) and the container is recreated to pick it up -- additive to
   the existing host-port publish, not a replacement for it, so direct
@@ -685,7 +661,7 @@ surprise banner and wonder if something broke.
 **Where the on/off state lives.** Not the registry -- `Instance` (Prompt
 C4) is a fixed, non-secret schema, and this is a toggle on an existing
 field's *meaning*, not new instance identity. Instead a small
-`tailscale.json` manifest sits beside `docker-compose.single.yml` in the
+`tailscale.json` manifest sits beside `docker-compose.yml` in the
 instance's own directory (`ops/tailscale.py`'s `read_state`/`is_tailnet_
 reachable`), the same per-instance-directory precedent `ops/mcp_token.py`
 already established for state with no natural home in the registry.
@@ -722,7 +698,7 @@ job-squire ollama setup NAME --yes                 # don't ask before installing
 be a native install on the same host as NAME's container (the common case), and plain `localhost` inside
 that container always means the container itself, never the host -- so it could never have been a correct
 default. `host.docker.internal` resolves out of the box on Docker Desktop/OrbStack (macOS, Windows); on
-Linux, `ops/compose.py`'s generated compose file (and the repo's own `docker-compose.single.yml`) declare
+Linux, `ops/compose.py`'s generated compose file (and the repo's own `docker-compose.yml`) declare
 `extra_hosts: ["host.docker.internal:host-gateway"]` unconditionally so the same name resolves there too
 (Docker Engine 20.10+). Only pass `--base-url` explicitly when Ollama runs on a different machine.
 

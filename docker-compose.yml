@@ -2,7 +2,7 @@
 # container under s6-overlay. See docs/PLAN-deployment-modes.md Section 2.
 # This is the file the `job-squire` CLI's `create` command generates a
 # per-instance copy of (see docs/job-squire-cli.md); this checkout copy is
-# for local development and for scripts/adopt-single-container.sh.
+# for local development.
 #
 # This file deliberately does NOT set a "user:" directive -- the container
 # must start as root so s6-overlay's init can apply PUID/PGID/UMASK and

@@ -241,7 +241,7 @@ job-squire/
       query/                  MCP query commands (health, list, pipeline, contacts, ...)
   wsgi.py
   Dockerfile
-  docker-compose.single.yml   Generated per instance by `job-squire create`; also usable directly
+  docker-compose.yml   Generated per instance by `job-squire create`; also usable directly
   bootstrap.sh / bootstrap.ps1  The one-line CLI installer
   requirements.txt
   examples/
