@@ -239,6 +239,16 @@
   <p>LinkedIn or similar profiles you want referenced in applications
     {% if profile_exists %}<span class="muted small">(your candidate profile already has content —
     these are appended)</span>{% endif %}:</p>
+  {% if saved_profile_links %}
+  <div class="muted small" style="margin-bottom:0.5rem">
+    Currently saved:
+    <ul style="margin:.25rem 0 0 1.1rem;padding:0">
+      {% for link in saved_profile_links %}
+      <li><a href="{{ link }}" target="_blank" rel="noopener noreferrer">{{ link }}</a></li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
   <form method="post" action="{{ url_for('onboarding.save_profile_links') }}" class="form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="field field-wide">

@@ -124,6 +124,37 @@ def _profile_exists() -> bool:
         return False
 
 
+def _saved_profile_links() -> list[str]:
+    """Bullet lines currently saved under any '## Online profiles' heading
+    in candidate_profile.md, for read-back display on the onboarding form.
+
+    save_profile_links() below always appends a fresh "## Online profiles"
+    section rather than merging into an existing one, so a user who saves
+    twice ends up with two such headings in the file — this collects links
+    from all of them, in order, without duplicates, so the form can show
+    what's actually saved regardless of how many sections exist.
+    """
+    try:
+        with open(_profile_path(), encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return []
+    links: list[str] = []
+    seen = set()
+    in_section = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("## "):
+            in_section = stripped.lower() == "## online profiles"
+            continue
+        if in_section and stripped.startswith("- "):
+            link = stripped[2:].strip()
+            if link and link not in seen:
+                seen.add(link)
+                links.append(link)
+    return links
+
+
 def _append_profile_section(heading: str, body: str) -> None:
     """Append a "## {heading}" section to candidate_profile.md (create if missing)."""
     path = _profile_path()
@@ -392,6 +423,7 @@ def step(step):
         ctx["assets"] = CandidateAsset.query.order_by(CandidateAsset.uploaded_at.desc()).all()
         ctx["asset_kinds"] = ASSET_KINDS
         ctx["profile_exists"] = _profile_exists()
+        ctx["saved_profile_links"] = _saved_profile_links()
         from .forms import CandidateAssetForm
         ctx["asset_form"] = CandidateAssetForm()
         # Resume-interview options (Phase 2): an AI-generated "Resume" asset is

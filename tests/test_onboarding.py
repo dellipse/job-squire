@@ -226,6 +226,41 @@ class TestProfileStep:
         finally:
             os.unlink(path)
 
+    def test_saved_profile_links_render_back_on_page(self, clean_state, client, app):
+        """Regression: the profile step must show what's already saved.
+
+        Previously the "Online profiles" textarea was write-only — a saved
+        link never appeared anywhere on the page again except in the
+        one-time flash message, so a user reloading the step had no way to
+        tell it had actually been saved.
+        """
+        _login_admin(client, app)
+        client.post("/getting-started/profile-links",
+                    data={"links": "https://www.linkedin.com/in/jordan"},
+                    follow_redirects=True)
+        r = client.get("/getting-started/profile")
+        assert b"https://www.linkedin.com/in/jordan" in r.data
+
+    def test_saved_profile_links_dedupe_across_repeated_saves(self, clean_state, app):
+        """save_profile_links() appends a fresh heading each time, so a link
+        saved twice must still only be reported once by the read-back helper."""
+        from app.onboarding import _saved_profile_links
+        with app.app_context():
+            from flask import current_app
+            path = os.path.join(current_app.config["DATA_DIR"], "candidate_profile.md")
+            try:
+                with app.test_client() as client:
+                    _login_admin(client, app)
+                    client.post("/getting-started/profile-links",
+                                data={"links": "https://www.linkedin.com/in/jordan"})
+                    client.post("/getting-started/profile-links",
+                                data={"links": "https://www.linkedin.com/in/jordan\nhttps://github.com/jordan"})
+                links = _saved_profile_links()
+                assert links == ["https://www.linkedin.com/in/jordan", "https://github.com/jordan"]
+            finally:
+                if os.path.exists(path):
+                    os.unlink(path)
+
 
 class TestResumeInterview:
     """Phase 2 (docs/PLAN-onboarding.md): the resume-building interview.
