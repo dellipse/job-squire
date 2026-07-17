@@ -1129,10 +1129,12 @@ def ollama_check_cmd(name):
                                           "machine, and write the Ollama provider row into NAME's database. "
                                           "Review every step first with --dry-run.")
 @click.argument("name")
-@click.option("--base-url", default=ollama_assist.OLLAMA_DEFAULT_HOST, show_default=True,
-              help="Where NAME's container reaches Ollama. localhost only resolves for the container if "
-                   "the compose file maps host.docker.internal (Mac/Windows) or --add-host=host.docker."
-                   "internal:host-gateway (Linux) -- point this at that host instead if not.")
+@click.option("--base-url", default=None,
+              help="Where NAME's container reaches Ollama. Default: "
+                   f"{ollama_assist.OLLAMA_CONTAINER_HOST!r} (Ollama running natively on this same host -- "
+                   "the compose file maps host.docker.internal for exactly this, on every platform). "
+                   "'localhost' is never correct here -- that resolves to the container itself, not this "
+                   "host. Only override this if Ollama is running on a different machine on your network.")
 @click.option("--triage-model", default=None, help="Override the tier's recommended triage model (base tag, "
                                                     "e.g. 'qwen3:8b' -- the context-sized derived model is "
                                                     "computed from this, not pulled/used directly).")
@@ -1148,10 +1150,15 @@ def ollama_check_cmd(name):
                    "OpenAI-compatible endpoint then uses its own default context window (2048 tokens), "
                    "which app/ai.py's capacity check will treat as unconfigured (no truncation guard).")
 @click.option("--skip-test", is_flag=True, default=False, help="Don't run the end-to-end round-trip test.")
+@click.option("--skip-enable-features", is_flag=True, default=False,
+              help="Don't turn on the app's 'Automatic Features' toggle (ai_config.api_enabled). By default "
+                   "setup enables it, so auto-triage/follow-up drafts/weekly review start running against "
+                   "this provider chain immediately -- pass this to configure Ollama for manual/MCP-only "
+                   "use instead, leaving that toggle exactly as it was.")
 @click.option("--dry-run", is_flag=True, default=False, help="Print every step without changing anything.")
 @click.option("--yes", "assume_yes", is_flag=True, default=False, help="Don't ask before installing Ollama.")
 def ollama_setup_cmd(name, base_url, triage_model, analysis_model, num_ctx, rank, skip_pull, skip_derive,
-                      skip_test, dry_run, assume_yes):
+                      skip_test, skip_enable_features, dry_run, assume_yes):
     instance = _require_instance(name)
     # Path(instance.data_dir), not paths.instance_root(instance.name): same
     # reason as _print_mcp_config above.
@@ -1161,7 +1168,8 @@ def ollama_setup_cmd(name, base_url, triage_model, analysis_model, num_ctx, rank
     try:
         result = ollama_assist.run_setup(
             root, base_url=base_url, triage_model=triage_model, analysis_model=analysis_model,
-            num_ctx=num_ctx, rank=rank, confirm=confirm, dry_run=dry_run, skip_pull=skip_pull,
+            num_ctx=num_ctx, rank=rank, enable_automatic_features=not skip_enable_features,
+            confirm=confirm, dry_run=dry_run, skip_pull=skip_pull,
             skip_derive=skip_derive, skip_test=skip_test,
         )
     except ollama_assist.OllamaAssistError as exc:
@@ -1192,7 +1200,17 @@ def ollama_setup_cmd(name, base_url, triage_model, analysis_model, num_ctx, rank
             "window (2048 tokens) applies; app/ai.py has no configured num_ctx to check prompts against."
         )
     if result.provider_configured:
-        click.echo(f"Configured Ollama provider for {instance.name!r}: base_url={base_url}")
+        click.echo(f"Configured Ollama provider for {instance.name!r}: base_url={result.base_url}")
+    if skip_enable_features:
+        click.echo("Skipped enabling Automatic AI Features (--skip-enable-features).")
+    elif result.automatic_features_enabled:
+        click.echo("Enabled Automatic AI Features (auto-triage/follow-up drafts/weekly review can now run).")
+    elif result.provider_configured:
+        click.echo(
+            "Warning: could not enable Automatic AI Features -- no ai_config row found yet. Run "
+            "`job-squire start NAME` at least once, then re-run this command, or turn it on by hand "
+            "in Settings."
+        )
     if skip_test:
         click.echo("Skipped the round-trip test (--skip-test).")
     elif result.roundtrip_ok is True:

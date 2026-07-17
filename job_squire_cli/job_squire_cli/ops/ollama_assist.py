@@ -78,7 +78,27 @@ Which = Callable[[str], "str | None"]
 
 HOST_CAPABILITIES_FILENAME = "host_capabilities.json"
 OLLAMA_BINARY = "ollama"
+# Where *this CLI process* (running directly on the host, never in a
+# container -- see "Container Blindness" above) reaches Ollama for its own
+# checks: is_ollama_running(), and the post-setup round-trip test when
+# base_url wasn't overridden to point somewhere else. Also what a Modelfile
+# derivation, ollama pull, etc. talk to -- all of that is host-side already.
 OLLAMA_DEFAULT_HOST = "http://localhost:11434"
+# Where the *containerized app* should reach Ollama when it's running
+# natively on this same host -- the common case (per docs/PLAN-ollama-
+# assist.md, Ollama is a native install, never dockerized itself). Plain
+# "localhost" only resolves to the container itself (single-container
+# topology, docker-compose.single.yml), never this host, so that can never
+# be a correct default here even though it's OLLAMA_DEFAULT_HOST's value for
+# host-side checks above. "host.docker.internal" resolves out of the box on
+# Docker Desktop/OrbStack (macOS, Windows); on Linux it requires the
+# compose file's `extra_hosts: ["host.docker.internal:host-gateway"]` entry
+# (Docker Engine 20.10+), which ops/compose.py's render_compose_yaml() (and
+# the repo's own docker-compose.single.yml, kept in sync by hand) now set
+# unconditionally -- so this default is uniform across platforms rather
+# than branching on `system`. An operator whose Ollama lives on a different
+# machine on the network still overrides this with `--base-url` as before.
+OLLAMA_CONTAINER_HOST = "http://host.docker.internal:11434"
 PROVIDER_KEY = "ollama"
 
 
@@ -606,7 +626,8 @@ def write_provider_config(
     num_ctx: int | None = None,
     rank: int | None = None,
     enabled: bool = True,
-) -> None:
+    enable_automatic_features: bool = True,
+) -> bool:
     """Write (or update) the `ai_provider_configs` row for provider="ollama".
 
     Mirrors ops/secrets_copy.py's raw-`sqlite3` approach to this exact
@@ -624,6 +645,18 @@ def write_provider_config(
     built with (see `derive_context_model` above) -- app/ai.py uses it to
     estimate whether a prompt will fit before calling this provider, not to
     send as a request parameter Ollama's compatible endpoint has no field for.
+
+    `enable_automatic_features` additionally flips `ai_config.api_enabled`
+    (the singleton row's "Automatic Features" toggle, app/models.py) to 1.
+    Writing a provider row alone is not enough to make auto-triage/follow-up
+    drafts/weekly review actually run -- app/worker.py's scheduled jobs all
+    gate on this flag independently of whether a provider chain exists, so
+    without this a freshly-configured Ollama provider just sits unused until
+    the operator finds the "Automatic Features" checkbox in Settings by hand.
+    Returns whether that flag was actually flipped (False if `ai_config` has
+    no seeded row yet -- reported as a warning, not raised, since the
+    provider row write above already succeeded and is the more important of
+    the two).
     """
     db_path = paths.sqlite_db_path(root)
     if not db_path.exists():
@@ -670,9 +703,34 @@ def write_provider_config(
                     f"then re-run `job-squire ollama setup`."
                 ) from exc
             raise
+
+        automatic_features_enabled = False
+        if enable_automatic_features:
+            # Defensive like every other read/write in this module (module
+            # docstring's "additive, never assumed"): a missing `ai_config`
+            # row (schema present but not yet seeded) or even a missing
+            # table entirely (an instance old enough to predate this
+            # feature) both just warn here rather than crash -- the
+            # provider row above is already written and is the more
+            # important of the two writes.
+            try:
+                cur = conn.execute("UPDATE ai_config SET api_enabled = 1 WHERE id = 1")
+                automatic_features_enabled = cur.rowcount > 0
+            except sqlite3.OperationalError:
+                automatic_features_enabled = False
+            if not automatic_features_enabled:
+                click.echo(
+                    "Warning: couldn't enable Automatic AI Features (no ai_config row found, or "
+                    "this instance's schema predates it). Bring the instance up at least once "
+                    "(`job-squire start NAME`), then re-run `job-squire ollama setup`, or turn on "
+                    "'Automatic Features' by hand in Settings."
+                )
+
         conn.commit()
     finally:
         conn.close()
+
+    return automatic_features_enabled
 
 
 # ── End-to-end round-trip test ────────────────────────────────────────────
@@ -713,7 +771,9 @@ class SetupResult:
     models_pulled: list[str]
     models_derived: dict[str, str]  # base tag -> context-sized derived model name
     num_ctx: int | None
+    base_url: str  # the effective value -- reflects the OLLAMA_CONTAINER_HOST default when the caller passed None
     provider_configured: bool
+    automatic_features_enabled: bool
     roundtrip_ok: bool | None
     roundtrip_detail: str | None
 
@@ -721,11 +781,12 @@ class SetupResult:
 def run_setup(
     root: Path,
     *,
-    base_url: str = OLLAMA_DEFAULT_HOST,
+    base_url: str | None = None,
     triage_model: str | None = None,
     analysis_model: str | None = None,
     num_ctx: int | None = None,
     rank: int | None = None,
+    enable_automatic_features: bool = True,
     confirm: Callable[[str], bool] | None = None,
     run: Runner = subprocess.run,
     which: Which = shutil.which,
@@ -750,9 +811,26 @@ def run_setup(
     `derive_context_model`, and *that* derived name -- not the base tag --
     is what gets written into the instance's provider row and used for the
     round-trip test below.
+
+    `base_url=None` (the default) resolves to `OLLAMA_CONTAINER_HOST`
+    ("http://host.docker.internal:11434") rather than plain "localhost" --
+    the container can never reach Ollama on this host via "localhost" (that
+    name resolves to the container itself), which used to be exactly the
+    failure mode this default silently walked operators into. Pass an
+    explicit `--base-url` only when Ollama lives somewhere else (another
+    machine on the network).
+
+    `enable_automatic_features=True` (the default) also turns on the app's
+    "Automatic Features" toggle (`ai_config.api_enabled`) once the provider
+    row is written, so auto-triage/follow-up drafts/weekly review actually
+    start running instead of the provider sitting configured-but-idle. Pass
+    `False` to configure Ollama for manual/MCP-only use without touching
+    that toggle.
     """
     if confirm is None:
         confirm = click.confirm
+    if base_url is None:
+        base_url = OLLAMA_CONTAINER_HOST
 
     caps = detect_host_capabilities(system=system, run=run, which=which)
     tier = classify_tier(caps)
@@ -793,22 +871,34 @@ def run_setup(
     effective_analysis = models_derived.get(base_analysis, base_analysis)
 
     provider_configured = False
+    automatic_features_enabled = False
     if dry_run:
         click.echo(
             f"  (dry-run) write ai_provider_configs row: base_url={base_url}, "
             f"triage_model={effective_triage}, analysis_model={effective_analysis}, "
             f"num_ctx={effective_num_ctx}"
         )
+        if enable_automatic_features:
+            click.echo("  (dry-run) enable Automatic AI Features (ai_config.api_enabled = 1)")
     else:
-        write_provider_config(
+        automatic_features_enabled = write_provider_config(
             root, base_url=base_url, triage_model=effective_triage, analysis_model=effective_analysis,
             num_ctx=effective_num_ctx if not skip_derive else None, rank=rank,
+            enable_automatic_features=enable_automatic_features,
         )
         provider_configured = True
 
     roundtrip_ok = roundtrip_detail = None
     if not dry_run and not skip_test:
-        roundtrip_ok, roundtrip_detail = test_roundtrip(base_url, effective_triage)
+        # This test runs from the CLI/host process, not the container -- so
+        # it must probe wherever *this host* actually reaches Ollama, not
+        # base_url when that's the container-only "host.docker.internal"
+        # default (unresolvable from bare host in the common case). A
+        # caller-supplied base_url pointing at a real network address (a
+        # different machine) is assumed reachable from here too and is
+        # tested as given.
+        test_target = OLLAMA_DEFAULT_HOST if base_url == OLLAMA_CONTAINER_HOST else base_url
+        roundtrip_ok, roundtrip_detail = test_roundtrip(test_target, effective_triage)
 
     return SetupResult(
         capabilities=caps,
@@ -818,7 +908,9 @@ def run_setup(
         models_pulled=models_pulled,
         models_derived=models_derived,
         num_ctx=effective_num_ctx if not skip_derive else None,
+        base_url=base_url,
         provider_configured=provider_configured,
+        automatic_features_enabled=automatic_features_enabled,
         roundtrip_ok=roundtrip_ok,
         roundtrip_detail=roundtrip_detail,
     )

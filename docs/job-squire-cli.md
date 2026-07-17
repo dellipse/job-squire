@@ -713,9 +713,23 @@ job-squire ollama setup NAME --skip-pull           # already pulled the base mod
 job-squire ollama setup NAME --skip-derive         # write the base tags as-is (Ollama's 2048-token default applies)
 job-squire ollama setup NAME --skip-test           # skip the round-trip generation check
 job-squire ollama setup NAME --rank 2              # provider chain position (default: append, or keep existing)
-job-squire ollama setup NAME --base-url http://host.docker.internal:11434
+job-squire ollama setup NAME --base-url http://192.168.1.50:11434  # only needed if Ollama is on another machine
+job-squire ollama setup NAME --skip-enable-features  # don't flip on Settings' "Automatic Features" toggle
 job-squire ollama setup NAME --yes                 # don't ask before installing Ollama
 ```
+
+**`--base-url` defaults to `http://host.docker.internal:11434`, not `localhost`.** Ollama is expected to
+be a native install on the same host as NAME's container (the common case), and plain `localhost` inside
+that container always means the container itself, never the host -- so it could never have been a correct
+default. `host.docker.internal` resolves out of the box on Docker Desktop/OrbStack (macOS, Windows); on
+Linux, `ops/compose.py`'s generated compose file (and the repo's own `docker-compose.single.yml`) declare
+`extra_hosts: ["host.docker.internal:host-gateway"]` unconditionally so the same name resolves there too
+(Docker Engine 20.10+). Only pass `--base-url` explicitly when Ollama runs on a different machine.
+
+**`setup` also enables Settings' "Automatic Features" toggle (`ai_config.api_enabled`) by default.**
+Writing the provider row alone doesn't make auto-triage/follow-up drafts/weekly review start running --
+those are independently gated on that toggle in `app/worker.py`. Pass `--skip-enable-features` to configure
+Ollama for manual/MCP-only use without flipping it.
 
 **Why `check` runs on the host.** A containerized in-app detector sees the
 Docker Desktop/Podman machine VM's RAM allocation, not the real machine's --

@@ -52,6 +52,15 @@ services:
     ports:
       - "127.0.0.1:${APP_HOST_PORT:-8080}:8000"
       - "127.0.0.1:${MCP_HOST_PORT:-9000}:${MCP_PORT:-9000}"
+    # Lets the container reach a service running natively on this same host
+    # (e.g. Ollama) via the literal name "host.docker.internal" -- Docker
+    # Desktop/OrbStack already provide that DNS entry for free on macOS/
+    # Windows, but plain Docker Engine on Linux needs it spelled out via the
+    # special "host-gateway" target (supported on Engine 20.10+). Harmless
+    # to declare on every platform. Kept in sync by hand with
+    # job_squire_cli/job_squire_cli/ops/compose.py's render_compose_yaml().
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     # Shared network with SWAG or another nginx container: comment out the
     # ports block above and uncomment this instead.
     # networks:

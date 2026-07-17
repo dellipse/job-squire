@@ -177,6 +177,17 @@ services:
     ports:
       - "{bind_host}:${{APP_HOST_PORT:-8080}}:8000"
       - "{bind_host}:${{MCP_HOST_PORT:-9000}}:${{MCP_PORT:-9000}}"
+    # Lets the container reach a service running natively on this same host
+    # (e.g. Ollama) via the literal name "host.docker.internal" -- Docker
+    # Desktop/OrbStack already provide that DNS entry for free on macOS/
+    # Windows, but plain Docker Engine on Linux needs it spelled out via the
+    # special "host-gateway" target (supported on Engine 20.10+). Harmless
+    # to declare on every platform: on Desktop/OrbStack this just adds a
+    # second /etc/hosts line pointing at the same address they already
+    # resolve. See ops/ollama_assist.py's OLLAMA_CONTAINER_HOST, which is
+    # what this instance's Ollama provider base_url defaults to.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 {networks_service_block}{networks_top_block}"""
 
 

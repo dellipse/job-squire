@@ -353,10 +353,16 @@ CREATE TABLE ai_provider_configs (
     base_url TEXT, model TEXT, triage_model TEXT, num_ctx INTEGER, use_for_triage BOOLEAN,
     use_for_analysis BOOLEAN, thinking_mode TEXT, enabled BOOLEAN
 );
+CREATE TABLE ai_config (id INTEGER PRIMARY KEY, api_enabled BOOLEAN DEFAULT 0);
+INSERT INTO ai_config (id, api_enabled) VALUES (1, 0);
 """
 
 
 def _make_instance_db(root):
+    """A schema matching a real app-initialized instance: both
+    `ai_provider_configs` and a seeded `ai_config` (id=1) row -- the latter
+    is what `write_provider_config`'s `enable_automatic_features` flips.
+    """
     db_path = paths.sqlite_db_path(root)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path))
@@ -474,6 +480,63 @@ def test_write_provider_config_respects_explicit_rank(tmp_path):
     assert row["rank"] == 5
 
 
+# ── Automatic AI Features (ai_config.api_enabled) ─────────────────────────
+
+
+def test_write_provider_config_enables_automatic_features_by_default(tmp_path):
+    root = tmp_path / "castelo"
+    db_path = _make_instance_db(root)
+    enabled = oa.write_provider_config(root, base_url="http://host.docker.internal:11434",
+                                        triage_model="qwen3:4b", analysis_model="qwen3:8b")
+    assert enabled is True
+    conn = sqlite3.connect(str(db_path))
+    row = conn.execute("SELECT api_enabled FROM ai_config WHERE id = 1").fetchone()
+    assert row[0] == 1
+
+
+def test_write_provider_config_can_skip_enabling_automatic_features(tmp_path):
+    root = tmp_path / "castelo"
+    db_path = _make_instance_db(root)
+    enabled = oa.write_provider_config(root, base_url="http://host.docker.internal:11434",
+                                        triage_model="qwen3:4b", analysis_model="qwen3:8b",
+                                        enable_automatic_features=False)
+    assert enabled is False
+    conn = sqlite3.connect(str(db_path))
+    row = conn.execute("SELECT api_enabled FROM ai_config WHERE id = 1").fetchone()
+    assert row[0] == 0  # untouched, not flipped
+
+
+def test_write_provider_config_warns_without_crashing_when_ai_config_missing(tmp_path, capsys):
+    """An instance whose schema predates ai_config (or the row somehow isn't
+    seeded yet) shouldn't crash the whole provider-row write -- it's a
+    warning, same "additive, never assumed" convention as the num_ctx check
+    just above."""
+    root = tmp_path / "castelo"
+    db_path = paths.sqlite_db_path(root)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path))
+    conn.executescript("""
+        CREATE TABLE ai_provider_configs (
+            id INTEGER PRIMARY KEY, rank INTEGER, provider TEXT, label TEXT, api_key_enc TEXT,
+            base_url TEXT, model TEXT, triage_model TEXT, num_ctx INTEGER, use_for_triage BOOLEAN,
+            use_for_analysis BOOLEAN, thinking_mode TEXT, enabled BOOLEAN
+        );
+    """)  # no ai_config table at all
+    conn.commit()
+    conn.close()
+
+    enabled = oa.write_provider_config(root, base_url="http://host.docker.internal:11434",
+                                        triage_model="qwen3:4b", analysis_model="qwen3:8b")
+    assert enabled is False
+    assert "couldn't enable Automatic AI Features" in capsys.readouterr().out
+
+    # The provider row itself still got written despite ai_config missing.
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("SELECT * FROM ai_provider_configs WHERE provider = 'ollama'").fetchone()
+    assert row["base_url"] == "http://host.docker.internal:11434"
+
+
 # ── Round-trip test (direct Ollama API, not the app's adapter) ────────────
 
 
@@ -566,11 +629,90 @@ def test_run_setup_full_chain_real_writes(tmp_path, monkeypatch):
     conn = sqlite3.connect(str(paths.sqlite_db_path(root)))
     conn.row_factory = sqlite3.Row
     row = conn.execute("SELECT * FROM ai_provider_configs WHERE provider = 'ollama'").fetchone()
-    assert row["base_url"] == oa.OLLAMA_DEFAULT_HOST
+    # Default base_url is the container-reachable address, never plain
+    # "localhost" (that only resolves to the container itself).
+    assert row["base_url"] == oa.OLLAMA_CONTAINER_HOST
     # The *derived* (context-sized) model names are what get written -- not the base tags.
     assert row["triage_model"] == "qwen3:8b-ctx16384"
     assert row["model"] == "gemma4:12b-ctx16384"
     assert row["num_ctx"] == 16384
+
+    ai_cfg_row = conn.execute("SELECT api_enabled FROM ai_config WHERE id = 1").fetchone()
+    assert ai_cfg_row[0] == 1  # Automatic AI Features enabled by default
+    assert result.automatic_features_enabled is True
+    assert result.base_url == oa.OLLAMA_CONTAINER_HOST
+
+
+def test_run_setup_roundtrip_tests_localhost_not_container_host_by_default(tmp_path, monkeypatch):
+    """The round-trip test runs from the CLI/host process, not the
+    container -- "host.docker.internal" (the default base_url written for
+    the container's use) doesn't resolve from bare host, so the test itself
+    must probe OLLAMA_DEFAULT_HOST ("localhost") instead when the caller
+    left base_url at its default."""
+    root = tmp_path / "castelo"
+    _make_instance_db(root)
+    monkeypatch.setattr(oa, "detect_host_capabilities", lambda **kwargs: _caps(ram_gb=16, apple_silicon=True))
+    captured = {}
+
+    def fake_roundtrip(base_url, model, **kwargs):
+        captured["base_url"] = base_url
+        return True, "ok"
+
+    monkeypatch.setattr(oa, "test_roundtrip", fake_roundtrip)
+    run = fake_run(ok_prefixes=[
+        ("ollama", "pull", "qwen3:8b"), ("ollama", "pull", "gemma4:12b"),
+        ("ollama", "create", "qwen3:8b-ctx16384"), ("ollama", "create", "gemma4:12b-ctx16384"),
+    ])
+
+    oa.run_setup(root, run=run, which=which_map({"ollama": "/usr/local/bin/ollama"}), confirm=lambda _: True)
+
+    assert captured["base_url"] == oa.OLLAMA_DEFAULT_HOST
+
+
+def test_run_setup_roundtrip_tests_explicit_base_url_override_as_given(tmp_path, monkeypatch):
+    """An operator-supplied base_url (e.g. Ollama on another machine on the
+    network) is assumed reachable from the CLI host too and tested as-is,
+    not redirected to localhost."""
+    root = tmp_path / "castelo"
+    _make_instance_db(root)
+    monkeypatch.setattr(oa, "detect_host_capabilities", lambda **kwargs: _caps(ram_gb=16, apple_silicon=True))
+    captured = {}
+
+    def fake_roundtrip(base_url, model, **kwargs):
+        captured["base_url"] = base_url
+        return True, "ok"
+
+    monkeypatch.setattr(oa, "test_roundtrip", fake_roundtrip)
+    run = fake_run(ok_prefixes=[
+        ("ollama", "pull", "qwen3:8b"), ("ollama", "pull", "gemma4:12b"),
+        ("ollama", "create", "qwen3:8b-ctx16384"), ("ollama", "create", "gemma4:12b-ctx16384"),
+    ])
+
+    oa.run_setup(root, base_url="http://192.168.1.50:11434", run=run,
+                 which=which_map({"ollama": "/usr/local/bin/ollama"}), confirm=lambda _: True)
+
+    assert captured["base_url"] == "http://192.168.1.50:11434"
+
+
+def test_run_setup_can_skip_enabling_automatic_features(tmp_path, monkeypatch):
+    root = tmp_path / "castelo"
+    _make_instance_db(root)
+    monkeypatch.setattr(oa, "detect_host_capabilities", lambda **kwargs: _caps(ram_gb=16, apple_silicon=True))
+    monkeypatch.setattr(oa, "test_roundtrip", lambda base_url, model, **kwargs: (True, "ok"))
+    run = fake_run(ok_prefixes=[
+        ("ollama", "pull", "qwen3:8b"), ("ollama", "pull", "gemma4:12b"),
+        ("ollama", "create", "qwen3:8b-ctx16384"), ("ollama", "create", "gemma4:12b-ctx16384"),
+    ])
+
+    result = oa.run_setup(
+        root, run=run, which=which_map({"ollama": "/usr/local/bin/ollama"}), confirm=lambda _: True,
+        enable_automatic_features=False,
+    )
+
+    assert result.automatic_features_enabled is False
+    conn = sqlite3.connect(str(paths.sqlite_db_path(root)))
+    row = conn.execute("SELECT api_enabled FROM ai_config WHERE id = 1").fetchone()
+    assert row[0] == 0
 
 
 def test_run_setup_skip_derive_writes_base_tags_and_no_num_ctx(tmp_path, monkeypatch):

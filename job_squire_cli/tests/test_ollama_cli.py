@@ -104,7 +104,8 @@ def test_ollama_setup_dry_run_calls_run_setup_with_dry_run_true(runner, monkeypa
         return oa.SetupResult(
             capabilities=_fake_caps(), tier=oa.TIER_STRONG, recommendation=oa.TIER_TABLE[oa.TIER_STRONG],
             host_capabilities_path=None, models_pulled=[], models_derived={}, num_ctx=None,
-            provider_configured=False, roundtrip_ok=None, roundtrip_detail=None,
+            base_url=oa.OLLAMA_CONTAINER_HOST, provider_configured=False,
+            automatic_features_enabled=False, roundtrip_ok=None, roundtrip_detail=None,
         )
 
     monkeypatch.setattr(cmds.ollama_assist, "run_setup", fake_run_setup)
@@ -127,8 +128,8 @@ def test_ollama_setup_reports_failed_roundtrip(runner, monkeypatch, tmp_path):
             host_capabilities_path=tmp_path / "data" / "host_capabilities.json",
             models_pulled=["qwen3:8b", "gemma4:12b"],
             models_derived={"qwen3:8b": "qwen3:8b-ctx16384", "gemma4:12b": "gemma4:12b-ctx16384"},
-            num_ctx=16384, provider_configured=True,
-            roundtrip_ok=False, roundtrip_detail="connection refused",
+            num_ctx=16384, base_url=oa.OLLAMA_CONTAINER_HOST, provider_configured=True,
+            automatic_features_enabled=True, roundtrip_ok=False, roundtrip_detail="connection refused",
         )
 
     monkeypatch.setattr(cmds.ollama_assist, "run_setup", fake_run_setup)
@@ -136,7 +137,31 @@ def test_ollama_setup_reports_failed_roundtrip(runner, monkeypatch, tmp_path):
     assert result.exit_code == 0
     assert "Configured Ollama provider for 'castelo'" in result.output
     assert "Created qwen3:8b-ctx16384 (num_ctx=16384, from qwen3:8b)" in result.output
+    assert "Enabled Automatic AI Features" in result.output
     assert "FAILED -- connection refused" in result.output
+
+
+def test_ollama_setup_skip_enable_features_reports_skip(runner, monkeypatch, tmp_path):
+    reg.add_instance(
+        name="castelo", mode="local", runtime="docker", data_dir=str(tmp_path),
+        public_url="http://localhost:8080", app_port=8080, mcp_port=9000,
+    )
+    captured = {}
+
+    def fake_run_setup(root, **kwargs):
+        captured.update(kwargs)
+        return oa.SetupResult(
+            capabilities=_fake_caps(), tier=oa.TIER_STRONG, recommendation=oa.TIER_TABLE[oa.TIER_STRONG],
+            host_capabilities_path=None, models_pulled=[], models_derived={}, num_ctx=None,
+            base_url=oa.OLLAMA_CONTAINER_HOST, provider_configured=True,
+            automatic_features_enabled=False, roundtrip_ok=None, roundtrip_detail=None,
+        )
+
+    monkeypatch.setattr(cmds.ollama_assist, "run_setup", fake_run_setup)
+    result = runner.invoke(main, ["ollama", "setup", "castelo", "--skip-enable-features"])
+    assert result.exit_code == 0
+    assert captured["enable_automatic_features"] is False
+    assert "Skipped enabling Automatic AI Features" in result.output
 
 
 def test_ollama_setup_surfaces_ollama_assist_error_as_clean_exit(runner, monkeypatch, tmp_path):
