@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 import requests
 
 from . import privacy
+from .db_utils import with_db_retry
 from .extensions import db
 from .models import AIInsight, Job, User
 
@@ -901,12 +902,14 @@ def run_triage_batch(offset: int, limit: int = 20,
         .filter((Job.ai_fit_score == None) | (Job.ai_fit_score == 0))  # noqa: E711
     )
 
-    jobs = (
-        unscored_q
-        .order_by(Job.created_at.desc())
-        .offset(offset)
-        .limit(limit)
-        .all()
+    jobs = with_db_retry(
+        lambda: (
+            unscored_q
+            .order_by(Job.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
     )
 
     if not jobs:
@@ -914,7 +917,7 @@ def run_triage_batch(offset: int, limit: int = 20,
             "results": [],
             "scored": 0,
             "failed": 0,
-            "total_remaining": unscored_q.count(),
+            "total_remaining": with_db_retry(unscored_q.count),
             "next_offset": offset,
         }
 
@@ -955,7 +958,7 @@ def run_triage_batch(offset: int, limit: int = 20,
                                 "score": None, "reason": f"Provider ID {provider_id} not found.", "ok": False})
                 failed += 1
             return {"results": results, "scored": 0, "failed": failed,
-                    "total_remaining": unscored_q.count(), "next_offset": offset + len(jobs)}
+                    "total_remaining": with_db_retry(unscored_q.count), "next_offset": offset + len(jobs)}
         _model = (_p.model or "").strip()
         if not _model:
             for j in jobs:
@@ -963,7 +966,7 @@ def run_triage_batch(offset: int, limit: int = 20,
                                 "score": None, "reason": f"Provider '{_p.display_name}' has no model configured.", "ok": False})
                 failed += 1
             return {"results": results, "scored": 0, "failed": failed,
-                    "total_remaining": unscored_q.count(), "next_offset": offset + len(jobs)}
+                    "total_remaining": with_db_retry(unscored_q.count), "next_offset": offset + len(jobs)}
         _api_key = decrypt(secret, _p.api_key_enc).strip() if _p.api_key_enc else ""
         if _p.provider != "anthropic":
             _base_url = (_p.base_url or _PROVIDER_URLS.get(_p.provider, "")).strip()
@@ -973,7 +976,7 @@ def run_triage_batch(offset: int, limit: int = 20,
                                     "score": None, "reason": f"Provider '{_p.display_name}' has no base URL.", "ok": False})
                     failed += 1
                 return {"results": results, "scored": 0, "failed": failed,
-                        "total_remaining": unscored_q.count(), "next_offset": offset + len(jobs)}
+                        "total_remaining": with_db_retry(unscored_q.count), "next_offset": offset + len(jobs)}
 
     def _invoke(call_content: str) -> str:
         """Make a single triage AI call using the configured provider or chain."""
@@ -1018,7 +1021,7 @@ def run_triage_batch(offset: int, limit: int = 20,
             "results": results,
             "scored": 0,
             "failed": failed,
-            "total_remaining": unscored_q.count(),
+            "total_remaining": with_db_retry(unscored_q.count),
             "next_offset": offset + len(jobs),
         }
 
@@ -1117,16 +1120,18 @@ def run_triage_batch(offset: int, limit: int = 20,
             failed += 1
 
     try:
-        db.session.commit()
+        with_db_retry(db.session.commit)
     except Exception as exc:  # noqa: BLE001
         db.session.rollback()
         log.warning("triage-batch commit failed: %s", exc)
 
-    total_remaining = (
-        Job.query
-        .filter(Job.status == "Saved")
-        .filter((Job.ai_fit_score == None) | (Job.ai_fit_score == 0))  # noqa: E711
-        .count()
+    total_remaining = with_db_retry(
+        lambda: (
+            Job.query
+            .filter(Job.status == "Saved")
+            .filter((Job.ai_fit_score == None) | (Job.ai_fit_score == 0))  # noqa: E711
+            .count()
+        )
     )
 
     log.info("triage-batch batch: scored=%d failed=%d remaining=%d",
