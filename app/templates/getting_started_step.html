@@ -149,17 +149,34 @@
     {% for a in uploaded_assets %}<li>{{ a.kind }} — {{ a.display_name }} <span class="muted small">({{ a.size_kb }} KB)</span></li>{% endfor %}
   </ul>
   {% endif %}
-  {% if resume_asset %}
-  <p><strong>&#10003; Markdown resume on file:</strong> {{ resume_asset.display_name }}
-    <span class="muted small">({{ resume_asset.size_kb }} KB, from your uploaded document or the
-    resume interview below — either one any time replaces this)</span></p>
+  {% if resume_variants %}
+  <p><strong>&#10003; Custom Resume variants on file:</strong> each save below — from an
+    upload or the interview — keeps the previous ones around rather than replacing them.
+    The one marked <strong>base</strong> is what's used for tailoring and shown in the box below.</p>
+  <ul>
+    {% for v in resume_variants %}
+    <li>
+      {{ v.display_name }} <span class="muted small">({{ v.size_kb }} KB, {{ v.uploaded_at | local_date }})</span>
+      {% if v.is_base %}<span class="badge admin">base</span>
+      {% else %}
+      <form method="post" action="{{ url_for('main.asset_set_base', asset_id=v.id) }}" style="display:inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button class="btn btn-sm btn-outline" type="submit">Make base</button>
+      </form>
+      {% endif %}
+      <a class="btn btn-sm btn-outline" href="{{ url_for('main.asset_download', asset_id=v.id) }}">Download markdown</a>
+      {% if v.source_stored_name %}
+      <a class="btn btn-sm btn-outline" href="{{ url_for('main.asset_download_source', asset_id=v.id) }}">Download original</a>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
   {% endif %}
-  <p>Upload your current resume — it becomes the base for tailored versions per
-    application. Certifications, recommendation letters, and portfolio samples
-    help too: the AI mines them for specifics. Pick <strong>Base Resume</strong> as
-    the document type for your resume itself (PDF, DOCX, TXT, or MD) and Job Squire
-    converts it to markdown automatically, no AI needed — the result lands in the
-    box below for you to review.</p>
+  <p>Upload your current resume — pick <strong>Base Resume</strong> to keep the original
+    file as-is for reference, or <strong>Custom Resume</strong> to convert it (PDF, DOCX,
+    TXT, or MD) into a new markdown variant automatically, no AI needed. Either way it
+    becomes the base for tailored versions per application. Certifications, recommendation
+    letters, and portfolio samples help too: the AI mines them for specifics.</p>
   <form method="post" action="{{ url_for('main.settings_asset_upload') }}"
         enctype="multipart/form-data" class="form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

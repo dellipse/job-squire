@@ -279,7 +279,8 @@ class TestResumeInterview:
         assert result.get("ok") is True
         asset = CandidateAsset.query.filter_by(kind="Resume").first()
         assert asset is not None
-        assert asset.label == "AI-generated resume"
+        assert asset.label == "AI-generated resume #1"
+        assert asset.is_base is True
         assert asset.id == result["asset_id"]
 
         from flask import current_app
@@ -289,12 +290,20 @@ class TestResumeInterview:
         assert "From resume interview" in profile
         assert "8 years experience" in profile
 
-    def test_save_resume_draft_replaces_not_duplicates(self, clean_state):
+    def test_save_resume_draft_creates_new_variant_and_promotes_it(self, clean_state):
+        """kind="Resume" is no longer a singleton (docs/PLAN-onboarding.md):
+        each save keeps prior drafts around as separate variants and
+        promotes only the newest one to is_base."""
         from app.onboarding import save_resume_draft
         first = save_resume_draft("# Draft one")
         second = save_resume_draft("# Draft two, revised")
-        assert first["asset_id"] == second["asset_id"]
-        assert CandidateAsset.query.filter_by(kind="Resume").count() == 1
+        assert first["asset_id"] != second["asset_id"]
+        assert CandidateAsset.query.filter_by(kind="Resume").count() == 2
+
+        first_asset = db.session.get(CandidateAsset, first["asset_id"])
+        second_asset = db.session.get(CandidateAsset, second["asset_id"])
+        assert first_asset.is_base is False
+        assert second_asset.is_base is True
 
     def test_save_resume_draft_rejects_blank(self, clean_state):
         from app.onboarding import save_resume_draft
@@ -438,6 +447,138 @@ class TestResumeUploadAutoConvert:
         )
         assert CandidateAsset.query.filter_by(kind="Certification").count() == 1
         assert CandidateAsset.query.filter_by(kind="Resume").count() == 0
+
+
+class TestCustomResumeUploadVariants:
+    """Uploading directly under kind="Resume" ("Custom Resume" in the UI) --
+    the multi-variant slot itself, not the "Base Resume" archival kind. See
+    app/main.py:settings_asset_upload and docs/PLAN-onboarding.md Phase 2.
+    """
+
+    def _docx_bytes(self):
+        import io
+        from docx import Document
+        doc = Document()
+        doc.add_heading("Jordan Lee", level=1)
+        doc.add_paragraph("Operations manager with 8 years experience.")
+        buf = io.BytesIO()
+        doc.save(buf)
+        return buf.getvalue()
+
+    def test_custom_resume_upload_converts_and_keeps_source(self, clean_state, client, app):
+        import io
+        _login_admin(client, app)
+        r = client.post(
+            "/settings/assets/upload",
+            data={
+                "kind": "Resume",
+                "label": "",
+                "file": (io.BytesIO(self._docx_bytes()), "resume.docx"),
+            },
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+        assert r.status_code == 200
+        # Unlike "Base Resume", nothing else got uploaded -- one row holds
+        # both the converted markdown and the original.
+        assert CandidateAsset.query.filter_by(kind="Base Resume").count() == 0
+        asset = CandidateAsset.query.filter_by(kind="Resume").first()
+        assert asset is not None
+        assert asset.is_base is True
+        assert asset.source_stored_name
+        assert asset.source_original_name == "resume.docx"
+
+        from app.onboarding import _read_resume_asset_markdown
+        markdown = _read_resume_asset_markdown(asset)
+        assert "Jordan Lee" in markdown
+
+    def test_custom_resume_upload_rejects_unconvertible_extension(self, clean_state, client, app):
+        import io
+        _login_admin(client, app)
+        r = client.post(
+            "/settings/assets/upload",
+            data={
+                "kind": "Resume",
+                "label": "",
+                "file": (io.BytesIO(b"{\\rtf1 fake rtf}"), "resume.rtf"),
+            },
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+        assert r.status_code == 200
+        # No raw-binary fallback for this slot -- the upload is rejected
+        # outright rather than landing broken content where the profile page
+        # assumes markdown (this is the bug that motivated the redesign).
+        assert CandidateAsset.query.filter_by(kind="Resume").count() == 0
+
+    def test_second_custom_resume_upload_adds_variant_and_promotes(self, clean_state, client, app):
+        import io
+        _login_admin(client, app)
+        from app.onboarding import save_resume_draft
+        first = save_resume_draft("# Draft one")
+
+        client.post(
+            "/settings/assets/upload",
+            data={
+                "kind": "Resume",
+                "label": "From another tool",
+                "file": (io.BytesIO(self._docx_bytes()), "resume.docx"),
+            },
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+        assert CandidateAsset.query.filter_by(kind="Resume").count() == 2
+        first_asset = db.session.get(CandidateAsset, first["asset_id"])
+        assert first_asset.is_base is False
+        new_asset = (CandidateAsset.query.filter_by(kind="Resume", label="From another tool")
+                     .first())
+        assert new_asset.is_base is True
+
+
+class TestResumeSetBaseAndDelete:
+    def _make_variant(self, label, is_base=False):
+        from flask import current_app
+        asset = CandidateAsset(kind="Resume", label=label, original_name=f"{label}.md",
+                               stored_name=f"{label}.md", is_base=is_base)
+        db.session.add(asset)
+        db.session.commit()
+        upload_dir = current_app.config["UPLOAD_DIR"]
+        with open(os.path.join(upload_dir, asset.stored_name), "w", encoding="utf-8") as f:
+            f.write(f"# {label}\n")
+        return asset
+
+    def test_set_base_promotes_and_demotes(self, clean_state, client, app):
+        _login_admin(client, app)
+        a = self._make_variant("A", is_base=True)
+        b = self._make_variant("B", is_base=False)
+
+        r = client.post(f"/assets/{b.id}/set-base", data={}, follow_redirects=True)
+        assert r.status_code == 200
+        db.session.refresh(a)
+        db.session.refresh(b)
+        assert a.is_base is False
+        assert b.is_base is True
+
+    def test_set_base_rejects_non_resume_kind(self, clean_state, client, app):
+        _login_admin(client, app)
+        cert = CandidateAsset(kind="Certification", original_name="c.pdf", stored_name="c.pdf")
+        db.session.add(cert)
+        db.session.commit()
+        r = client.post(f"/assets/{cert.id}/set-base", data={}, follow_redirects=True)
+        assert r.status_code == 200
+        db.session.refresh(cert)
+        assert cert.is_base is False
+
+    def test_deleting_base_variant_promotes_newest_remaining(self, clean_state, client, app):
+        _login_admin(client, app)
+        a = self._make_variant("A", is_base=True)
+        b = self._make_variant("B", is_base=False)
+
+        r = client.post(f"/assets/{a.id}/delete", data={}, follow_redirects=True)
+        assert r.status_code == 200
+        assert db.session.get(CandidateAsset, a.id) is None
+        db.session.refresh(b)
+        assert b.is_base is True
 
 
 class TestRemoteGate:

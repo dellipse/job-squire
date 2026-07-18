@@ -291,6 +291,12 @@ def get_candidate_assets(kind: str = "") -> list:
     Text-based files (.txt, .md) include their full content in the 'content' field;
     binary files (PDF, DOCX) return an empty 'content' — fetch via the download URL
     or reference the file description in 'notes'.
+
+    kind="Resume" ("Custom Resume" in the UI) can have multiple entries --
+    different resume variants the candidate has saved over time. Exactly one
+    has is_base=true; prefer that one when tailoring or answering "what's
+    their resume say" unless the candidate specifically asks about a
+    different variant (by label).
     """
     with flask_app.app_context():
         q = CandidateAsset.query
@@ -319,6 +325,7 @@ def get_candidate_assets(kind: str = "") -> list:
                 "notes": a.notes,
                 "uploaded_at": str(a.uploaded_at.date()),
                 "content": content,
+                "is_base": bool(a.is_base) if a.kind == "Resume" else None,
             })
         return result
 

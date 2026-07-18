@@ -219,6 +219,11 @@ def create_app():
     def _inject_deploy_warnings():
         return {"deploy_warnings": app.config.get("DEPLOY_WARNINGS") or []}
 
+    @app.context_processor
+    def _inject_asset_kind_label():
+        from .models import asset_kind_label
+        return {"asset_kind_label": asset_kind_label}
+
     # --- Security headers --------------------------------------------------
     @app.after_request
     def set_security_headers(resp):
@@ -373,6 +378,28 @@ def _run_migrations():
         # would truncate without error. NULL for cloud providers and any provider that
         # hasn't been through `job-squire ollama setup` yet.
         "ALTER TABLE ai_provider_configs ADD COLUMN num_ctx INTEGER",
+        # Resume variants: kind="Resume" is no longer a singleton -- multiple
+        # drafts can coexist, with is_base marking the one used for tailoring
+        # and shown in the Getting Started paste-back box. source_* columns
+        # keep the originally uploaded docx/pdf alongside its converted
+        # markdown when a variant came from a document upload rather than
+        # the interview or a manual paste.
+        #
+        # No DEFAULT on is_base -- existing rows land as NULL so the one-time
+        # backfill below can tell "never migrated" apart from "explicitly set
+        # false", and so it only runs once. (A DEFAULT 0 here would make the
+        # backfill re-fire and re-flip every row's is_base on every restart,
+        # since this whole list re-runs on every app boot.)
+        "ALTER TABLE candidate_assets ADD COLUMN is_base BOOLEAN",
+        "ALTER TABLE candidate_assets ADD COLUMN source_stored_name VARCHAR(255)",
+        "ALTER TABLE candidate_assets ADD COLUMN source_original_name VARCHAR(255)",
+        "ALTER TABLE candidate_assets ADD COLUMN source_content_type VARCHAR(120)",
+        # One-time backfill, guarded by "IS NULL" so it's a no-op after the
+        # first restart post-upgrade. Existing installs only ever had one
+        # kind="Resume" row (the old singleton-upsert behavior) -- it becomes
+        # the base. Everything else defaults to not-base.
+        "UPDATE candidate_assets SET is_base = 1 WHERE kind = 'Resume' AND is_base IS NULL",
+        "UPDATE candidate_assets SET is_base = 0 WHERE is_base IS NULL",
     ]
     for stmt in migrations:
         try:

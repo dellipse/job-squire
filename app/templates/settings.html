@@ -1349,7 +1349,8 @@ openclaw mcp doctor {{ connector }} --probe{% endset %}
       <tbody>
         {% for asset in assets %}
         <tr>
-          <td><span class="chip">{{ asset.kind }}</span></td>
+          <td><span class="chip">{{ asset_kind_label(asset.kind) }}</span>
+            {% if asset.kind == 'Resume' and asset.is_base %}<span class="badge admin">base</span>{% endif %}</td>
           <td>
             <strong>{{ asset.display_name }}</strong>
             {% if asset.notes %}
@@ -1362,6 +1363,15 @@ openclaw mcp doctor {{ connector }} --probe{% endset %}
           <td>
             <div class="row-actions">
               <a class="btn btn-sm btn-outline" href="{{ url_for('main.asset_download', asset_id=asset.id) }}">Download</a>
+              {% if asset.kind == 'Resume' and asset.source_stored_name %}
+              <a class="btn btn-sm btn-outline" href="{{ url_for('main.asset_download_source', asset_id=asset.id) }}">Download original</a>
+              {% endif %}
+              {% if asset.kind == 'Resume' and not asset.is_base %}
+              <form method="post" action="{{ url_for('main.asset_set_base', asset_id=asset.id) }}" style="display:inline">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button class="btn btn-sm btn-outline" type="submit">Make base</button>
+              </form>
+              {% endif %}
 
               {# Inline edit form #}
               <details class="inline-edit">
@@ -1374,7 +1384,7 @@ openclaw mcp doctor {{ connector }} --probe{% endset %}
                       <label>Type</label>
                       <select name="kind">
                         {% for k in asset_kinds %}
-                        <option value="{{ k }}" {% if k == asset.kind %}selected{% endif %}>{{ k }}</option>
+                        <option value="{{ k }}" {% if k == asset.kind %}selected{% endif %}>{{ asset_kind_label(k) }}</option>
                         {% endfor %}
                       </select>
                     </div>

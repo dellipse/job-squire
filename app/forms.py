@@ -28,6 +28,7 @@ from .models import (
     ATTACHMENT_KINDS,
     CONTACT_TYPES,
     STATUSES,
+    asset_kind_label,
     SUBMISSION_STATUSES,
     WORK_MODES,
 )
@@ -157,7 +158,7 @@ class SubmissionForm(FlaskForm):
 
 class CandidateAssetForm(FlaskForm):
     """Upload a master candidate document (resume, rec letter, cert, etc.)."""
-    kind = SelectField("Document type", choices=[(k, k) for k in ASSET_KINDS])
+    kind = SelectField("Document type", choices=[(k, asset_kind_label(k)) for k in ASSET_KINDS])
     label = StringField(
         "Label",
         validators=[Optional(), Length(max=255)],
@@ -183,7 +184,7 @@ class CandidateAssetForm(FlaskForm):
 
 class CandidateAssetEditForm(FlaskForm):
     """Edit label and notes on an existing candidate asset (no re-upload)."""
-    kind = SelectField("Document type", choices=[(k, k) for k in ASSET_KINDS])
+    kind = SelectField("Document type", choices=[(k, asset_kind_label(k)) for k in ASSET_KINDS])
     label = StringField("Label", validators=[Optional(), Length(max=255)])
     notes = TextAreaField("Notes for Claude", validators=[Optional()])
     submit = SubmitField("Save")

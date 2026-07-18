@@ -42,10 +42,12 @@ WORK_MODES = ["On-site", "Hybrid", "Remote", "Unknown"]
 ATTACHMENT_KINDS = ["Resume", "Cover Letter", "Job Description", "Other"]
 
 # Kinds for master candidate assets (not tied to a specific job).
-# "Resume" (AI-generated, via the onboarding resume interview) is distinct
-# from "Base Resume" (user-uploaded) so onboarding can tell them apart and
-# the interview can safely overwrite its own output without touching an
-# uploaded file. See docs/PLAN-onboarding.md Phase 2.
+# "Resume" (shown to users as "Custom Resume") is the markdown-draft slot --
+# populated by the onboarding resume interview, a manual paste, or by
+# auto-converting an uploaded docx/pdf/txt -- and can hold multiple variants
+# (see CandidateAsset.is_base). It's distinct from "Base Resume" (a plain
+# archival upload, no conversion guarantee) so onboarding can tell them apart.
+# See docs/PLAN-onboarding.md Phase 2.
 ASSET_KINDS = [
     "Base Resume",
     "Resume",
@@ -55,6 +57,15 @@ ASSET_KINDS = [
     "Portfolio",
     "Other",
 ]
+
+# Display-only relabeling for ASSET_KINDS -- the stored value stays "Resume"
+# (existing DB rows, filter_by(kind="Resume") call sites throughout
+# onboarding.py/main.py depend on it) but the dropdown shows a clearer name.
+ASSET_KIND_LABELS = {"Resume": "Custom Resume"}
+
+
+def asset_kind_label(kind: str) -> str:
+    return ASSET_KIND_LABELS.get(kind, kind)
 
 # Networking / recruiter log.
 CONTACT_TYPES = ["Recruiter", "Staffing Agency", "Hiring Manager", "Networking", "Reference"]
@@ -249,6 +260,21 @@ class CandidateAsset(db.Model):
     uploaded_by = db.Column(db.String(80), default="")
     uploaded_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    # kind="Resume" can have multiple rows (variants) -- see app/onboarding.py
+    # save_resume_draft and app/main.py settings_asset_upload. is_base marks
+    # which one is "the" resume used for tailoring / shown in the Getting
+    # Started paste-back box; exactly one kind="Resume" row should have
+    # is_base=True at a time (enforced in application code, not the DB).
+    is_base = db.Column(db.Boolean, default=False, index=True)
+    # When a Resume-kind row was produced by auto-converting an uploaded
+    # docx/pdf/txt (see app/resume_convert.py), these hold the originally
+    # uploaded file alongside the converted markdown in `stored_name` --
+    # null when the row came from the AI interview or a manual paste, since
+    # there's no original document in that case.
+    source_stored_name = db.Column(db.String(255))
+    source_original_name = db.Column(db.String(255))
+    source_content_type = db.Column(db.String(120))
 
     @property
     def display_name(self):

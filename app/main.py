@@ -3356,18 +3356,82 @@ def settings_asset_upload():
         f = form.file.data
         original = secure_filename(f.filename) or "file"
         ext = original.rsplit(".", 1)[-1].lower() if "." in original else ""
+        kind = form.kind.data
+        label = (form.label.data or "").strip()
+        notes = form.notes.data or ""
+        uploaded_by = current_user.display_name or current_user.username
+
+        # "Custom Resume" (kind="Resume") is the markdown-draft slot read
+        # back into the Getting Started paste-back box and shown to Claude
+        # as "the" resume (see app/onboarding.py:_read_resume_asset_markdown)
+        # -- it can never hold raw binary, so unlike every other kind, a
+        # document uploaded here MUST convert successfully or the upload is
+        # rejected outright rather than silently storing something broken.
+        # The originally uploaded file is kept in source_* on the same row
+        # (there's no separate archival copy the way "Base Resume" gets one).
+        if kind == "Resume":
+            from .onboarding import save_resume_draft
+            from .resume_convert import ResumeConversionError, SUPPORTED_EXTENSIONS, convert_to_markdown
+
+            if ext not in SUPPORTED_EXTENSIONS:
+                flash(f"Custom Resume needs a file Job Squire can convert to markdown "
+                      f"({', '.join(SUPPORTED_EXTENSIONS)}) — .{ext or 'this'} isn't "
+                      "supported. Use Base Resume instead to keep the original file "
+                      "as-is, or paste the text into the resume interview's markdown box.",
+                      "danger")
+                return redirect(_safe_next(url_for("main.settings", _anchor="tab-documents")))
+
+            raw = f.read()
+            try:
+                markdown = convert_to_markdown(raw, ext)
+            except ResumeConversionError as exc:
+                flash(f"Couldn't convert this file: {exc}", "danger")
+                return redirect(_safe_next(url_for("main.settings", _anchor="tab-documents")))
+            except Exception:
+                log.exception("resume auto-convert failed for a Custom Resume upload")
+                flash("Automatic markdown conversion hit an unexpected error. Use Base "
+                      "Resume instead, or paste the text into the resume interview's "
+                      "markdown box.", "danger")
+                return redirect(_safe_next(url_for("main.settings", _anchor="tab-documents")))
+
+            source_stored = f"{uuid.uuid4().hex}{('.' + ext) if ext else ''}"
+            source_dest = os.path.join(current_app.config["UPLOAD_DIR"], source_stored)
+            with open(source_dest, "wb") as fh:
+                fh.write(raw)
+
+            result = save_resume_draft(
+                markdown, created_by=uploaded_by,
+                label=label or f'Converted from "{original}"')
+            if result.get("ok"):
+                asset = db.session.get(CandidateAsset, result["asset_id"])
+                asset.source_stored_name = source_stored
+                asset.source_original_name = original
+                asset.source_content_type = f.mimetype or ""
+                if notes:
+                    asset.notes = notes
+                commit()
+                flash("Converted it to markdown and saved as a new Custom Resume — "
+                      "review it below and edit if anything needs cleanup.", "success")
+            else:
+                try:
+                    os.remove(source_dest)
+                except OSError:
+                    pass
+                flash(f"Couldn't save the converted resume: {result.get('error')}", "danger")
+            return redirect(_safe_next(url_for("main.settings", _anchor="tab-documents")))
+
         stored = f"{uuid.uuid4().hex}{('.' + ext) if ext else ''}"
         dest = os.path.join(current_app.config["UPLOAD_DIR"], stored)
         f.save(dest)
         asset = CandidateAsset(
-            kind=form.kind.data,
-            label=(form.label.data or "").strip(),
-            notes=form.notes.data or "",
+            kind=kind,
+            label=label,
+            notes=notes,
             original_name=original,
             stored_name=stored,
             content_type=f.mimetype or "",
             size=os.path.getsize(dest),
-            uploaded_by=current_user.display_name or current_user.username,
+            uploaded_by=uploaded_by,
         )
         db.session.add(asset)
         commit()
@@ -3376,11 +3440,13 @@ def settings_asset_upload():
         # A "Base Resume" upload is the user's actual resume, uploaded as a
         # document rather than produced through the Getting Started resume
         # interview. Convert it to markdown here (no AI needed) and save it
-        # as the same kind="Resume" draft the interview produces, so a plain
-        # upload satisfies the Getting Started "Resume & documents" step the
-        # same way the interview does. See app/resume_convert.py and
+        # as a new kind="Resume" variant the same way the interview does, so
+        # a plain upload satisfies the Getting Started "Resume & documents"
+        # step the same way the interview does. The original stays on file
+        # as its own "Base Resume" asset regardless of whether conversion
+        # succeeds. See app/resume_convert.py and
         # app/onboarding.py:save_resume_draft.
-        if form.kind.data == "Base Resume":
+        if kind == "Base Resume":
             from .onboarding import save_resume_draft
             from .resume_convert import ResumeConversionError, SUPPORTED_EXTENSIONS, convert_to_markdown
             if ext in SUPPORTED_EXTENSIONS:
@@ -3389,10 +3455,10 @@ def settings_asset_upload():
                         raw = fh.read()
                     markdown = convert_to_markdown(raw, ext)
                     result = save_resume_draft(
-                        markdown,
-                        created_by=current_user.display_name or current_user.username)
+                        markdown, created_by=uploaded_by,
+                        label=f'Converted from "{original}"')
                     if result.get("ok"):
-                        flash("Converted it to markdown and saved as your base resume — "
+                        flash("Converted it to markdown and saved as a new Custom Resume — "
                               "review it below and edit if anything needs cleanup.", "success")
                     else:
                         flash(f"Uploaded, but couldn't auto-convert it: {result.get('error')}",
@@ -3428,6 +3494,47 @@ def asset_download(asset_id):
     return send_file(path, as_attachment=True, download_name=asset.original_name)
 
 
+@main_bp.route("/assets/<int:asset_id>/download-source")
+@login_required
+@admin_required
+def asset_download_source(asset_id):
+    """The originally uploaded docx/pdf/txt behind a converted Custom Resume
+    variant (see CandidateAsset.source_stored_name) -- 404s for variants that
+    came from the interview or a manual paste, since there's no original
+    file in that case."""
+    asset = db.get_or_404(CandidateAsset, asset_id)
+    if not asset.source_stored_name:
+        abort(404)
+    path = os.path.join(current_app.config["UPLOAD_DIR"], asset.source_stored_name)
+    if not os.path.exists(path):
+        abort(404)
+    return send_file(path, as_attachment=True,
+                      download_name=asset.source_original_name or asset.original_name)
+
+
+@main_bp.route("/assets/<int:asset_id>/set-base", methods=["POST"])
+@login_required
+@admin_required
+def asset_set_base(asset_id):
+    """Promote a kind="Resume" variant to is_base=True, demoting whichever
+    one currently holds it. The base variant is the one shown in the Getting
+    Started paste-back box and used for tailoring -- see
+    app/onboarding.py:save_resume_draft."""
+    form = ConfirmForm()
+    if not form.validate_on_submit():
+        abort(400)
+    asset = db.get_or_404(CandidateAsset, asset_id)
+    if asset.kind != "Resume":
+        flash("Only Custom Resume variants can be marked base.", "danger")
+        return redirect(url_for("main.settings", _anchor="tab-documents"))
+    (CandidateAsset.query.filter_by(kind="Resume", is_base=True)
+     .update({"is_base": False}))
+    asset.is_base = True
+    commit()
+    flash(f"\"{asset.display_name}\" is now your base resume.", "success")
+    return redirect(_safe_next(url_for("main.settings", _anchor="tab-documents")))
+
+
 @main_bp.route("/assets/<int:asset_id>/edit", methods=["POST"])
 @login_required
 @admin_required
@@ -3453,14 +3560,31 @@ def asset_delete(asset_id):
     if not form.validate_on_submit():
         abort(400)
     asset = db.get_or_404(CandidateAsset, asset_id)
-    path = os.path.join(current_app.config["UPLOAD_DIR"], asset.stored_name)
-    try:
-        if os.path.exists(path):
-            os.remove(path)
-    except OSError:
-        current_app.logger.warning("Could not delete asset file %s", path)
+    upload_dir = current_app.config["UPLOAD_DIR"]
+    for name in (asset.stored_name, asset.source_stored_name):
+        if not name:
+            continue
+        path = os.path.join(upload_dir, name)
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except OSError:
+            current_app.logger.warning("Could not delete asset file %s", path)
+
+    was_base = asset.kind == "Resume" and asset.is_base
     db.session.delete(asset)
     commit()
+
+    # Deleting the base variant shouldn't silently leave the Getting Started
+    # profile step (and kit-building) without any base resume -- promote the
+    # newest remaining variant if one exists.
+    if was_base:
+        remaining = (CandidateAsset.query.filter_by(kind="Resume")
+                     .order_by(CandidateAsset.uploaded_at.desc()).first())
+        if remaining:
+            remaining.is_base = True
+            commit()
+
     flash("Document removed.", "success")
     return redirect(url_for("main.settings", _anchor="tab-documents"))
 

@@ -100,6 +100,22 @@ Route tests for checklist rendering/skip/dismiss/state persistence; migration te
 
 ---
 
+## Phase 2 follow-up — resume variants (2026-07-18)
+
+A docx/pdf auto-convert path was added for uploads (`app/resume_convert.py`, commit `2177eca`) but shipped with a bug: the generic asset-upload dropdown let a user pick the `kind="Resume"` slot directly and upload a raw docx/pdf into it. `_read_resume_asset_markdown()` assumed that slot was always markdown text and crashed with a `UnicodeDecodeError` trying to `open(..., encoding="utf-8")` on the binary file. Root cause: `kind="Resume"` was a singleton (`save_resume_draft()` upserted one row via `filter_by(kind="Resume").first()`), and only the `"Base Resume"` upload path ran the file through `convert_to_markdown()` first.
+
+Fixed by dropping the singleton assumption rather than patching around it:
+
+- **Multiple variants.** `kind="Resume"` (shown in the UI as **"Custom Resume"** — display-only relabel via `models.asset_kind_label()`, the stored value is unchanged so existing rows/queries aren't touched) can now hold any number of rows. `save_resume_draft()` always inserts a new row instead of upserting.
+- **`is_base` flag.** Exactly one `kind="Resume"` row has `is_base=True` at a time — that's the one read back into the Getting Started paste-back box and the one `get_candidate_assets` (MCP) flags for Claude to prefer when tailoring. Every write path (interview, manual paste, direct upload) demotes the previous base and promotes its own new row. `POST /assets/<id>/set-base` lets a user manually revert to an older variant. Deleting the current base auto-promotes the newest remaining variant so the slot is never left base-less.
+- **Original + converted, same row.** `CandidateAsset` gained `source_stored_name` / `source_original_name` / `source_content_type` — when a variant came from a docx/pdf/txt upload, the original file rides alongside the converted markdown on the same row (`GET /assets/<id>/download-source`), rather than needing a second linked asset.
+- **No raw-binary fallback for this slot.** Unlike `"Base Resume"` (which keeps the raw file even if conversion fails), an upload directly to `kind="Resume"` that fails to convert is rejected outright with an error — this is the invariant that was missing before, and it's what makes the `UnicodeDecodeError` structurally impossible now rather than just less likely.
+- **Migration:** additive columns (`is_base`, `source_*`) with a guarded one-time backfill (`is_base` has no `DEFAULT`, so existing rows land `NULL` and the backfill only fires where `is_base IS NULL` — a `DEFAULT 0` here would have made the backfill re-run and re-flip every row on every restart, since `_run_migrations()` re-executes its whole statement list on every boot). Existing installs' one pre-existing `Resume` row becomes the base on upgrade.
+- Tests: `tests/test_onboarding.py::TestCustomResumeUploadVariants` and `TestResumeSetBaseAndDelete` (new), `TestResumeInterview` updated for insert-not-upsert semantics. Full suite passes.
+- Not yet done: `VERSION` bump, CHANGELOG entry, not pushed.
+
+---
+
 ## Follow-up — resume interview should move to the async pattern (noted 2026-07-13)
 
 `onboarding.resume_interview()` → `ai.run_resume_interview_turn()` (`app/ai.py:1407`) still calls
