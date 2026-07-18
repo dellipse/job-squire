@@ -397,7 +397,17 @@
     </li>
   </ul>
   {% set _just_started = request.args.get('started') == '1' %}
-  {% set _still_running = (last_run and last_run.status == 'running') or (_just_started and not last_run) %}
+  {# "Confirmed" means a SearchRun row actually exists and says running —
+     that's authoritative and safe to poll for as long as it takes (a real
+     run always resolves to ok/error once it finishes, see app/search.py).
+     "Unconfirmed" means we redirected here with started=1 but no row has
+     shown up yet — could just be a beat behind, or could mean run_search()
+     silently no-op'd (search disabled, no titles, or another run already
+     holding the lock) and no row is ever coming. JS caps how long it polls
+     in that second case so the page can't get stuck claiming "still
+     running" forever. #}
+  {% set _confirmed_running = last_run and last_run.status == 'running' %}
+  {% set _unconfirmed_running = _just_started and not last_run %}
   {% if search_ready %}
   <form method="post" action="{{ url_for('main.settings_run') }}" class="form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -407,9 +417,11 @@
     </div>
   </form>
   <p class="muted small" id="first-search-status" style="margin-top:0.5rem"
-     data-poll="{{ '1' if _still_running else '0' }}">
-    {% if _still_running %}
+     data-poll="{{ 'confirmed' if _confirmed_running else ('unconfirmed' if _unconfirmed_running else '0') }}">
+    {% if _confirmed_running %}
       Search running in the background — this page updates automatically every few seconds…
+    {% elif _unconfirmed_running %}
+      Starting the search — this page updates automatically once it's under way…
     {% else %}
       Runs in the background — this page updates automatically once results are in.
     {% endif %}

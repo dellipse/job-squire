@@ -10,6 +10,19 @@ footer as `<VERSION>-<build-sha>`.
 
 ### Fixed
 
+- Getting Started's "First Search" step could get stuck claiming a search was running forever,
+  with no results and no error shown. Two compounding causes: (1) `run_search()` created its
+  `SearchRun` row up front but only finalized `status` at the very end of the function with no
+  try/except in between, so any downstream exception (most plausibly `ingest_jobs()`'s `commit()`
+  exhausting its SQLite retry budget under the 3-container shared `/data` volume) propagated
+  straight out of the daemon thread that runs searches and was silently swallowed, leaving the row
+  stuck at `status="running"` forever; and (2) the Getting Started page had no way to tell "no run
+  ever started" from "still running" -- it kept `?started=1` on the URL across every auto-reload,
+  so if `run_search()` ever took one of its silent no-op paths (search disabled, no titles, or
+  another run already holding the lock) and never created a row at all, the page polled forever
+  regardless. `_run_search_locked()` now always finalizes the row to `status="error"` on failure,
+  and the Getting Started polling now distinguishes a confirmed running row from an unconfirmed
+  one and gives up after a bounded number of reloads instead of trusting `started=1` indefinitely.
 - `ci.yml`'s "Commit SBOM if changed" step and `release.yml`'s new "Stamp CLI version and commit"
   step (0.7.11) can both push to `main` off the same triggering push whenever it touches
   `VERSION` -- observed immediately when 0.7.11 shipped: `release.yml` landed its stamp commit

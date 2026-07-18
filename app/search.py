@@ -236,85 +236,106 @@ def _run_search_locked(trigger="manual"):
     db.session.add(run)
     commit()
 
-    cooldowns = _load_cooldowns()
-    cooldowns_dirty = False
-    daily_runs = _load_daily_runs()
-    daily_runs_dirty = False
+    # Everything below runs with a "running" SearchRun row already committed.
+    # Anything that raises here — most likely ingest_jobs()'s commit() hitting
+    # a SQLite "database is locked"/"disk I/O error" it can't retry its way
+    # out of (see db_utils.py's docstring re: the shared 3-container /data
+    # volume) — used to propagate straight out of this daemon thread (see
+    # main.py's settings_run/_bg_search) and get swallowed silently, leaving
+    # the row stuck at status="running" forever with the Getting Started page
+    # polling it indefinitely. Wrap the whole body so any failure still gets
+    # a final status instead of stranding the row.
+    try:
+        cooldowns = _load_cooldowns()
+        cooldowns_dirty = False
+        daily_runs = _load_daily_runs()
+        daily_runs_dirty = False
 
-    all_items, notes = [], []
-    for pc in enabled:
-        if pc.provider not in PROVIDERS:
-            continue
-        if pc.provider in REMOTE_ONLY_PROVIDERS and not cfg.get("include_remote", True):
-            notes.append(f"{pc.provider}: remote-only board skipped (remote jobs are "
-                         "turned off in search settings)")
-            continue
-        if _in_cooldown(cooldowns, pc.provider):
-            until = cooldowns[pc.provider]
-            notes.append(f"{pc.provider}: in cooldown until {until} UTC — skipping")
-            log.info("%s: skipped (cooldown until %s UTC)", pc.provider, until)
-            continue
-        creds = _decrypt_creds(secret_key, pc.secret_blob)
-
-        # Per-provider daily run limit (optional; stored in provider creds).
-        max_runs = int(creds.get("max_runs_per_day") or 0)
-        if max_runs > 0:
-            runs_today = _provider_runs_today(daily_runs, pc.provider)
-            if runs_today >= max_runs:
-                notes.append(
-                    f"{pc.provider}: daily run limit ({max_runs}/day) reached — skipping"
-                )
-                log.info("%s: skipped (daily run limit %d reached, %d runs today)",
-                         pc.provider, max_runs, runs_today)
+        all_items, notes = [], []
+        for pc in enabled:
+            if pc.provider not in PROVIDERS:
                 continue
+            if pc.provider in REMOTE_ONLY_PROVIDERS and not cfg.get("include_remote", True):
+                notes.append(f"{pc.provider}: remote-only board skipped (remote jobs are "
+                             "turned off in search settings)")
+                continue
+            if _in_cooldown(cooldowns, pc.provider):
+                until = cooldowns[pc.provider]
+                notes.append(f"{pc.provider}: in cooldown until {until} UTC — skipping")
+                log.info("%s: skipped (cooldown until %s UTC)", pc.provider, until)
+                continue
+            creds = _decrypt_creds(secret_key, pc.secret_blob)
 
-        # Per-provider title limit (optional; trims the title list for this run).
-        max_titles = int(creds.get("max_titles_per_run") or 0)
-        run_titles = titles[:max_titles] if max_titles > 0 else titles
+            # Per-provider daily run limit (optional; stored in provider creds).
+            max_runs = int(creds.get("max_runs_per_day") or 0)
+            if max_runs > 0:
+                runs_today = _provider_runs_today(daily_runs, pc.provider)
+                if runs_today >= max_runs:
+                    notes.append(
+                        f"{pc.provider}: daily run limit ({max_runs}/day) reached — skipping"
+                    )
+                    log.info("%s: skipped (daily run limit %d reached, %d runs today)",
+                             pc.provider, max_runs, runs_today)
+                    continue
 
-        results, err = search_provider(pc.provider, creds, run_titles, cfg)
+            # Per-provider title limit (optional; trims the title list for this run).
+            max_titles = int(creds.get("max_titles_per_run") or 0)
+            run_titles = titles[:max_titles] if max_titles > 0 else titles
 
-        # Count this as a run regardless of outcome (API credits were consumed).
-        if max_runs > 0:
-            _increment_provider_runs(daily_runs, pc.provider)
-            daily_runs_dirty = True
+            results, err = search_provider(pc.provider, creds, run_titles, cfg)
 
-        if err:
-            notes.append(err)
-            if "503" in err or "service unavailable" in err.lower():
-                _set_cooldown(cooldowns, pc.provider)
-                cooldowns_dirty = True
-        all_items.extend(results)
+            # Count this as a run regardless of outcome (API credits were consumed).
+            if max_runs > 0:
+                _increment_provider_runs(daily_runs, pc.provider)
+                daily_runs_dirty = True
 
-    if cooldowns_dirty:
-        _save_cooldowns(cooldowns)
-    if daily_runs_dirty:
-        _save_daily_runs(daily_runs)
+            if err:
+                notes.append(err)
+                if "503" in err or "service unavailable" in err.lower():
+                    _set_cooldown(cooldowns, pc.provider)
+                    cooldowns_dirty = True
+            all_items.extend(results)
 
-    created, skipped = ingest_jobs(all_items, created_by="auto-search")
+        if cooldowns_dirty:
+            _save_cooldowns(cooldowns)
+        if daily_runs_dirty:
+            _save_daily_runs(daily_runs)
 
-    emailed = False
-    if created:
+        created, skipped = ingest_jobs(all_items, created_by="auto-search")
+
+        emailed = False
+        if created:
+            try:
+                emailed = _maybe_email(secret_key, created)
+            except Exception as e:  # noqa: BLE001
+                notes.append(f"digest email failed: {e.__class__.__name__}")
+
+        if notes:
+            try:
+                _maybe_error_email(secret_key, notes, trigger=trigger)
+            except Exception as e:  # noqa: BLE001
+                log.warning("error notification email failed: %s", e)
+
+        run.finished_at = datetime.now(timezone.utc)
+        run.found = len(all_items)
+        run.created = len(created)
+        run.skipped = skipped
+        run.emailed = emailed
+        run.status = "error" if (notes and not all_items) else "ok"
+        run.detail = " | ".join(notes)[:1000]
+        commit()
+        return run
+    except Exception as e:  # noqa: BLE001 — never leave a SearchRun stuck at "running"
+        log.exception("run_search: unhandled error mid-run (trigger=%s)", trigger)
         try:
-            emailed = _maybe_email(secret_key, created)
-        except Exception as e:  # noqa: BLE001
-            notes.append(f"digest email failed: {e.__class__.__name__}")
-
-    if notes:
-        try:
-            _maybe_error_email(secret_key, notes, trigger=trigger)
-        except Exception as e:  # noqa: BLE001
-            log.warning("error notification email failed: %s", e)
-
-    run.finished_at = datetime.now(timezone.utc)
-    run.found = len(all_items)
-    run.created = len(created)
-    run.skipped = skipped
-    run.emailed = emailed
-    run.status = "error" if (notes and not all_items) else "ok"
-    run.detail = " | ".join(notes)[:1000]
-    commit()
-    return run
+            db.session.rollback()
+            run.finished_at = datetime.now(timezone.utc)
+            run.status = "error"
+            run.detail = f"internal error: {e.__class__.__name__}: {e}"[:1000]
+            commit()
+        except Exception:  # noqa: BLE001 — DB itself is what's broken; nothing more to do
+            log.exception("run_search: also failed to record the error on the SearchRun row")
+        return None
 
 
 def _smtp_dict(smtp_row, secret_key):

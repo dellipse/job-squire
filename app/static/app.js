@@ -116,9 +116,44 @@ document.addEventListener('DOMContentLoaded', function () {
   // background, poll by reloading every 5s so the result appears without a
   // manual refresh. The server decides whether to keep polling (data-poll)
   // based on the SearchRun status, so this just stops naturally once done.
+  //
+  // data-poll has three states:
+  //   "0"           - nothing running, don't poll
+  //   "confirmed"   - a SearchRun row exists with status "running" -- real,
+  //                   authoritative state. A run always resolves to ok/error
+  //                   once it finishes (app/search.py), so it's safe to poll
+  //                   for a while, but still capped as a belt-and-suspenders
+  //                   safety net rather than trusting that forever.
+  //   "unconfirmed" - we just redirected here after clicking "Run first
+  //                   search now" but no SearchRun row exists yet. That's
+  //                   normal for the first second or two, but if run_search()
+  //                   silently no-op'd (search disabled, no titles, or
+  //                   another run already holding the lock) no row is ever
+  //                   coming and the page would otherwise claim "still
+  //                   running" forever, since the URL keeps "started=1" on
+  //                   every reload. Give up quickly here.
   var searchStatus = document.getElementById('first-search-status');
-  if (searchStatus && searchStatus.getAttribute('data-poll') === '1') {
-    window.setTimeout(function () { window.location.reload(); }, 5000);
+  var pollState = searchStatus ? searchStatus.getAttribute('data-poll') : '0';
+  var POLL_COUNT_KEY = 'first-search-poll-count';
+  if (pollState === 'confirmed' || pollState === 'unconfirmed') {
+    var maxPolls = pollState === 'unconfirmed' ? 6 : 60; // ~30s vs. ~5min at 5s/poll
+    var pollCount = 0;
+    try { pollCount = parseInt(sessionStorage.getItem(POLL_COUNT_KEY) || '0', 10) || 0; } catch (e) {}
+    if (pollCount < maxPolls) {
+      try { sessionStorage.setItem(POLL_COUNT_KEY, String(pollCount + 1)); } catch (e) {}
+      window.setTimeout(function () { window.location.reload(); }, 5000);
+    } else {
+      // Give up polling. Drop "started=1" so an unconfirmed run stops
+      // claiming to be in progress; for a confirmed run this just stops the
+      // auto-refresh; the manual "Run first search now" button and a normal
+      // page load still show the true status either way.
+      try { sessionStorage.removeItem(POLL_COUNT_KEY); } catch (e) {}
+      var url = new URL(window.location.href);
+      url.searchParams.delete('started');
+      window.location.replace(url.toString());
+    }
+  } else {
+    try { sessionStorage.removeItem(POLL_COUNT_KEY); } catch (e) {}
   }
 
   // AI settings sub-tabs (secondary row within the AI tab).
