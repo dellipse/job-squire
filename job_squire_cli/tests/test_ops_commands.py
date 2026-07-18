@@ -152,6 +152,39 @@ def test_remove_image_flag_reports_when_image_was_removed(runner, monkeypatch):
     assert "Image removed: ghcr.io/dellipse/job-squire:latest" in result.output
 
 
+def test_remove_deleted_data_reports_the_volume_that_was_removed(runner, monkeypatch):
+    monkeypatch.setattr(
+        lc, "remove_instance",
+        lambda name, **kwargs: lc.RemoveResult(
+            name=name, data_dir="/data/castelo", data_kept=False,
+            volumes_removed=["job-squire-castelo-data"],
+        ),
+    )
+    result = runner.invoke(main, ["remove", "castelo", "--yes", "--delete-data"])
+    assert result.exit_code == 0
+    assert "Data volume(s) removed: job-squire-castelo-data" in result.output
+
+
+def test_remove_deleted_data_reports_when_no_volume_was_found(runner, monkeypatch):
+    monkeypatch.setattr(
+        lc, "remove_instance",
+        lambda name, **kwargs: lc.RemoveResult(name=name, data_dir="/data/castelo", data_kept=False),
+    )
+    result = runner.invoke(main, ["remove", "castelo", "--yes", "--delete-data"])
+    assert result.exit_code == 0
+    assert "No data volume found to remove" in result.output
+
+
+def test_remove_kept_data_never_mentions_volumes(runner, monkeypatch):
+    monkeypatch.setattr(
+        lc, "remove_instance",
+        lambda name, **kwargs: lc.RemoveResult(name=name, data_dir="/data/castelo", data_kept=True),
+    )
+    result = runner.invoke(main, ["remove", "castelo", "--yes"])
+    assert result.exit_code == 0
+    assert "volume" not in result.output.lower()
+
+
 def test_remove_image_flag_reports_the_kept_reason_when_shared(runner, monkeypatch):
     monkeypatch.setattr(
         lc, "remove_instance",
@@ -202,6 +235,28 @@ def test_uninstall_reports_each_removed_instance(runner, monkeypatch, tmp_path):
     result = runner.invoke(main, ["uninstall", "--yes"])
     assert result.exit_code == 0
     assert "castelo: data kept" in result.output
+
+
+def test_uninstall_reports_removed_volumes_for_deleted_instances(runner, monkeypatch, tmp_path):
+    reg.add_instance(
+        name="castelo", mode="local", runtime="docker", data_dir=str(tmp_path),
+        public_url="http://localhost:8080", app_port=8080, mcp_port=9000,
+    )
+
+    def fake_uninstall_everything(**kwargs):
+        from job_squire_cli.ops import uninstall as un
+        return un.UninstallResult(
+            instances_removed=["castelo"], data_kept={"castelo": False},
+            runtime_removed=None, cli_removed=None, rc_files_updated=[],
+            volumes_removed={"castelo": ["job-squire-castelo-data"]},
+        )
+
+    from job_squire_cli.ops import commands as cmds
+    monkeypatch.setattr(cmds.uninstall_ops, "uninstall_everything", fake_uninstall_everything)
+
+    result = runner.invoke(main, ["uninstall", "--yes", "--delete-data"])
+    assert result.exit_code == 0
+    assert "castelo: data deleted, volume(s) removed: job-squire-castelo-data" in result.output
 
 
 def test_uninstall_reports_runtime_removed_when_the_orchestration_says_so(runner, monkeypatch):

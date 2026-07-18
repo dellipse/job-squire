@@ -309,15 +309,18 @@ self-contained directory, `~/job-squire/<name>/` by default
   .env                        # compose-level vars (PUID/PGID, host ports)
   data/
     .env                      # container env (SECRET_KEY, DEPLOY_MODE, ...)
-    job-squire.db             # created by the app on first boot
-    uploads/
 ```
 
-This is deliberately the whole thing an operator needs for "direct runtime
-access remains available" (PLAN Section 7): `cd` into it and run
+`job-squire.db` and `uploads/` are *not* under this directory -- they live
+in the instance's own named Docker volume (`<container_name>-data`,
+declared in `docker-compose.yml`, addressed by `job-squire backup`/
+`restore` through the container itself, never by walking a host path). This
+directory is deliberately the whole thing an operator needs for "direct
+runtime access remains available" (PLAN Section 7): `cd` into it and run
 `docker compose ...` or `podman compose ...` directly. It's also the exact
-directory registered as the instance's `data_dir`, since a future backup
-archive (Prompt C8) needs to capture `SECRET_KEY` along with the database.
+directory registered as the instance's `data_dir` -- `SECRET_KEY` is what a
+backup archive needs from here, alongside the database pulled out of the
+volume separately.
 
 **Compose/env rendering** (`ops/compose.py`). The generated
 `docker-compose.yml` is *not* a copy of the repo's own file of the
@@ -344,6 +347,29 @@ derivation (`app/__init__.py`): the app's derivation turns *both* hyphens
 and spaces into underscores, while the registry's slug allows hyphens, so
 for any instance name containing a hyphen the two derivations would
 otherwise silently disagree.
+
+**Leftover-volume check.** `/data` is a named Docker volume, not a host
+bind mount (`ops/compose.py`'s `render_compose_yaml`), and `remove`/
+`uninstall` only delete it when the operator chose to delete the instance's
+data (see "Remove never destroys data silently" below) -- so a same-named
+instance created, removed with its data *kept*, and created again would
+otherwise silently reattach to the old volume: the fresh `ADMIN_PASSWORD`
+`create` writes into the new `data/.env` is never actually applied, because
+`app/__init__.py`'s `_seed_users` only seeds a user that doesn't already
+exist, and the old database's admin row (with its own, different password)
+is what answers login. `create_instance` checks for a volume matching
+`compose.data_volume_key(container_name)` (via `docker/podman volume ls
+--filter name=...`) before writing anything to disk; if one exists, it asks
+(the same injected `confirm` callable everything else here uses -- `--yes`
+answers it the same way it answers the runtime-install prompt) whether to
+remove it and continue, or raises `LeftoverVolumeError` if declined. Each
+generated compose file also pins its volume to an explicit `name:` (rather
+than letting Compose default-prefix it with the project name) specifically
+so this substring check, and the literal volume Docker/Podman materializes,
+always agree -- without it, since `container_name` is used both as the
+compose project (`-p`) and as the volume key's own prefix, the actual
+volume would come out doubled (e.g. `job-squire-testdb_job-squire-testdb-
+data` instead of `job-squire-testdb-data`).
 
 **Importing settings from an existing instance** (`ops/secrets_copy.py`,
 `create --import-from`). PLAN Section 4's import prompt splits across the
@@ -378,10 +404,17 @@ bad `create` invocation never has side effects to clean up.
 
 **Remove never destroys data silently.** `remove_instance` always asks
 (via an injected `confirm_delete` callable) before deleting an instance's
-data directory; if nothing asks (no `confirm_delete`, no explicit
-`keep_data`), the default is to keep the data -- PLAN Section 4's rule
-that removing an instance must never silently destroy someone's
-job-search history.
+data -- both its named Docker volume (the database and uploads) and its
+host data directory (`SECRET_KEY`); if nothing asks (no `confirm_delete`,
+no explicit `keep_data`), the default is to keep the data -- PLAN Section
+4's rule that removing an instance must never silently destroy someone's
+job-search history. The volume cleanup itself is two-layered: `compose
+down` gets `-v` whenever data is being deleted (removes the volume the
+compose file itself declares), and a direct `volume ls`/`rm` sweep runs
+afterward regardless -- catching a volume `down -v` didn't reach (e.g. the
+instance's `root` directory, and so its compose file, was already gone) and
+reporting back exactly which volume name(s) actually disappeared
+(`RemoveResult.volumes_removed`, printed by both `remove` and `uninstall`).
 
 **`compose down` never removes the image it was running -- `remove`
 leaves it alone by default; `uninstall` removes it by default.**
@@ -403,8 +436,8 @@ operator-facing default to "remove" -- see below.
 
 ```
 job-squire uninstall                          # prompts: uninstall? then keep the image(s)? (default: remove)
-job-squire uninstall --keep-data              # force-keep every instance's data directory
-job-squire uninstall --delete-data            # force-delete every instance's data directory
+job-squire uninstall --keep-data              # force-keep every instance's data (volume + data directory)
+job-squire uninstall --delete-data            # force-delete every instance's data (volume + data directory)
 job-squire uninstall --remove-runtime         # also remove the container runtime, if job-squire installed it
 job-squire uninstall --remove-image           # skip the keep-image prompt; remove (this is the default anyway)
 job-squire uninstall --keep-image             # skip the keep-image prompt; leave every image in place
@@ -461,8 +494,8 @@ The CLI's own config directory (the instance registry, `mcp.json`,
 `runtime.json`) is always cleared as part of `uninstall` -- it's metadata
 about a CLI that is, by that point, either fully removed or about to be
 removed by hand, never "data" in the job-search sense (that's each
-instance's own `data_dir`, governed by `--keep-data`/`--delete-data`
-above).
+instance's own named Docker volume plus its host `data_dir`, together
+governed by `--keep-data`/`--delete-data` above).
 
 ## Reverse-proxy provisioning (Prompt C9)
 

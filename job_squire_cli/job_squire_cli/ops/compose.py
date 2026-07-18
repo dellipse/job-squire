@@ -87,6 +87,16 @@ def compose_binary(runtime: str) -> tuple[str, ...]:
     return (runtime_binary(runtime), "compose")
 
 
+def data_volume_key(container_name: str) -> str:
+    """The literal volume key this CLI's own generated compose file declares
+    for `container_name` (`render_compose_yaml`'s `volumes:` block) -- the
+    single source of truth so `ops/lifecycle.py`'s leftover-volume checks
+    (before `create`) and cleanup (in `remove_instance`) always agree with
+    what `create` actually wrote, rather than each re-deriving the `-data`
+    suffix convention independently and risking drift between them."""
+    return f"{container_name}-data"
+
+
 # ── Rendering ────────────────────────────────────────────────────────────
 
 
@@ -177,7 +187,7 @@ services:
       # `restore` (ops/backup.py) read and write this volume's contents
       # through the container itself (docker/podman exec + cp), never by
       # walking a host path directly.
-      - {container_name}-data:/data
+      - {data_volume_key(container_name)}:/data
       # data/.env is the one thing that stays a plain host file: `env_file:`
       # above is read by `docker compose` itself at "up" time, before the
       # named volume even exists, so it can never point inside one.
@@ -207,7 +217,16 @@ services:
       - "host.docker.internal:host-gateway"
 {networks_service_block}{networks_top_block}
 volumes:
-  {container_name}-data:
+  # An explicit `name:` here is what keeps the volume Docker/Podman actually
+  # create as exactly `data_volume_key(container_name)` -- without it,
+  # Compose's default naming prefixes the volume key with the project name
+  # (`-p {container_name}` above), and since `container_name` is *also* the
+  # volume key's own prefix, the result would be doubled up
+  # (`{container_name}_{container_name}-data` instead of the
+  # `{container_name}-data` every other part of this CLI, including the
+  # leftover-volume check in ops/lifecycle.py's `create_instance`, expects).
+  {data_volume_key(container_name)}:
+    name: {data_volume_key(container_name)}
 """
 
 
@@ -413,8 +432,55 @@ def compose_restart(runtime: str, root: Path, project: str, *, run: Runner = sub
 
 
 def compose_down(runtime: str, root: Path, project: str, *, run: Runner = subprocess.run,
-                  timeout: float = 60.0) -> "subprocess.CompletedProcess[str]":
-    return _run_compose(runtime, root, project, ["down"], run=run, timeout=timeout)
+                  timeout: float = 60.0, remove_volumes: bool = False) -> "subprocess.CompletedProcess[str]":
+    """`compose down`, optionally with `-v` to also remove the named
+    volume(s) this project's compose file declares. `/data` is a named
+    Docker volume, not a host bind mount (render_compose_yaml) -- plain
+    `compose down` never touches it, so `remove_volumes=True` is what
+    `ops/lifecycle.py`'s `remove_instance` passes exactly when the operator
+    chose to delete the instance's data; left False (the default), every
+    other caller (`update`/`rollback`'s stop-then-recreate, `restore`'s
+    teardown-before-replace) keeps behaving exactly as before this flag was
+    added."""
+    args = ["down", "-v"] if remove_volumes else ["down"]
+    return _run_compose(runtime, root, project, args, run=run, timeout=timeout)
+
+
+def list_matching_volumes(runtime: str, name_substring: str, *, run: Runner = subprocess.run,
+                           timeout: float = 15.0) -> list[str]:
+    """Every volume whose name contains `name_substring` (Docker/Podman's
+    own `volume ls --filter name=` substring match -- both CLIs support this
+    filter form, so no project-prefix-naming assumption is needed to find
+    them). Used by `ops/lifecycle.py`'s `create_instance` to spot a leftover
+    volume from a same-named instance that was removed with its data kept,
+    before that new instance silently reattaches to the old database, and
+    by `remove_instance` as a belt-and-suspenders sweep after `compose down
+    -v` to confirm (or catch what a compose file already gone from disk
+    couldn't reach). Returns an empty list on any runtime error rather than
+    raising -- an unreadable `volume ls` should never itself block create/
+    remove; the caller just proceeds as if nothing leftover was found."""
+    argv = [runtime_binary(runtime), "volume", "ls", "--format", "{{.Name}}", "--filter", f"name={name_substring}"]
+    try:
+        result = run(argv, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if result.returncode != 0:
+        return []
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
+def remove_volume(runtime: str, volume_name: str, *, run: Runner = subprocess.run,
+                   timeout: float = 30.0) -> "subprocess.CompletedProcess[str]":
+    """`docker/podman volume rm <volume_name>` directly. A nonzero exit
+    (e.g. the volume is already gone, or something outside job-squire's own
+    registry still has it mounted) is returned for the caller to report,
+    not raised -- mirrors `remove_image`'s own "never let a stubborn
+    resource block the rest of a remove/uninstall" rule."""
+    argv = [runtime_binary(runtime), "volume", "rm", volume_name]
+    try:
+        return run(argv, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ComposeError(f"Failed to remove volume {volume_name!r}: {exc}") from exc
 
 
 def pull_image(runtime: str, image: str, *, run: Runner = subprocess.run,

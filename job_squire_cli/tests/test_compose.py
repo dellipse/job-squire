@@ -88,7 +88,27 @@ def test_render_compose_yaml_uses_named_volume_not_a_data_host_dir_bind_mount():
     assert "job-squire-castelo-data:/data" in yaml_text
     assert "./data/.env:/data/.env:ro" in yaml_text
     assert "DATA_HOST_DIR" not in yaml_text
-    assert "volumes:\n  job-squire-castelo-data:" in yaml_text
+    assert "\n  job-squire-castelo-data:\n" in yaml_text  # the top-level volumes: block's own key
+
+
+def test_render_compose_yaml_volume_has_explicit_name_avoiding_doubled_project_prefix():
+    """Without an explicit `name:`, Compose's default naming prefixes the
+    volume key with the project name -- and since `container_name` here is
+    used both as `-p` (the project) and as the volume key's own
+    `{container_name}-data` prefix, the *actual* volume Docker/Podman
+    materializes would otherwise be doubled:
+    `job-squire-castelo_job-squire-castelo-data`, not the plain
+    `job-squire-castelo-data` every other part of this CLI (including the
+    leftover-volume check in ops/lifecycle.py's `create_instance`) expects.
+    The explicit `name:` line pins it to the plain form."""
+    yaml_text = compose.render_compose_yaml(
+        container_name="job-squire-castelo", image="ghcr.io/dellipse/job-squire:latest", loopback_only=True,
+    )
+    assert "    name: job-squire-castelo-data" in yaml_text
+
+
+def test_data_volume_key_matches_render_compose_yaml_convention():
+    assert compose.data_volume_key("job-squire-castelo") == "job-squire-castelo-data"
 
 
 def test_render_compose_yaml_network_mode_binds_all_interfaces():
@@ -226,6 +246,78 @@ def test_compose_stop_start_restart_down_use_podman_binary(tmp_path):
     subcommands = [c["args"][-1] if c["args"][-1] != "-d" else c["args"][-2] for c in run.calls]
     assert subcommands == ["stop", "start", "restart", "down"]
     assert all(c["args"][:2] == ("podman", "compose") for c in run.calls)
+
+
+def test_compose_down_default_never_passes_dash_v(tmp_path):
+    """Every existing caller (update/rollback's stop-then-recreate, restore's
+    teardown-before-replace) must keep behaving exactly as before
+    `remove_volumes` was added -- default False, no `-v`."""
+    root = tmp_path / "castelo"
+    root.mkdir()
+    run = fake_run()
+    compose.compose_down("docker", root, "job-squire-castelo", run=run)
+    args = run.calls[0]["args"]
+    assert args[-1] == "down"
+    assert "-v" not in args
+
+
+def test_compose_down_remove_volumes_appends_dash_v(tmp_path):
+    root = tmp_path / "castelo"
+    root.mkdir()
+    run = fake_run()
+    compose.compose_down("docker", root, "job-squire-castelo", run=run, remove_volumes=True)
+    args = run.calls[0]["args"]
+    assert args[-2:] == ("down", "-v")
+
+
+# ── volume lookup/removal (leftover-volume check on create, cleanup on remove) ──
+
+
+def test_list_matching_volumes_parses_newline_separated_names():
+    run = fake_run(returncode=0, stdout="job-squire-testdb-data\nsome-other-testdb-volume\n")
+    volumes = compose.list_matching_volumes("docker", "testdb-data", run=run)
+    assert volumes == ["job-squire-testdb-data", "some-other-testdb-volume"]
+    args = run.calls[0]["args"]
+    assert args[:3] == ("docker", "volume", "ls")
+    assert "--filter" in args
+    assert "name=testdb-data" in args
+
+
+def test_list_matching_volumes_uses_podman_binary():
+    run = fake_run(returncode=0, stdout="")
+    compose.list_matching_volumes("podman", "testdb-data", run=run)
+    assert run.calls[0]["args"][0] == "podman"
+
+
+def test_list_matching_volumes_returns_empty_on_nonzero_exit():
+    run = fake_run(returncode=1, stdout="", stderr="error talking to daemon")
+    assert compose.list_matching_volumes("docker", "testdb-data", run=run) == []
+
+
+def test_list_matching_volumes_returns_empty_on_no_output():
+    run = fake_run(returncode=0, stdout="")
+    assert compose.list_matching_volumes("docker", "testdb-data", run=run) == []
+
+
+def test_remove_volume_invokes_runtime_volume_rm():
+    run = fake_run()
+    compose.remove_volume("docker", "job-squire-testdb-data", run=run)
+    assert run.calls[0]["args"] == ("docker", "volume", "rm", "job-squire-testdb-data")
+
+
+def test_remove_volume_uses_podman_binary():
+    run = fake_run()
+    compose.remove_volume("podman", "job-squire-testdb-data", run=run)
+    assert run.calls[0]["args"][0] == "podman"
+
+
+def test_remove_volume_returns_nonzero_result_rather_than_raising_on_failure():
+    """Mirrors remove_image's own contract: a stubborn volume is reported
+    back, not raised -- ops/lifecycle.py decides whether that's fatal."""
+    run = fake_run(returncode=1, stderr="Error: volume is in use")
+    result = compose.remove_volume("docker", "job-squire-testdb-data", run=run)
+    assert result.returncode == 1
+    assert "in use" in result.stderr
 
 
 # ── observing container state ────────────────────────────────────────────

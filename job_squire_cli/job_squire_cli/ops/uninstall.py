@@ -21,8 +21,11 @@ its own opt-out so nothing is destroyed silently:
      (one call per instance) -- same keep-or-delete-data prompt and same
      safe "keep by default" fallback as `job-squire remove` uses for a
      single instance, so uninstalling everything never silently destroys a
-     job search's history any more than removing one instance would. Each
-     call also takes the same `remove_image` flag `remove_instance` does --
+     job search's history any more than removing one instance would. That
+     same keep-or-delete decision now also governs each instance's named
+     Docker volume (where its database/uploads actually live), not just
+     its host data directory. Each call also takes the same `remove_image`
+     flag `remove_instance` does --
      `compose down` alone never removes the container image it was
      running. `uninstall_everything` itself defaults this to False (an
      opt-in library default, matching `remove_instance`'s own); it's the
@@ -276,6 +279,7 @@ class UninstallResult:
     rc_files_updated: list[Path]
     image_removed: dict[str, bool] = field(default_factory=dict)
     image_kept_reason: dict[str, str | None] = field(default_factory=dict)
+    volumes_removed: dict[str, list[str]] = field(default_factory=dict)
 
 
 def _default_rmtree(path: Path) -> None:
@@ -317,6 +321,7 @@ def uninstall_everything(
     data_kept: dict[str, bool] = {}
     image_removed: dict[str, bool] = {}
     image_kept_reason: dict[str, str | None] = {}
+    volumes_removed: dict[str, list[str]] = {}
     for instance in list_instances():
         try:
             result = remove_instance(
@@ -329,6 +334,7 @@ def uninstall_everything(
         data_kept[result.name] = result.data_kept
         image_removed[result.name] = result.image_removed
         image_kept_reason[result.name] = result.image_kept_reason
+        volumes_removed[result.name] = result.volumes_removed
 
     runtime_removed: str | None = None
     if remove_runtime:
@@ -374,6 +380,7 @@ def uninstall_everything(
         rc_files_updated=rc_files_updated,
         image_removed=image_removed,
         image_kept_reason=image_kept_reason,
+        volumes_removed=volumes_removed,
     )
 
 

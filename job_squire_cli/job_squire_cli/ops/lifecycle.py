@@ -84,6 +84,17 @@ class NoImportSourceError(LifecycleError):
     pass
 
 
+class LeftoverVolumeError(LifecycleError):
+    """A Docker/Podman named volume from a previous instance of the same
+    name still exists and the operator declined (or wasn't asked, e.g.
+    `--yes` wasn't paired with a positive default) to remove it. Raised
+    instead of silently proceeding, since `create` reusing that volume
+    means the new instance boots against the *old* database -- including
+    its old admin password -- while `data/.env` reports a freshly generated
+    one that was never actually applied (app/__init__.py's `_seed_users`
+    only seeds a user that doesn't already exist)."""
+
+
 def generate_secret_key() -> str:
     """Matches examples/.env.example's own generation command
     (`python -c "import secrets; print(secrets.token_hex(32))"`)."""
@@ -198,6 +209,7 @@ def create_instance(
     slug = sanitize_slug(name)
     if get_instance(slug) is not None:
         raise NameCollisionError(f"An instance named {slug!r} is already registered.")
+    container_name = derive_compose_project(slug)
 
     existing = list_instances()
     source: Instance | None = None
@@ -211,6 +223,38 @@ def create_instance(
         prefer_docker_desktop=prefer_docker_desktop, run=run, which=which,
     )
 
+    # A same-named instance created and later removed *with its data kept*
+    # (ops/lifecycle.py's own remove_instance, below) leaves its named
+    # volume behind on purpose -- but a fresh `create` reusing that name
+    # would otherwise silently reattach to it: the admin password generated
+    # a few lines down gets written into the new data/.env, yet the old
+    # database's admin row (with its own, different password) is what
+    # actually answers login, since app/__init__.py's `_seed_users` only
+    # seeds an account that doesn't already exist. Surface this before
+    # writing a single file, not after the operator is locked out.
+    volume_key = compose.data_volume_key(container_name)
+    leftover_volumes = compose.list_matching_volumes(chosen_runtime, volume_key, run=run)
+    if leftover_volumes:
+        joined = ", ".join(leftover_volumes)
+        proceed = confirm(
+            f"Found a leftover data volume from a previous {slug!r} instance ({joined}). "
+            f"Creating a new instance now would silently reuse that old database (including "
+            f"its old admin password) instead of starting fresh. Remove it and continue?"
+        )
+        if not proceed:
+            raise LeftoverVolumeError(
+                f"{slug!r} has a leftover Docker volume ({joined}) from a previous instance. "
+                f"Remove it yourself (e.g. `docker volume rm {leftover_volumes[0]}`) or choose "
+                f"a different instance name, then run `job-squire create` again."
+            )
+        for vol in leftover_volumes:
+            rm_result = compose.remove_volume(chosen_runtime, vol, run=run)
+            if rm_result.returncode != 0:
+                raise LeftoverVolumeError(
+                    f"Failed to remove leftover volume {vol!r}: "
+                    f"{(rm_result.stderr or rm_result.stdout).strip()}"
+                )
+
     app_port, mcp_port = ports.allocate_port_pair(existing)
 
     secret_key = generate_secret_key()
@@ -219,7 +263,6 @@ def create_instance(
 
     root = instance_root(slug, data_root)
     cookie_name = derive_cookie_name(slug)
-    container_name = derive_compose_project(slug)
 
     if mode == "local":
         public_url = f"http://localhost:{app_port}"
@@ -466,6 +509,7 @@ class RemoveResult:
     image: str | None = None
     image_removed: bool = False
     image_kept_reason: str | None = None
+    volumes_removed: list[str] = field(default_factory=list)
 
 
 def _image_still_in_use(image: str, *, data_root: Path | None) -> bool:
@@ -500,12 +544,26 @@ def remove_instance(
     remove_image: bool = False,
 ) -> RemoveResult:
     """Tear the container down, update the registry, and decide whether to
-    keep or delete the data directory. `keep_data` set explicitly skips
-    the prompt (for scripted use); left `None`, `confirm_delete` is asked
-    -- and if that's *also* not given, the safe default is to keep the
-    data, since "removing an instance never silently destroys someone's
-    job-search history" (PLAN Section 4) is the one rule that matters more
-    here than convenience.
+    keep or delete the instance's data -- both the named Docker volume
+    backing its database/uploads and the host directory (`root`) holding
+    its SECRET_KEY. `keep_data` set explicitly skips the prompt (for
+    scripted use); left `None`, `confirm_delete` is asked -- and if that's
+    *also* not given, the safe default is to keep the data, since "removing
+    an instance never silently destroys someone's job-search history"
+    (PLAN Section 4) is the one rule that matters more here than
+    convenience.
+
+    Resolving `keep_data` before tearing anything down (rather than after,
+    as this used to) is what lets it decide whether `compose down` also
+    gets `-v`: /data is a named volume, not a host bind mount
+    (ops/compose.py), so a plain `compose down` never touches it -- without
+    `-v`, deleting only `root` would leave the actual database and uploads
+    behind, the opposite of what "delete this instance's data" is supposed
+    to mean post-migration to named-volume storage. A second sweep via
+    `list_matching_volumes`/`remove_volume` runs regardless of whether
+    `compose down -v` ran at all (e.g. `root` is already missing below), so
+    a volume never survives a `keep_data=False` removal just because its
+    compose file happened to be gone already.
 
     `remove_image` (default False -- opt-in) additionally runs `rmi`
     against the instance's image once the container is down, but only if
@@ -519,6 +577,27 @@ def remove_instance(
     root = _instance_root(instance, data_root)
     container_name = derive_compose_project(instance.name)
 
+    if keep_data is None:
+        keep_data = True if confirm_delete is None else not confirm_delete(
+            f"Delete {instance.name!r}'s data? This permanently deletes the Docker volume "
+            f"backing its database and uploads, and the SECRET_KEY in its data directory at "
+            f"{root} -- it cannot be undone."
+        )
+
+    # Snapshotted *before* teardown, purely for accurate reporting: `compose
+    # down -v` below (when not keep_data) already removes this same volume
+    # in the common case, so checking again afterward would usually find
+    # nothing and wrongly report the volume as never having been touched.
+    # Comparing this snapshot against what's left once teardown/cleanup
+    # finishes is what lets `volumes_removed` reflect what actually
+    # disappeared, regardless of whether `down -v` or the sweep below is
+    # what actually removed it.
+    pre_teardown_volumes: list[str] = []
+    if not keep_data:
+        pre_teardown_volumes = compose.list_matching_volumes(
+            instance.runtime, compose.data_volume_key(container_name), run=run,
+        )
+
     # root.exists() is the same check `observe()` uses for data_dir_exists --
     # a missing root means there's no compose file and nothing for the
     # runtime to tear down (subprocess.Popen fails outright if `cwd` doesn't
@@ -530,17 +609,25 @@ def remove_instance(
             image = compose.read_image(root)
         except (OSError, compose.ComposeError):
             image = None
-        compose.compose_down(instance.runtime, root, container_name, run=run)
+        compose.compose_down(instance.runtime, root, container_name, run=run, remove_volumes=not keep_data)
     _registry_remove(instance.name)
 
-    if keep_data is None:
-        keep_data = True if confirm_delete is None else not confirm_delete(
-            f"Delete the data directory for {instance.name!r} at {root}? This permanently deletes "
-            f"the database, uploads, and SECRET_KEY -- it cannot be undone."
-        )
-
+    volumes_removed: list[str] = []
     if not keep_data:
         shutil.rmtree(root, ignore_errors=True)
+        # Belt-and-suspenders sweep: catches whatever `compose down -v`
+        # above didn't -- `root` missing so `down` never ran at all, or a
+        # runtime whose compose plugin doesn't tie the volume to project
+        # teardown the way Docker Compose does -- by looking the volume up
+        # directly instead of trusting `down -v` alone.
+        still_present = set(compose.list_matching_volumes(
+            instance.runtime, compose.data_volume_key(container_name), run=run,
+        ))
+        volumes_removed.extend(vol for vol in pre_teardown_volumes if vol not in still_present)
+        for vol in still_present:
+            rm_result = compose.remove_volume(instance.runtime, vol, run=run)
+            if rm_result.returncode == 0:
+                volumes_removed.append(vol)
 
     image_removed = False
     image_kept_reason: str | None = None
@@ -559,6 +646,7 @@ def remove_instance(
     return RemoveResult(
         name=instance.name, data_dir=root, data_kept=keep_data,
         image=image, image_removed=image_removed, image_kept_reason=image_kept_reason,
+        volumes_removed=volumes_removed,
     )
 
 

@@ -258,11 +258,14 @@ def test_uninstall_everything_deletes_data_when_keep_data_is_false(tmp_config_di
     one_dir.mkdir()
     _register("one", one_dir)
 
-    run = fake_run(ok_prefixes=[("docker", "compose")])
+    # keep_data=False also sweeps for the instance's named volume
+    # (`docker volume ls`/`rm`), on top of `compose down -v`.
+    run = fake_run(ok_prefixes=[("docker", "compose"), ("docker", "volume")])
     result = un.uninstall_everything(keep_data=False, run=run, venv_dir=tmp_path / "not-a-venv")
 
     assert result.data_kept == {"one": False}
     assert not one_dir.exists()
+    assert result.volumes_removed == {"one": []}  # nothing in fake_run's stub `volume ls` output
 
 
 def test_uninstall_everything_never_touches_runtime_by_default(tmp_config_dir, tmp_path):
@@ -363,13 +366,15 @@ def test_uninstall_everything_result_reports_data_kept_per_instance(tmp_config_d
         seen.append(msg)
         return "'a'" in msg  # delete a's data, keep b's
 
-    run = fake_run(ok_prefixes=[("docker", "compose")])
+    # "a" gets deleted, so its removal also sweeps for a named volume.
+    run = fake_run(ok_prefixes=[("docker", "compose"), ("docker", "volume")])
     result = un.uninstall_everything(
         keep_data=None, confirm_delete_data=confirm_delete, run=run, venv_dir=tmp_path / "not-a-venv",
     )
     assert result.data_kept == {"a": False, "b": True}
     assert not a_dir.exists()
     assert b_dir.exists()
+    assert result.volumes_removed == {"a": [], "b": []}
 
 
 # ── uninstall_everything: --remove-image opt-in ──────────────────────────

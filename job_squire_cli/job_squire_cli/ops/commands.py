@@ -379,7 +379,8 @@ def status(name):
 @click.command(help="Tear down an instance and update the registry.")
 @click.argument("name")
 @click.option("--keep-data/--delete-data", "keep_data", default=None,
-              help="Skip the prompt: force keep or delete the instance's data directory.")
+              help="Skip the prompt: force keep or delete the instance's data -- both its named "
+                   "Docker volume (database, uploads) and its host data directory (SECRET_KEY).")
 @click.option("--remove-image/--keep-image", "remove_image", default=False, show_default=True,
               help="Also remove the instance's container image with 'rmi' -- but only if no other "
                    "registered instance still references it. 'compose down' alone never removes "
@@ -396,6 +397,11 @@ def remove(name, keep_data, remove_image, assume_yes):
         _handle_lifecycle_error(exc)
     click.echo(f"Instance {result.name!r} removed.")
     click.echo(f"Data directory {'kept' if result.data_kept else 'deleted'}: {result.data_dir}")
+    if not result.data_kept:
+        if result.volumes_removed:
+            click.echo(f"Data volume(s) removed: {', '.join(result.volumes_removed)}")
+        else:
+            click.echo("No data volume found to remove (already gone, or never created).")
     if remove_image:
         if result.image_removed:
             click.echo(f"Image removed: {result.image}")
@@ -418,8 +424,9 @@ def remove(name, keep_data, remove_image, assume_yes):
 @click.command(help="Uninstall job-squire: remove every registered instance, optionally the "
                      "container runtime it installed, and the CLI itself.")
 @click.option("--keep-data/--delete-data", "keep_data", default=None,
-              help="Skip the per-instance prompt: force keep or delete every instance's data "
-                   "directory (database, uploads, SECRET_KEY).")
+              help="Skip the per-instance prompt: force keep or delete every instance's data -- "
+                   "both its named Docker volume (database, uploads) and its host data directory "
+                   "(SECRET_KEY).")
 @click.option("--remove-runtime/--keep-runtime", "remove_runtime", default=False, show_default=True,
               help="Also uninstall the container runtime (Podman/OrbStack/Docker Desktop) -- but "
                    "only if job-squire installed it itself; a runtime that was already working on "
@@ -480,18 +487,20 @@ def uninstall(keep_data, remove_runtime, remove_image, assume_yes):
     except uninstall_ops.UninstallError as exc:
         _fail(str(exc))
 
-    if remove_image:
-        for name in result.instances_removed:
-            line = f"  {name}: data {'kept' if result.data_kept[name] else 'deleted'}"
+    for name in result.instances_removed:
+        line = f"  {name}: data {'kept' if result.data_kept[name] else 'deleted'}"
+        if not result.data_kept[name]:
+            volumes = result.volumes_removed.get(name) or []
+            line += f", volume(s) removed: {', '.join(volumes)}" if volumes else ", no data volume found"
+        if remove_image:
             if result.image_removed.get(name):
                 line += ", image removed"
             else:
                 reason = result.image_kept_reason.get(name)
                 line += f", image kept{f' ({reason})' if reason else ''}"
-            click.echo(line)
-    else:
-        for name in result.instances_removed:
-            click.echo(f"  {name}: data {'kept' if result.data_kept[name] else 'deleted'}, image kept")
+        else:
+            line += ", image kept"
+        click.echo(line)
 
     if result.runtime_removed:
         click.echo(f"Runtime removed: {result.runtime_removed}")

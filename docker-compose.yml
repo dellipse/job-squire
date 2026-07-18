@@ -83,12 +83,16 @@ services:
     #   - swag
 
 volumes:
-  # Compose namespaces this by project (e.g. "jobsquire_job-squire-data"),
-  # so the same literal key here is safe to reuse across every job-squire
-  # instance on a host -- each instance is already its own compose project
-  # (see job_squire_cli/ops/compose.py's `-p` project flag), so there is no
-  # cross-instance collision to guard against by hand.
+  # Explicit `name:` so this volume is always literally "job-squire-data",
+  # not project-prefixed by Compose's default naming -- matches
+  # job_squire_cli/ops/compose.py's render_compose_yaml, which does the same
+  # for the same reason (see that function's comment on this). Each
+  # CLI-created instance is already its own compose project (`-p` flag), so
+  # the same literal key here is safe to reuse across every job-squire
+  # instance on a host -- there is no cross-instance collision to guard
+  # against by hand.
   job-squire-data:
+    name: job-squire-data
 
 # Uncomment if using the shared-network option above.
 # Create the network once with: docker network create <network-name>

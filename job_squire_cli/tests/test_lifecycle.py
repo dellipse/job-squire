@@ -15,13 +15,18 @@
 
 FakeRuntime stands in for `docker`/`podman` end to end: it answers
 `docker info` (runtime detection), `docker compose ... up/stop/start/
-restart/create/down` (flipping an in-memory container state keyed by
-compose project name), `docker inspect --format {{json .State}}` (reading
-that state back), `docker logs` (a per-container log buffer, the channel
-the startup guard's FATAL lines travel through), and -- since /data is a
-named Docker volume, not a host bind mount (ops/compose.py) -- `docker exec
-... python -m app.backup_cli` and `docker cp` (ops/backup.py's backup/
-restore path). Since there's no real container to hold a real volume,
+restart/create/down[/-v]` (flipping an in-memory container state keyed by
+compose project name, and tracking each project's `{project}-data` named
+volume in `self.volumes` -- created on up/create, dropped by `down -v`),
+`docker volume ls --filter name=.../rm` (ops/lifecycle.py's leftover-volume
+check on `create` and cleanup sweep on `remove`, both against that same
+`self.volumes` set), `docker inspect --format {{json .State}}` (reading
+container state back), `docker logs` (a per-container log buffer, the
+channel the startup guard's FATAL lines travel through), and -- since
+/data is a named Docker volume, not a host bind mount (ops/compose.py) --
+`docker exec ... python -m app.backup_cli` and `docker cp` (ops/backup.py's
+backup/restore path). Since there's no real container to hold a real
+volume's file contents,
 FakeRuntime keeps using the instance's own `data/` directory on the tmp_path
 filesystem as its stand-in for "whatever the named volume contains": `exec`
 tars up whatever's there (minus `.env`, mirroring app/backup_cli.py's
@@ -87,7 +92,14 @@ class FakeRuntime:
         self.fail_pulls: set[str] = set()
         self.fail_stops: set[str] = set()
         self.fail_rmi: set[str] = set()
+        self.fail_volume_rm: set[str] = set()
         self.removed_images: list[str] = []
+        # Stand-in for the real `{container_name}-data` named volume every
+        # compose "up"/"create" implicitly materializes (ops/compose.py's
+        # `data_volume_key`) -- container_name == project throughout this
+        # test module, so `f"{project}-data"` is the same literal name
+        # ops/lifecycle.py's leftover-volume check/cleanup would compute.
+        self.volumes: set[str] = set()
         self.calls: list[tuple] = []
         # Stand-in for "what the named volume contains", keyed by container
         # name -- populated whenever a compose call supplies `cwd` (create/
@@ -114,6 +126,21 @@ class FakeRuntime:
             self.removed_images.append(image)
             return SimpleNamespace(returncode=0, stdout="", stderr="")
 
+        if len(args) >= 2 and args[1] == "volume":
+            if args[2] == "ls":
+                # [runtime, "volume", "ls", "--format", "{{.Name}}", "--filter", "name=<substring>"]
+                substring = args[args.index("--filter") + 1].split("=", 1)[1]
+                matches = "\n".join(sorted(v for v in self.volumes if substring in v))
+                return SimpleNamespace(returncode=0, stdout=matches, stderr="")
+            if args[2] == "rm":
+                volume_name = args[3]
+                if volume_name in self.fail_volume_rm:
+                    return SimpleNamespace(returncode=1, stdout="", stderr=f"error removing {volume_name}")
+                if volume_name in self.volumes:
+                    self.volumes.discard(volume_name)
+                    return SimpleNamespace(returncode=0, stdout="", stderr="")
+                return SimpleNamespace(returncode=1, stdout="", stderr=f"no such volume: {volume_name}")
+
         if len(args) >= 2 and args[1] == "compose":
             project = args[args.index("-p") + 1]
             cwd = kwargs.get("cwd")
@@ -127,8 +154,10 @@ class FakeRuntime:
                 self._on_stop(project)
             elif args[-1] in ("start", "restart"):
                 self._on_up(project, cwd)
-            elif args[-1] == "down":
+            elif "down" in args:
                 self.containers.pop(project, None)
+                if "-v" in args:
+                    self.volumes.discard(f"{project}-data")
             return SimpleNamespace(returncode=0, stdout="", stderr="")
 
         if len(args) >= 2 and args[1] == "inspect":
@@ -193,10 +222,12 @@ class FakeRuntime:
     def _on_create(self, project, cwd):
         if project not in self.containers:
             self.containers[project] = {"Status": "created"}
+        self.volumes.add(f"{project}-data")
         if cwd is not None:
             self.data_dirs[project] = paths.data_dir(Path(cwd))
 
     def _on_up(self, project, cwd):
+        self.volumes.add(f"{project}-data")
         if project in self.fail_projects:
             self.containers[project] = {"Status": "exited", "ExitCode": 1}
             self.logs[project] = (
@@ -283,6 +314,53 @@ def test_create_never_prompts_for_runtime_install_when_one_already_works(fake, d
     lc.create_instance(name="castelo", mode="local", data_root=data_root, **create_kwargs(fake))
     assert ("docker", "info") in fake.calls
     assert not any("brew" in call or "apt-get" in call for call in fake.calls)
+
+
+# ── create: leftover volume from a same-named, data-kept removal ────────
+
+
+def test_create_detects_leftover_volume_and_removes_it_when_confirmed(fake, data_root):
+    lc.create_instance(name="castelo", mode="local", data_root=data_root, **create_kwargs(fake))
+    lc.remove_instance("castelo", data_root=data_root, run=fake.run, keep_data=True)
+    assert reg.get_instance("castelo") is None
+    assert "job-squire-castelo-data" in fake.volumes  # left behind on purpose by keep_data=True
+
+    prompts = []
+
+    def confirm(msg):
+        prompts.append(msg)
+        return True
+
+    result = lc.create_instance(
+        name="castelo", mode="local", data_root=data_root, **create_kwargs(fake, confirm=confirm),
+    )
+
+    assert any("leftover" in p.lower() and "castelo" in p for p in prompts)
+    assert reg.get_instance("castelo") == result.instance
+    # The old volume was removed before the new instance stood its own back up.
+    assert "job-squire-castelo-data" in fake.volumes  # recreated fresh by this second create's own up
+
+
+def test_create_leftover_volume_declined_raises_and_registers_nothing(fake, data_root):
+    lc.create_instance(name="castelo", mode="local", data_root=data_root, **create_kwargs(fake))
+    lc.remove_instance("castelo", data_root=data_root, run=fake.run, keep_data=True)
+    assert "job-squire-castelo-data" in fake.volumes
+
+    with pytest.raises(lc.LeftoverVolumeError, match="castelo"):
+        lc.create_instance(
+            name="castelo", mode="local", data_root=data_root, **create_kwargs(fake, confirm=lambda _msg: False),
+        )
+
+    assert reg.get_instance("castelo") is None
+    assert "job-squire-castelo-data" in fake.volumes  # declined -- left exactly as it was
+
+
+def test_create_with_no_leftover_volume_never_prompts_about_one(fake, data_root):
+    def exploding_confirm(msg):
+        raise AssertionError(f"should never be asked about a volume that doesn't exist: {msg}")
+
+    lc.create_instance(name="castelo", mode="local", data_root=data_root, **create_kwargs(fake, confirm=exploding_confirm))
+    assert reg.get_instance("castelo") is not None
 
 
 # ── create: name collisions fail fast, before any side effects ──────────
@@ -438,6 +516,49 @@ def test_remove_instance_with_already_missing_root_skips_compose_down(fake, data
     assert result.data_kept is True
     assert reg.get_instance("castelo") is None
     assert not any(call[-1] == "down" for call in fake.calls)
+
+
+# ── remove: the named data volume follows keep_data, not just the host dir ──
+
+
+def test_remove_deletes_data_also_removes_the_named_volume(fake, data_root):
+    lc.create_instance(name="castelo", mode="local", data_root=data_root, **create_kwargs(fake))
+    assert "job-squire-castelo-data" in fake.volumes
+
+    result = lc.remove_instance(
+        "castelo", data_root=data_root, run=fake.run, confirm_delete=lambda _msg: True,
+    )
+    assert result.data_kept is False
+    assert result.volumes_removed == ["job-squire-castelo-data"]
+    assert "job-squire-castelo-data" not in fake.volumes
+
+
+def test_remove_keeps_data_leaves_the_named_volume_alone(fake, data_root):
+    lc.create_instance(name="castelo", mode="local", data_root=data_root, **create_kwargs(fake))
+
+    result = lc.remove_instance(
+        "castelo", data_root=data_root, run=fake.run, confirm_delete=lambda _msg: False,
+    )
+    assert result.data_kept is True
+    assert result.volumes_removed == []
+    assert "job-squire-castelo-data" in fake.volumes
+
+
+def test_remove_with_missing_root_still_sweeps_for_a_leftover_volume(fake, data_root):
+    """The volume is a separate Docker-daemon-managed resource from the host
+    `root` directory -- if `root` was already deleted out from under the
+    registry (see test_remove_instance_with_already_missing_root_skips_
+    compose_down), `compose down -v` never runs (no compose file to point
+    it at), but the volume can still be found and removed directly."""
+    lc.create_instance(name="castelo", mode="local", data_root=data_root, **create_kwargs(fake))
+    root = paths.instance_root("castelo", data_root)
+    shutil.rmtree(root)
+    assert "job-squire-castelo-data" in fake.volumes
+
+    result = lc.remove_instance("castelo", data_root=data_root, run=fake.run, keep_data=False)
+
+    assert result.volumes_removed == ["job-squire-castelo-data"]
+    assert "job-squire-castelo-data" not in fake.volumes
 
 
 # ── remove: --remove-image (opt-in image cleanup) ────────────────────────
