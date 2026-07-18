@@ -267,4 +267,15 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add sbom/job-squire.cdx.json
           git commit -m "CHORE: Update SBOM (${{ env.SHORT_SHA }}) [skip ci]"
-          git push origin HEAD:main
+          # release.yml's "Stamp CLI version and commit" step can also push
+          # to main off the same triggering push (whenever that push touched
+          # VERSION), racing this one -- confirmed 2026-07-17 when both
+          # workflows ran concurrently off one push and this step lost the
+          # race with a plain non-fast-forward rejection. Retry with a
+          # fetch+rebase instead of failing the whole build over a
+          # same-second push collision.
+          for _ in 1 2 3 4 5; do
+            git push origin HEAD:main && break
+            git fetch origin main
+            git rebase origin/main
+          done

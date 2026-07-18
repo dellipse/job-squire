@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows the `VERSION` file at the repo root, displayed in the app
 footer as `<VERSION>-<build-sha>`.
 
+## [Unreleased]
+
+### Fixed
+
+- `ci.yml`'s "Commit SBOM if changed" step and `release.yml`'s new "Stamp CLI version and commit"
+  step (0.7.11) can both push to `main` off the same triggering push whenever it touches
+  `VERSION` -- observed immediately when 0.7.11 shipped: `release.yml` landed its stamp commit
+  first, and `ci.yml`'s SBOM push then failed with a plain non-fast-forward rejection. Both steps
+  now retry with a `fetch` + `rebase` on push failure instead of failing the whole workflow over a
+  same-second collision.
+
 ## [0.7.11] - 2026-07-17
 
 ### Fixed

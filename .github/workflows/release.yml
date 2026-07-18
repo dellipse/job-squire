@@ -105,7 +105,16 @@ jobs:
             echo "job_squire_cli/pyproject.toml already stamped correctly -- nothing to commit."
           else
             git commit -m "CHORE: Stamp job-squire-cli version for v${VERSION} [skip ci]"
-            git push origin HEAD:main
+            # ci.yml's "Commit SBOM if changed" step runs off this same
+            # triggering push and can also land on main first, racing this
+            # push -- confirmed 2026-07-17 (both workflows fire together
+            # whenever a push touches VERSION). Retry with a fetch+rebase
+            # instead of failing the release over a same-second collision.
+            for _ in 1 2 3 4 5; do
+              git push origin HEAD:main && break
+              git fetch origin main
+              git rebase origin/main
+            done
           fi
           echo "RELEASE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
 
