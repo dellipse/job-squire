@@ -232,7 +232,15 @@ def _run_search_locked(trigger="manual"):
     """Inner search logic — called only when the run lock is held."""
     secret_key = current_app.config["SECRET_KEY"]
     cfg_row = db.session.get(SearchConfig, 1)
-    if not cfg_row or not cfg_row.enabled:
+    if not cfg_row:
+        return None
+    # `enabled` is the "Automated search (3x/day on weekdays)" toggle -- it
+    # governs the scheduler only. A manual run (the "Run first search now"
+    # button and Settings -> Run, both trigger="manual") must execute even when
+    # automated search is off; otherwise run_search() returns here without ever
+    # creating a "running" SearchRun row, and the Getting Started page polls
+    # forever for a run that never appears (no stopwatch, no update, no finish).
+    if trigger == "scheduled" and not cfg_row.enabled:
         return None
     titles = cfg_row.title_list
     if not titles:

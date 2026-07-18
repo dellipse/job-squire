@@ -125,6 +125,50 @@ def test_progress_is_committed_incrementally_mid_run(app, monkeypatch, two_provi
         assert result.found == 2
 
 
+def test_manual_run_executes_with_automated_search_off(
+    app, monkeypatch, two_providers_enabled
+):
+    """Regression: the "Run first search now" button (trigger="manual") must
+    create a SearchRun and execute even when the "Automated search (3x/day)"
+    toggle (SearchConfig.enabled) is off. Previously run_search() returned None
+    immediately here, so no "running" row was ever created and the Getting
+    Started page polled forever -- no stopwatch, no update, no finish."""
+    monkeypatch.setattr(
+        "app.search.search_provider",
+        lambda provider, creds, titles, cfg: ([], None),
+    )
+
+    with app.app_context():
+        cfg = db.session.get(SearchConfig, 1)
+        cfg.enabled = False  # automated schedule OFF
+        commit()
+
+        result = _run_search_locked(trigger="manual")
+        assert result is not None, "manual run must not be gated on the schedule toggle"
+        assert result.status == "ok"
+
+
+def test_scheduled_run_still_respects_automated_search_toggle(
+    app, monkeypatch, two_providers_enabled
+):
+    """The scheduler must keep honoring SearchConfig.enabled: with automated
+    search off, a scheduled trigger is a no-op (returns None, no row)."""
+    called = []
+    monkeypatch.setattr(
+        "app.search.search_provider",
+        lambda provider, creds, titles, cfg: called.append(provider) or ([], None),
+    )
+
+    with app.app_context():
+        cfg = db.session.get(SearchConfig, 1)
+        cfg.enabled = False
+        commit()
+
+        result = _run_search_locked(trigger="scheduled")
+        assert result is None, "scheduled run must skip when automated search is off"
+        assert called == [], "no provider should be queried on a skipped scheduled run"
+
+
 def test_progress_message_names_current_provider(app, monkeypatch, two_providers_enabled):
     """The live detail shown mid-run should be a human-readable one-liner
     naming the provider currently being searched, not a generic placeholder,

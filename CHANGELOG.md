@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows the `VERSION` file at the repo root, displayed in the app
 footer as `<VERSION>-<build-sha>`.
 
+## [Unreleased]
+
+### Fixed
+
+- Getting Started's "Run first search now" button silently did nothing when the "Automated search
+  (3x/day on weekdays)" toggle was left off. The button appears whenever search targets, a location,
+  and at least one job board are set, independent of that toggle, but `_run_search_locked()` returned
+  early on `not SearchConfig.enabled` before creating a `SearchRun` row. The background thread
+  therefore no-op'd, no "running" row ever appeared, and the Getting Started page polled in the
+  "unconfirmed" state until it gave up: no stopwatch, no update, no finish. The `enabled` flag governs
+  the automated scheduler only, so the gate is now scoped to `trigger == "scheduled"`; a manual run
+  (the button and Settings -> Run) always executes. Regression tests added for both paths.
+
 ## [0.7.14] - 2026-07-18
 
 ### Fixed
