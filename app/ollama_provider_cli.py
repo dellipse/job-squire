@@ -61,18 +61,44 @@ class OllamaProviderCliError(RuntimeError):
     """Raised for a malformed request or a write failure."""
 
 
+def _openai_compat_base_url(base_url: str) -> str:
+    """Normalize a bare Ollama host (e.g. "http://host.docker.internal:11434",
+    what job_squire_cli's OLLAMA_DEFAULT_HOST/OLLAMA_CONTAINER_HOST and its
+    --base-url flag naturally produce) into the OpenAI-compatible base
+    app/ai.py's call_openai_compat() actually needs.
+
+    call_openai_compat() always does `base_url.rstrip("/") + "/chat/completions"`.
+    Ollama only serves that route under `/v1` (`/v1/chat/completions`) --
+    plain `/chat/completions` 404s with Ollama's raw Go "404 page not found"
+    text, not JSON, since no route matches at all. job_squire_cli's own
+    round-trip test (ops/ollama_assist.py's test_roundtrip()) hits Ollama's
+    *native* `/api/generate` endpoint directly on the bare host and so
+    reports success even when the stored base_url is missing `/v1` --
+    masking exactly this failure until a real triage/analysis call hits it
+    in the app. Idempotent so it's safe whether the caller already appended
+    `/v1` (e.g. an operator who copied one of app/ai.py's _PROVIDER_URLS
+    defaults into --base-url) or not.
+    """
+    normalized = base_url.rstrip("/")
+    if not normalized.endswith("/v1"):
+        normalized += "/v1"
+    return normalized
+
+
 def write_provider_row(db_path: str, payload: dict) -> bool:
     """Same statements job_squire_cli's write_provider_config() used to run
     directly against a host path -- moved here unchanged except for where
-    the database file is found. Returns whether ai_config.api_enabled was
-    actually flipped (see that function's original docstring for why a
-    missing/unseeded ai_config row only warns rather than raising)."""
+    the database file is found, and for normalizing base_url through
+    _openai_compat_base_url() before it's stored (see that function's
+    docstring). Returns whether ai_config.api_enabled was actually flipped
+    (see that function's original docstring for why a missing/unseeded
+    ai_config row only warns rather than raising)."""
     if not os.path.exists(db_path):
         raise OllamaProviderCliError(
             f"Database not found at {db_path} inside the container. This shouldn't happen if the "
             f"container is up -- the app creates its schema on first boot."
         )
-    base_url = payload["base_url"]
+    base_url = _openai_compat_base_url(payload["base_url"])
     triage_model = payload["triage_model"]
     analysis_model = payload["analysis_model"]
     num_ctx = payload.get("num_ctx")

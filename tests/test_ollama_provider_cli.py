@@ -19,7 +19,7 @@ import sys
 
 import pytest
 
-from app.ollama_provider_cli import OllamaProviderCliError, main, write_provider_row
+from app.ollama_provider_cli import OllamaProviderCliError, _openai_compat_base_url, main, write_provider_row
 
 _SCHEMA = """
 CREATE TABLE ai_provider_configs (
@@ -31,6 +31,13 @@ CREATE TABLE ai_config (id INTEGER PRIMARY KEY, api_enabled BOOLEAN DEFAULT 0);
 INSERT INTO ai_config (id, api_enabled) VALUES (1, 0);
 """
 
+# Deliberately the bare host job_squire_cli's OLLAMA_CONTAINER_HOST/
+# OLLAMA_DEFAULT_HOST naturally produce -- no /v1. write_provider_row must
+# normalize this before it's stored: app/ai.py's call_openai_compat() always
+# does `base_url.rstrip("/") + "/chat/completions"`, and Ollama only serves
+# that route under /v1 -- a bare host 404s with Ollama's raw
+# "404 page not found" text (see test_write_provider_row_appends_v1_suffix_
+# to_bare_host below, and _openai_compat_base_url's docstring).
 _PAYLOAD = {
     "base_url": "http://host.docker.internal:11434",
     "triage_model": "qwen3:8b",
@@ -40,6 +47,7 @@ _PAYLOAD = {
     "enabled": True,
     "enable_automatic_features": True,
 }
+_EXPECTED_BASE_URL = "http://host.docker.internal:11434/v1"
 
 
 def _make_db(tmp_path, schema=_SCHEMA):
@@ -64,7 +72,7 @@ def test_write_provider_row_inserts_new_row(tmp_path):
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     row = conn.execute("SELECT * FROM ai_provider_configs WHERE provider = 'ollama'").fetchone()
-    assert row["base_url"] == _PAYLOAD["base_url"]
+    assert row["base_url"] == _EXPECTED_BASE_URL
     assert row["triage_model"] == "qwen3:8b"
     assert row["model"] == "gemma4:12b"
     assert row["num_ctx"] == 16384
@@ -72,6 +80,49 @@ def test_write_provider_row_inserts_new_row(tmp_path):
     assert row["rank"] == 1
     ai_cfg = conn.execute("SELECT api_enabled FROM ai_config WHERE id = 1").fetchone()
     assert ai_cfg[0] == 1
+
+
+def test_write_provider_row_appends_v1_suffix_to_bare_host(tmp_path):
+    """Regression test for the Triage Batch 404 -- 'ollama setup' used to
+    write the bare host straight into ai_provider_configs.base_url, so every
+    call through app/ai.py's call_openai_compat() 404'd against
+    "<host>/chat/completions" (Ollama only serves that route under /v1).
+    write_provider_row must normalize to "<host>/v1" before storing."""
+    db_path = _make_db(tmp_path)
+    write_provider_row(str(db_path), _PAYLOAD)
+
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("SELECT base_url FROM ai_provider_configs WHERE provider = 'ollama'").fetchone()
+    assert row["base_url"] == "http://host.docker.internal:11434/v1"
+
+
+def test_write_provider_row_does_not_double_suffix_already_v1_base_url(tmp_path):
+    """An operator-supplied --base-url that already ends in /v1 (e.g. copied
+    from one of app/ai.py's _PROVIDER_URLS defaults) must not become
+    ".../v1/v1"."""
+    db_path = _make_db(tmp_path)
+    payload = dict(_PAYLOAD, base_url="http://192.168.1.50:11434/v1")
+    write_provider_row(str(db_path), payload)
+
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("SELECT base_url FROM ai_provider_configs WHERE provider = 'ollama'").fetchone()
+    assert row["base_url"] == "http://192.168.1.50:11434/v1"
+
+
+def test_openai_compat_base_url_appends_v1_to_bare_host():
+    assert _openai_compat_base_url("http://host.docker.internal:11434") == \
+        "http://host.docker.internal:11434/v1"
+
+
+def test_openai_compat_base_url_strips_trailing_slash_before_appending():
+    assert _openai_compat_base_url("http://localhost:11434/") == "http://localhost:11434/v1"
+
+
+def test_openai_compat_base_url_is_idempotent_when_already_suffixed():
+    assert _openai_compat_base_url("http://localhost:11434/v1") == "http://localhost:11434/v1"
+    assert _openai_compat_base_url("http://localhost:11434/v1/") == "http://localhost:11434/v1"
 
 
 def test_write_provider_row_updates_existing_row_in_place(tmp_path):
@@ -125,7 +176,7 @@ def test_write_provider_row_warns_without_crashing_when_ai_config_missing(tmp_pa
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     row = conn.execute("SELECT * FROM ai_provider_configs WHERE provider = 'ollama'").fetchone()
-    assert row["base_url"] == _PAYLOAD["base_url"]  # provider row still written
+    assert row["base_url"] == _EXPECTED_BASE_URL  # provider row still written
 
 
 # ── main() -- the stdin/stdout process boundary docker/podman exec drives ──
@@ -143,7 +194,7 @@ def test_main_reads_stdin_writes_json_result(tmp_path, monkeypatch, capsys):
     assert result == {"automatic_features_enabled": True}
     conn = sqlite3.connect(str(db_path))
     row = conn.execute("SELECT base_url FROM ai_provider_configs WHERE provider = 'ollama'").fetchone()
-    assert row[0] == _PAYLOAD["base_url"]
+    assert row[0] == _EXPECTED_BASE_URL
 
 
 def test_main_reports_malformed_stdin_on_stderr(tmp_path, monkeypatch, capsys):

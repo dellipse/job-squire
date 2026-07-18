@@ -748,8 +748,13 @@ def test_run_setup_full_chain_real_writes(tmp_path, monkeypatch):
     conn.row_factory = sqlite3.Row
     row = conn.execute("SELECT * FROM ai_provider_configs WHERE provider = 'ollama'").fetchone()
     # Default base_url is the container-reachable address, never plain
-    # "localhost" (that only resolves to the container itself).
-    assert row["base_url"] == oa.OLLAMA_CONTAINER_HOST
+    # "localhost" (that only resolves to the container itself) -- and always
+    # /v1-suffixed: app/ai.py's call_openai_compat() does
+    # `base_url.rstrip("/") + "/chat/completions"`, and Ollama only serves
+    # that route under /v1 (bare "/chat/completions" 404s with Ollama's raw
+    # "404 page not found" text). See test_run_setup_writes_v1_suffixed_base_url
+    # below for the regression this guards.
+    assert row["base_url"] == oa.OLLAMA_CONTAINER_HOST + "/v1"
     # The *derived* (context-sized) model names are what get written -- not the base tags.
     assert row["triage_model"] == "qwen3:8b-ctx16384"
     assert row["model"] == "gemma4:12b-ctx16384"
@@ -758,7 +763,7 @@ def test_run_setup_full_chain_real_writes(tmp_path, monkeypatch):
     ai_cfg_row = conn.execute("SELECT api_enabled FROM ai_config WHERE id = 1").fetchone()
     assert ai_cfg_row[0] == 1  # Automatic AI Features enabled by default
     assert result.automatic_features_enabled is True
-    assert result.base_url == oa.OLLAMA_CONTAINER_HOST
+    assert result.base_url == oa.OLLAMA_CONTAINER_HOST + "/v1"
 
 
 def test_run_setup_roundtrip_tests_localhost_not_container_host_by_default(tmp_path, monkeypatch):
@@ -812,6 +817,81 @@ def test_run_setup_roundtrip_tests_explicit_base_url_override_as_given(tmp_path,
                  which=which_map({"ollama": "/usr/local/bin/ollama"}), confirm=lambda _: True)
 
     assert captured["base_url"] == "http://192.168.1.50:11434"
+
+
+# ── /v1 suffix regression (base_url must be OpenAI-compat, not the bare host) ─
+#
+# `job-squire ollama setup` used to write the bare Ollama host (e.g.
+# "http://host.docker.internal:11434") straight into ai_provider_configs.base_url.
+# app/ai.py's call_openai_compat() always does
+# `base_url.rstrip("/") + "/chat/completions"`, and Ollama only serves that
+# route under `/v1` -- so every triage/analysis call against a freshly
+# `ollama setup`-configured provider 404'd with Ollama's raw
+# "404 page not found" text (Triage Batch in the app surfaced this as
+# "404 Not Found from ollama: 404 page not found"). The CLI's own
+# `--skip-test`-guarded round-trip check didn't catch it because
+# test_roundtrip() deliberately hits Ollama's *native* /api/generate on the
+# bare host, a route that exists with or without the /v1 bug -- so `ollama
+# setup` reported success right up until the app tried to actually use the
+# provider it had just configured.
+
+
+def test_openai_compat_base_url_appends_v1_to_bare_host():
+    assert oa._openai_compat_base_url("http://host.docker.internal:11434") == \
+        "http://host.docker.internal:11434/v1"
+
+
+def test_openai_compat_base_url_strips_trailing_slash_before_appending():
+    assert oa._openai_compat_base_url("http://localhost:11434/") == "http://localhost:11434/v1"
+
+
+def test_openai_compat_base_url_is_idempotent_when_already_suffixed():
+    """An operator who copies one of app/ai.py's _PROVIDER_URLS defaults
+    (all already /v1-suffixed) into --base-url must not get a doubled
+    "/v1/v1"."""
+    assert oa._openai_compat_base_url("http://localhost:11434/v1") == "http://localhost:11434/v1"
+    assert oa._openai_compat_base_url("http://localhost:11434/v1/") == "http://localhost:11434/v1"
+
+
+def test_run_setup_writes_v1_suffixed_base_url_for_explicit_override(tmp_path, monkeypatch):
+    """The same normalization applies to an operator-supplied --base-url
+    (e.g. Ollama on another machine), not just the OLLAMA_CONTAINER_HOST
+    default -- covered separately from test_run_setup_full_chain_real_writes
+    (which only exercises the default) since this is the exact case an
+    operator following --base-url's own --help text would hit."""
+    root = tmp_path / "castelo"
+    db_path = _make_instance_db(root)
+    monkeypatch.setattr(oa, "detect_host_capabilities", lambda **kwargs: _caps(ram_gb=16, apple_silicon=True))
+    monkeypatch.setattr(oa, "test_roundtrip", lambda base_url, model, **kwargs: (True, "ok"))
+    run = container_fake_run(db_path, ok_prefixes=[
+        ("ollama", "pull", "qwen3:8b"), ("ollama", "pull", "gemma4:12b"),
+        ("ollama", "create", "qwen3:8b-ctx16384"), ("ollama", "create", "gemma4:12b-ctx16384"),
+    ])
+
+    result = oa.run_setup(root, runtime="docker", container_name=_CONTAINER_NAME,
+                           base_url="http://192.168.1.50:11434", run=run,
+                           which=which_map({"ollama": "/usr/local/bin/ollama"}), confirm=lambda _: True)
+
+    assert result.base_url == "http://192.168.1.50:11434/v1"
+    conn = sqlite3.connect(str(paths.sqlite_db_path(root)))
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("SELECT base_url FROM ai_provider_configs WHERE provider = 'ollama'").fetchone()
+    assert row["base_url"] == "http://192.168.1.50:11434/v1"
+
+
+def test_run_setup_dry_run_echoes_v1_suffixed_base_url(tmp_path, monkeypatch, capsys):
+    """The dry-run preview must show the value that would actually be
+    written, not the bare host -- otherwise --dry-run output silently lies
+    about what `ollama setup` is about to do."""
+    root = tmp_path / "castelo"
+    monkeypatch.setattr(oa, "detect_host_capabilities", lambda **kwargs: _caps(ram_gb=16, apple_silicon=True))
+
+    oa.run_setup(root, runtime="docker", container_name=_CONTAINER_NAME, run=fake_run(),
+                 which=which_map({}), dry_run=True, confirm=lambda _: True)
+
+    out = capsys.readouterr().out
+    assert f"base_url={oa.OLLAMA_CONTAINER_HOST}/v1" in out
+    assert f"base_url={oa.OLLAMA_CONTAINER_HOST}," not in out  # not the unsuffixed bare host
 
 
 def test_run_setup_can_skip_enabling_automatic_features(tmp_path, monkeypatch):

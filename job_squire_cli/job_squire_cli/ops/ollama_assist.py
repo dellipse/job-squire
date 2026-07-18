@@ -112,6 +112,28 @@ class OllamaAssistError(RuntimeError):
     """Raised for detection/install/pull/configure/test failures."""
 
 
+def _openai_compat_base_url(base_url: str) -> str:
+    """Normalize a bare Ollama host (OLLAMA_DEFAULT_HOST/OLLAMA_CONTAINER_HOST
+    above, or an operator's --base-url) into the OpenAI-compatible base
+    app/ai.py's call_openai_compat() needs -- it always does
+    `base_url.rstrip("/") + "/chat/completions"`, and Ollama only serves
+    that route under `/v1`. Duplicated from app/ollama_provider_cli.py's
+    identical helper (same fix, same reasoning) rather than imported: this
+    package deliberately never imports the app package (module docstring's
+    "depends on nothing but click + cryptography"). Used here so run_setup's
+    dry-run echo and SetupResult.base_url show the value that's actually
+    written, matching what write_provider_config's own normalization (the
+    real fix, in app/ollama_provider_cli.py) persists -- this call site by
+    itself would still be safe even without that app-side fix, but keeping
+    both means neither one is a silent single point of failure for the
+    other. Idempotent: safe to call on a value that already ends in `/v1`.
+    """
+    normalized = base_url.rstrip("/")
+    if not normalized.endswith("/v1"):
+        normalized += "/v1"
+    return normalized
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -775,7 +797,8 @@ class SetupResult:
     models_pulled: list[str]
     models_derived: dict[str, str]  # base tag -> context-sized derived model name
     num_ctx: int | None
-    base_url: str  # the effective value -- reflects the OLLAMA_CONTAINER_HOST default when the caller passed None
+    base_url: str  # the effective, /v1-normalized value actually written to ai_provider_configs --
+                    # reflects the OLLAMA_CONTAINER_HOST default when the caller passed None
     provider_configured: bool
     automatic_features_enabled: bool
     roundtrip_ok: bool | None
@@ -882,11 +905,19 @@ def run_setup(
     effective_triage = models_derived.get(base_triage, base_triage)
     effective_analysis = models_derived.get(base_analysis, base_analysis)
 
+    # write_provider_config (via app/ollama_provider_cli.py) normalizes this
+    # itself too -- idempotently -- but computing it here as well means the
+    # dry-run echo and SetupResult.base_url (both host-side, never touch the
+    # container) show the value that's actually written instead of the bare
+    # host. See _openai_compat_base_url()'s docstring for why the /v1 suffix
+    # matters and why test_roundtrip() below deliberately does NOT use it.
+    effective_base_url = _openai_compat_base_url(base_url)
+
     provider_configured = False
     automatic_features_enabled = False
     if dry_run:
         click.echo(
-            f"  (dry-run) write ai_provider_configs row: base_url={base_url}, "
+            f"  (dry-run) write ai_provider_configs row: base_url={effective_base_url}, "
             f"triage_model={effective_triage}, analysis_model={effective_analysis}, "
             f"num_ctx={effective_num_ctx}"
         )
@@ -894,7 +925,7 @@ def run_setup(
             click.echo("  (dry-run) enable Automatic AI Features (ai_config.api_enabled = 1)")
     else:
         automatic_features_enabled = write_provider_config(
-            root, runtime=runtime, container_name=container_name, base_url=base_url,
+            root, runtime=runtime, container_name=container_name, base_url=effective_base_url,
             triage_model=effective_triage, analysis_model=effective_analysis,
             num_ctx=effective_num_ctx if not skip_derive else None, rank=rank,
             enable_automatic_features=enable_automatic_features, run=run,
@@ -909,7 +940,10 @@ def run_setup(
         # default (unresolvable from bare host in the common case). A
         # caller-supplied base_url pointing at a real network address (a
         # different machine) is assumed reachable from here too and is
-        # tested as given.
+        # tested as given. Deliberately compared/tested against the *raw*
+        # base_url, not effective_base_url -- test_roundtrip() hits Ollama's
+        # native /api/generate endpoint, which lives at the bare host, not
+        # under /v1.
         test_target = OLLAMA_DEFAULT_HOST if base_url == OLLAMA_CONTAINER_HOST else base_url
         roundtrip_ok, roundtrip_detail = test_roundtrip(test_target, effective_triage)
 
@@ -921,7 +955,7 @@ def run_setup(
         models_pulled=models_pulled,
         models_derived=models_derived,
         num_ctx=effective_num_ctx if not skip_derive else None,
-        base_url=base_url,
+        base_url=effective_base_url,
         provider_configured=provider_configured,
         automatic_features_enabled=automatic_features_enabled,
         roundtrip_ok=roundtrip_ok,
