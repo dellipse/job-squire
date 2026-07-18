@@ -23,6 +23,7 @@ import threading
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from functools import wraps
+from urllib.parse import urlsplit
 
 import markdown as markdown_lib
 
@@ -2604,6 +2605,20 @@ _VALID_PROVIDER_TYPES = {
 }
 
 
+def _valid_ai_base_url(raw: str) -> bool:
+    """Restrict a custom AI provider base URL to http(s) with a host.
+
+    This only narrows the scheme (blocks file://, gopher://, and similar) —
+    it deliberately does NOT block private/loopback/LAN hosts, since this
+    field exists precisely so an admin can point at a self-hosted
+    OpenAI-compatible endpoint (Ollama, LiteLLM, an internal server), often
+    on localhost or the LAN. Full SSRF hardening isn't appropriate here: the
+    field is admin-only (see @admin_required below) and the intended targets
+    are private-network addresses. See security alert #214."""
+    parsed = urlsplit(raw)
+    return parsed.scheme in ("http", "https") and bool(parsed.netloc)
+
+
 @main_bp.route("/settings/ai/providers/add", methods=["POST"])
 @login_required
 @admin_required
@@ -2616,6 +2631,9 @@ def ai_provider_add():
     label = request.form.get("label", "").strip()
     api_key = request.form.get("api_key", "").strip()
     base_url = request.form.get("base_url", "").strip()
+    if base_url and not _valid_ai_base_url(base_url):
+        flash("Base URL must be a valid http:// or https:// address.", "danger")
+        return redirect(url_for("main.settings") + "#tab-claude")
     model = request.form.get("model", "").strip()
     triage_model = request.form.get("triage_model", "").strip()
     num_ctx_raw = request.form.get("num_ctx", "").strip()
@@ -2660,6 +2678,9 @@ def ai_provider_edit(pid):
         p.api_key_enc = encrypt(secret, api_key)
     base_url = request.form.get("base_url", "").strip()
     if base_url:
+        if not _valid_ai_base_url(base_url):
+            flash("Base URL must be a valid http:// or https:// address.", "danger")
+            return redirect(url_for("main.settings") + "#tab-claude")
         p.base_url = base_url
     p.model = request.form.get("model", "").strip()
     p.triage_model = request.form.get("triage_model", "").strip()
@@ -3034,11 +3055,21 @@ def settings():
 def _safe_next(default_url: str) -> str:
     """Honor a relative `next` form field so onboarding pages can reuse settings
     POST routes and return to the walkthrough. Relative paths only — anything
-    absolute (scheme or protocol-relative) is ignored to avoid open redirects."""
+    absolute (scheme or protocol-relative) is ignored to avoid open redirects.
+
+    Uses urlsplit() rather than a raw startswith() check: some browsers
+    normalize a leading "/\\" to "//" when resolving a URL, so a naive
+    "starts with / but not //" test lets "/\\evil.com" slip through as a
+    protocol-relative redirect. Parsing the URL and requiring an empty
+    scheme/netloc closes that, and is the pattern CodeQL recognizes as a
+    sanitizer for py/url-redirection (see security alerts #182-213)."""
     nxt = (request.form.get("next") or "").strip()
-    if nxt.startswith("/") and not nxt.startswith("//"):
-        return nxt
-    return default_url
+    if not nxt or "\\" in nxt:
+        return default_url
+    parsed = urlsplit(nxt)
+    if parsed.scheme or parsed.netloc or not parsed.path.startswith("/"):
+        return default_url
+    return nxt
 
 
 @main_bp.route("/settings/search", methods=["POST"])

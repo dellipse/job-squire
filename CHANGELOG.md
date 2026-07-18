@@ -8,6 +8,21 @@ footer as `<VERSION>-<build-sha>`.
 
 ## [Unreleased]
 
+## [0.7.18] - 2026-07-18
+
+### Fixed
+
+- Closed 14 CodeQL open-redirect findings (`py/url-redirection`) by rewriting the shared
+  `_safe_next()` helper in `app/main.py` to parse the `next` form field with `urlsplit()` instead
+  of a raw `startswith()` check. The old check only rejected values starting with `//`, missing a
+  known bypass where some browsers normalize a leading `/\` to `//` and treat the result as a
+  protocol-relative redirect. All 14 call sites route through this one helper.
+- Hardened the AI Provider `base_url` field (`app/main.py`, `ai_provider_add`/`ai_provider_edit`)
+  against a CodeQL SSRF finding (`py/full-ssrf`) by restricting it to `http`/`https` URLs with a
+  host. Private/loopback/LAN addresses are still allowed on purpose — this field exists so an
+  admin can point at a self-hosted OpenAI-compatible endpoint (Ollama, LiteLLM, an internal
+  server), often on localhost or the LAN.
+
 ## [0.7.17] - 2026-07-18
 
 ### Added
