@@ -70,6 +70,28 @@ _PROVIDER_EXTRA_HEADERS = {
 # HTTP status codes that mean "transient capacity problem — try the next provider".
 _FALLBACK_STATUS_CODES = {429, 503, 529}
 
+# Per-request HTTP read timeouts (seconds). Cloud providers respond quickly, so a
+# short timeout keeps a stalled provider from blocking the ranked-chain fallback.
+# Local providers (Ollama/LiteLLM) *generate* the whole response on the user's own
+# hardware, which for a multi-job triage prompt can take minutes — the 55s cloud
+# value would abort a perfectly healthy run mid-generation. Both are overridable via
+# env so an operator can tune for their box.
+_CLOUD_HTTP_TIMEOUT = int(os.environ.get("AI_HTTP_TIMEOUT", "55"))
+_LOCAL_HTTP_TIMEOUT = int(os.environ.get("AI_LOCAL_HTTP_TIMEOUT", "300"))
+
+# Providers that run on the user's own machine (local generation, no network hop
+# to a hosted API). These get the longer timeout above.
+_LOCAL_PROVIDERS = {"ollama", "litellm"}
+
+
+def _http_timeout_for(provider: str) -> int:
+    """Read timeout to use for a provider's HTTP call.
+
+    Local providers generate on-device and are far slower than hosted APIs, so
+    they get _LOCAL_HTTP_TIMEOUT; everything else gets the short cloud value.
+    """
+    return _LOCAL_HTTP_TIMEOUT if provider in _LOCAL_PROVIDERS else _CLOUD_HTTP_TIMEOUT
+
 # ---------------------------------------------------------------------------
 # Context-window capacity check (docs/PLAN-ollama-assist.md)
 #
@@ -194,8 +216,13 @@ def _call_anthropic_sdk(api_key: str, model: str, thinking_mode: str | None,
 def call_openai_compat(base_url: str, api_key: str, model: str,
                         system: str, user_content: str,
                         max_tokens: int = 4096,
-                        provider: str = "") -> str:
-    """Call any OpenAI-compatible chat/completions endpoint. Returns reply text."""
+                        provider: str = "",
+                        timeout: int | None = None) -> str:
+    """Call any OpenAI-compatible chat/completions endpoint. Returns reply text.
+
+    `timeout` overrides the per-request read timeout; when None it is derived from
+    the provider (local providers get the longer _LOCAL_HTTP_TIMEOUT).
+    """
     url = base_url.rstrip("/") + "/chat/completions"
     headers = {"Content-Type": "application/json"}
     if api_key:
@@ -209,7 +236,9 @@ def call_openai_compat(base_url: str, api_key: str, model: str,
             {"role": "user",   "content": user_content},
         ],
     }
-    r = requests.post(url, headers=headers, json=body, timeout=55)
+    if timeout is None:
+        timeout = _http_timeout_for(provider)
+    r = requests.post(url, headers=headers, json=body, timeout=timeout)
     if not r.ok:
         # Include the provider's response body in the exception so the UI can show
         # an actionable message (e.g. "model not found" from OpenRouter on a 400).
@@ -1009,21 +1038,16 @@ def run_triage_batch(offset: int, limit: int = 20,
             + json.dumps(job_dicts)
         )
 
+    # A failure here (commonly a read timeout when a local model is too slow to
+    # finish the full batch in time) is NOT terminal: fall through with an empty
+    # result set so the sub-batch-of-5 → solo retry ladder below re-attempts every
+    # job with smaller, faster prompts the provider can actually complete. Only jobs
+    # that survive all retry passes are marked failed (see the final sweep).
     try:
         parsed = _parse_triage_response(_invoke(content))
     except Exception as exc:  # noqa: BLE001
-        log.warning("triage-batch batch failed: %s", exc)
-        for j in jobs:
-            results.append({"id": j.id, "title": j.title, "company": j.company,
-                            "score": None, "reason": str(exc), "ok": False})
-            failed += 1
-        return {
-            "results": results,
-            "scored": 0,
-            "failed": failed,
-            "total_remaining": with_db_retry(unscored_q.count),
-            "next_offset": offset + len(jobs),
-        }
+        log.warning("triage-batch initial batch failed (%s); retrying in smaller batches", exc)
+        parsed = []
 
     job_map = {j.id: j for j in jobs}
     applied_ids: set[int] = set()
