@@ -21,6 +21,14 @@ Cadence is set by env vars (defaults match: 8am, 1pm, 5pm Mon-Fri plus a
 weekend morning). Times use the job-search location's timezone. Schedule
 changes require a worker restart; title/location changes are read live.
 
+Auto-triage (Feature 1) also runs on its own short interval (default every 5
+minutes, TRIAGE_INTERVAL_MINUTES), independent of the search cadence above.
+This catches jobs added between search runs -- e.g. via the MCP `add_jobs`
+tool during an ad-hoc Claude session -- instead of leaving them unscored
+until the next 8/1/5 search window. It's still also called immediately after
+each search run for fast feedback right after a run completes. A lock
+prevents the two triggers from scoring concurrently.
+
 Also runs a heartbeat job (DATA_DIR/.worker_heartbeat, default every 5
 minutes) so a dead or wedged process is detectable via the Docker healthcheck
 and the in-app Settings/Dashboard staleness warning, without needing an HTTP
@@ -29,6 +37,7 @@ endpoint on this container.
 import logging
 import os
 import random
+import threading
 import time
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -129,46 +138,74 @@ def _run():
         _check_rejection_threshold(app)
 
 
+# Guards against the search-triggered call and the standalone interval job
+# firing at (nearly) the same moment and double-scoring the same batch of
+# jobs. Both triggers live in this one process, so a plain in-memory lock is
+# enough -- no cross-process fcntl locking needed here.
+_triage_lock = threading.Lock()
+
+
 def _run_auto_triage_if_enabled(app, search_run):
     """Run auto-triage if Automatic features are enabled and the task is enabled.
 
     Called after every scheduled search run (even if run is None, in case
-    there are unscored jobs from a previous run that never got triaged).
+    there are unscored jobs from a previous run that never got triaged), and
+    also on its own short interval via _run_auto_triage_interval_job() so
+    jobs added between search runs (e.g. via the MCP add_jobs tool) don't sit
+    unscored until the next 8/1/5 window.
     """
-    with app.app_context():
-        try:
-            from .db_utils import commit
-            from .extensions import db
-            from .models import AIConfig, AITaskConfig, SearchRun
-            from datetime import datetime, timezone
+    if not _triage_lock.acquire(blocking=False):
+        log.info("auto-triage: already running in another trigger — skipping")
+        return
 
-            cfg = db.session.get(AIConfig, 1)
-            if not cfg or not cfg.api_enabled:
-                return
+    try:
+        with app.app_context():
+            try:
+                from .db_utils import commit
+                from .extensions import db
+                from .models import AIConfig, AITaskConfig, SearchRun
+                from datetime import datetime, timezone
 
-            task_cfg = AITaskConfig.query.filter_by(task_name="triage").first()
-            if task_cfg is not None and not task_cfg.enabled:
-                return
-            if task_cfg is None and not cfg.auto_triage_enabled:
-                return  # legacy fallback
+                cfg = db.session.get(AIConfig, 1)
+                if not cfg or not cfg.api_enabled:
+                    return
 
-            if not _has_ranked_providers():
-                log.warning("auto-triage: enabled but no providers configured — skipping")
-                return
+                task_cfg = AITaskConfig.query.filter_by(task_name="triage").first()
+                if task_cfg is not None and not task_cfg.enabled:
+                    return
+                if task_cfg is None and not cfg.auto_triage_enabled:
+                    return  # legacy fallback
 
-            log.info("auto-triage: starting")
-            result = run_auto_triage()
-            log.info("auto-triage: scored=%d failed=%d", result["scored"], result["failed"])
+                if not _has_ranked_providers():
+                    log.warning("auto-triage: enabled but no providers configured — skipping")
+                    return
 
-            # Stamp the search run record if we have one.
-            if search_run is not None:
-                run_row = db.session.get(SearchRun, search_run.id)
-                if run_row:
-                    run_row.last_triage_at = datetime.now(timezone.utc)
-                    commit()
+                log.info("auto-triage: starting")
+                result = run_auto_triage()
+                log.info("auto-triage: scored=%d failed=%d", result["scored"], result["failed"])
 
-        except Exception:  # noqa: BLE001
-            log.exception("auto-triage failed")
+                # Stamp the search run record if we have one.
+                if search_run is not None:
+                    run_row = db.session.get(SearchRun, search_run.id)
+                    if run_row:
+                        run_row.last_triage_at = datetime.now(timezone.utc)
+                        commit()
+
+            except Exception:  # noqa: BLE001
+                log.exception("auto-triage failed")
+    finally:
+        _triage_lock.release()
+
+
+def _run_auto_triage_interval_job():
+    """Feature 1 (standalone cadence): check for unscored Saved jobs on a
+    short interval, independent of the search schedule. run_auto_triage()
+    itself queries for unanalyzed jobs, so a tick with nothing new to score
+    is just a cheap DB query -- no provider call, no cost -- which is what
+    makes a tight interval reasonable here.
+    """
+    app = create_app()
+    _run_auto_triage_if_enabled(app, None)
 
 
 def _smtp_dict(smtp_cfg, secret):
@@ -377,6 +414,15 @@ def main():
                                   minute="0", timezone=tz),
                       id="weekly_review", max_instances=1, coalesce=True)
 
+    # Feature 1 (standalone cadence): auto-triage on its own short interval,
+    # decoupled from the search schedule above. Set to 0 to disable and rely
+    # only on the post-search-run trigger.
+    triage_interval = max(0, int(os.environ.get("TRIAGE_INTERVAL_MINUTES", "5")))
+    if triage_interval > 0:
+        sched.add_job(_run_auto_triage_interval_job, "interval",
+                      minutes=triage_interval, id="auto_triage_interval",
+                      max_instances=1, coalesce=True)
+
     # Heartbeat — proves the scheduler process itself is alive, independent of
     # whether search/AI features are enabled or due to run. Backs the
     # container's aggregated healthcheck and the in-app staleness warning.
@@ -385,9 +431,10 @@ def main():
                   id="heartbeat", max_instances=1, coalesce=True)
 
     log.info("scheduler up (tz=%s via %s, weekdays=%s, weekends=%s, followup=%s:00, review=Mon %s:00, "
-             "heartbeat=%sm). Jobs: %s",
+             "triage_interval=%sm, heartbeat=%sm). Jobs: %s",
              tz, tz_source, weekday_hours, weekend_hours, followup_hour, weekly_review_hour,
-             heartbeat_minutes, [str(j.trigger) for j in sched.get_jobs()])
+             triage_interval or "disabled", heartbeat_minutes,
+             [str(j.trigger) for j in sched.get_jobs()])
 
     # Write one heartbeat immediately so the healthcheck passes during
     # start_period without waiting for the first interval tick.
