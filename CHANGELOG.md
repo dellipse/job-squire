@@ -8,6 +8,28 @@ footer as `<VERSION>-<build-sha>`.
 
 ## [Unreleased]
 
+## [0.7.16] - 2026-07-18
+
+### Fixed
+
+- Triage Batch reported jobs as scored but the fit scores never appeared on the dashboard or on
+  individual job entries. The scores were applied in memory and then silently discarded before
+  they reached the database, so the batch summary showed `scored=N` while the DB still held no
+  scores at all. The cause was an ordering problem specific to the manual batch: `run_triage_batch`
+  applied each score to a job object and then made the next AI call before committing, but the
+  ranked-chain provider path (`call_with_fallback`) begins with `db.session.remove()`, which throws
+  away the session and every uncommitted change in it and detaches the job objects. Each retry
+  call therefore wiped the scores applied just before it, and the final commit persisted nothing.
+  This only surfaced with a local Ollama/LiteLLM provider, because a slow model routes every job
+  through the interleaved sub-batch and one-by-one retry ladder, whereas a fast hosted provider
+  answered the whole batch in a single call and committed before any second call could clear it.
+  `run_triage_batch` now collects all scores across every retry pass and writes them in a single
+  re-fetch-and-commit after all AI calls are done, mirroring the ordering `run_auto_triage` already
+  uses. It also only accepts result IDs that were actually part of the batch, so a model that
+  hallucinates or renumbers IDs can no longer score unrelated rows. A regression test drives the
+  batch through a provider that calls `db.session.remove()` on every call and asserts the scores
+  are readable back from the database.
+
 ## [0.7.15] - 2026-07-18
 
 ### Fixed
