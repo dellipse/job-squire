@@ -168,3 +168,63 @@ def test_persistent_failure_still_reports_failed(ollama_provider, monkeypatch):
     assert result["scored"] == 0
     assert result["failed"] == 3
     assert all(not r["ok"] for r in result["results"])
+
+
+# ---------------------------------------------------------------------------
+# Scores must actually reach the DB even though the ranked-chain provider path
+# calls db.session.remove() between AI calls.
+# ---------------------------------------------------------------------------
+
+def test_scores_persist_despite_session_remove(app_context, monkeypatch):
+    """Regression for the "triage ran but nothing showed up" bug.
+
+    call_with_fallback() begins its ranked-chain step with db.session.remove(),
+    which throws away the scoped session and every uncommitted ORM change in it.
+    The manual batch used to apply a score, then make the NEXT AI call (whose
+    remove() wiped that score and detached the job), and only commit at the very
+    end -- so it reported scored=N while persisting nothing. run_triage_batch now
+    collects scores and writes them in a single apply+commit after all AI calls,
+    so they survive.
+
+    This test drives the ranked-chain path (provider_id=None -> _call_no_thinking)
+    with a fake that calls db.session.remove() on every call, and returns [] for
+    the full-batch prompt so the sub-batch retry ladder -- the interleaved path
+    that exposed the bug -- is exercised. The real assertion is a fresh DB read.
+    """
+    Job.query.delete()
+    db.session.commit()
+    saved = [
+        Job(company=f"Co{i}", title=f"Role {i}", status="Saved",
+            notes="A job description.", ai_fit_score=None)
+        for i in range(8)
+    ]
+    db.session.add_all(saved)
+    db.session.commit()
+    ids = [j.id for j in saved]
+
+    def fake_call(system, content, max_tokens, use_triage_model=False, task_name=""):
+        found = [int(m) for m in re.findall(r'"id":\s*(\d+)', content)]
+        # Mimic call_with_fallback's ranked-chain step: discard the session
+        # mid-run. This is the exact operation that used to lose applied scores.
+        db.session.remove()
+        # Drop the whole full-batch prompt so the interleaved sub-batch retry
+        # ladder runs (one AI call per chunk, each doing remove()).
+        if len(found) > 5:
+            return "[]"
+        return json.dumps([{"id": i, "score": 8, "reason": "great fit"} for i in found])
+
+    monkeypatch.setattr(ai, "_call_no_thinking", fake_call)
+
+    result = ai.run_triage_batch(offset=0, limit=20, provider_id=None)
+
+    assert result["scored"] == 8
+    assert result["failed"] == 0
+    assert result["total_remaining"] == 0
+
+    # The real proof: a fresh session reads the scores back from the DB.
+    db.session.remove()
+    for jid in ids:
+        assert db.session.get(Job, jid).ai_fit_score == 8
+
+    Job.query.delete()
+    db.session.commit()

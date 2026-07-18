@@ -1052,8 +1052,19 @@ def run_triage_batch(offset: int, limit: int = 20,
     job_map = {j.id: j for j in jobs}
     applied_ids: set[int] = set()
 
+    # Scores are collected here and written to the DB only AFTER every AI call is
+    # done (see the persistence block below). call_with_fallback() calls
+    # db.session.remove() at the start of its ranked-chain step, which discards any
+    # uncommitted ORM changes and detaches every job object. Writing scores between
+    # AI calls -- as this function used to -- therefore silently loses them: the
+    # retry ladder makes a fresh AI call per sub-batch/solo job, and each one wipes
+    # the scores applied just before it, so the final commit persists nothing.
+    # Deferring all writes to a single apply+commit at the end, re-fetching each job
+    # from the live session, mirrors run_auto_triage and is the only safe ordering.
+    pending: dict[int, tuple[int, str]] = {}
+
     def _apply(item: dict) -> bool:
-        """Apply one parsed result. Returns True if successfully applied."""
+        """Record one parsed result for later persistence. Returns True if accepted."""
         try:
             jid = int(item.get("id"))
             score = max(1, min(10, int(item.get("score", 5))))
@@ -1062,11 +1073,12 @@ def run_triage_batch(offset: int, limit: int = 20,
             return False
         if jid in applied_ids:
             return False
-        job = job_map.get(jid) or db.session.get(Job, jid)
+        # Only accept ids that were actually in this batch. A model that
+        # hallucinates or renumbers ids must never score an unrelated row.
+        job = job_map.get(jid)
         if not job:
             return False
-        job.ai_fit_score = score
-        job.ai_fit_reason = reason
+        pending[jid] = (score, reason)
         results.append({"id": jid, "title": job.title, "company": job.company,
                         "score": score, "reason": reason, "ok": True})
         applied_ids.add(jid)
@@ -1143,6 +1155,16 @@ def run_triage_batch(offset: int, limit: int = 20,
                             "score": None, "reason": "not returned by AI", "ok": False})
             failed += 1
 
+    # Persist every collected score now that no further AI call (and thus no
+    # db.session.remove()) will run. Re-fetch each job from the current session so
+    # we write to attached instances, then commit exactly once.
+    if pending:
+        for jid, (score, reason) in pending.items():
+            job = db.session.get(Job, jid)
+            if job is None:
+                continue
+            job.ai_fit_score = score
+            job.ai_fit_reason = reason
     try:
         commit()
     except Exception as exc:  # noqa: BLE001
