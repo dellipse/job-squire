@@ -8,6 +8,26 @@ footer as `<VERSION>-<build-sha>`.
 
 ## [Unreleased]
 
+## [0.7.17] - 2026-07-18
+
+### Added
+
+- Application kits are now ATS-cleaned on save. The Unicode punctuation that Applicant Tracking
+  System scanners choke on (em/en dashes, curly quotes, fancy bullets, exotic and zero-width
+  spaces, and the (TM)/(R)/(c) symbols) is replaced with plain ASCII equivalents. The cleaning is
+  idempotent and leaves accented letters untouched. It runs on every save path: the MCP
+  `save_kit` tool and both API build routes (`run_build_kit_api`, `build_kit_api_adhoc`).
+- Saving a kit now auto-exports the Tailored Resume and Cover Letter sections as separate PDF
+  attachments on the job, alongside the existing `.docx` kit. The new `app/kit_export.py` splits
+  the kit across all three heading styles Claude uses (Markdown, bold, and numbered all-caps),
+  flattens each section to plain text, and renders it with a dependency-free base-14 Courier PDF
+  writer (no reportlab or weasyprint). Re-saving a kit refreshes these PDFs in place and never
+  touches user-uploaded files. Ported from the job-tracker project (co-authored by Caleb Andrews).
+
+### Changed
+
+- The Notes block on the job detail page is now collapsible (collapsed by default, no JavaScript).
+
 ## [0.7.16] - 2026-07-18
 
 ### Fixed
