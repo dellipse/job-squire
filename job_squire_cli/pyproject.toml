@@ -8,7 +8,7 @@ name = "job-squire-cli"
 # file plus the current commit's short SHA -- see docs/job-squire-cli.md
 # ("Versioning") for the one rule that replaces the old 0.1.0-<sha> /
 # 0.1.0+<sha> split. The committed value here is a placeholder between stamps.
-version = "0.7.16+4aa98b7"
+version = "0.7.17+5b716d5"
 description = "job-squire deployment CLI and MCP query client"
 readme = "README.md"
 requires-python = ">=3.11"
