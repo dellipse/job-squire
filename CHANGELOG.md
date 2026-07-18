@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows the `VERSION` file at the repo root, displayed in the app
 footer as `<VERSION>-<build-sha>`.
 
+## [Unreleased]
+
+### Fixed
+
+- Getting Started's "First Search" step still looked stuck at 0.7.13, even after the 0.7.12 fix
+  for the crash/no-op cases. Root cause this time wasn't a crash -- it's that a real run can
+  legitimately take a long time: `providers.py` throttles 60-120s *between every title* on a given
+  provider, and providers run one at a time, so a handful of titles across a couple of boards can
+  genuinely take tens of minutes. `SearchRun.found`/`detail` were only ever written once, at the
+  very end of the run, so a run working correctly but slowly looked identical from the outside to
+  one that was actually stuck: a static "still running" message with zero information the whole
+  time. It also interacted badly with 0.7.12's own fix: capping the "confirmed running" auto-reload
+  at ~5 minutes (as a belt-and-suspenders safety net) meant the page stopped auto-refreshing on any
+  run that legitimately took longer than that, even though it was still working.
+  `_run_search_locked()` now commits a live one-line progress update (current job board, running
+  total found) after every provider via a new `_mark_progress()` helper, so a mid-run poll shows
+  real, moving state -- this also shows up for free in Settings' "Recent search runs" table, which
+  already renders `detail` inline. The Getting Started page now also shows a client-side elapsed
+  timer ("Running for Xm Ys") ticking every second from `SearchRun.started_at`, independent of the
+  reload cycle, and the confirmed-running auto-reload no longer gives up on a timer -- it backs off
+  from every 5s to every 15s (after 2 minutes) to every 30s (after 10 minutes) instead, since a
+  confirmed row is now guaranteed to eventually resolve to ok/error regardless of how long it takes.
+
 ## [0.7.13] - 2026-07-18
 
 ### Added

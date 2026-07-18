@@ -209,6 +209,25 @@ def run_search(trigger="manual"):
         run_lock_file.close()
 
 
+def _mark_progress(run, message: str, *, found_so_far: int | None = None) -> None:
+    """Write a live one-line progress update to a "running" SearchRun row.
+
+    Committed immediately (not batched with the rest of the run) so every
+    poll of the Getting Started / Search History pages while a run is in
+    flight shows real movement instead of a static "still running" message
+    for the whole run. This matters because a run can legitimately take much
+    longer than it looks like it should: THROTTLE_SECONDS in providers.py
+    defaults to 60-120s *between every title* on a given provider, and
+    providers run one at a time, so a handful of titles across a few boards
+    can genuinely take tens of minutes with nothing to show for it in the
+    meantime -- which is what made this look "stuck" even though it wasn't.
+    """
+    run.detail = message[:1000]
+    if found_so_far is not None:
+        run.found = found_so_far
+    commit()
+
+
 def _run_search_locked(trigger="manual"):
     """Inner search logic — called only when the run lock is held."""
     secret_key = current_app.config["SECRET_KEY"]
@@ -252,17 +271,25 @@ def _run_search_locked(trigger="manual"):
         daily_runs_dirty = False
 
         all_items, notes = [], []
-        for pc in enabled:
+        total = len(enabled)
+        if total:
+            _mark_progress(run, f"Starting search across {total} job board(s)…")
+        for idx, pc in enumerate(enabled, start=1):
             if pc.provider not in PROVIDERS:
                 continue
             if pc.provider in REMOTE_ONLY_PROVIDERS and not cfg.get("include_remote", True):
-                notes.append(f"{pc.provider}: remote-only board skipped (remote jobs are "
-                             "turned off in search settings)")
+                note = (f"{pc.provider}: remote-only board skipped (remote jobs are "
+                        "turned off in search settings)")
+                notes.append(note)
+                _mark_progress(run, f"Skipping {pc.provider} ({idx}/{total}): remote jobs "
+                                     f"are off — {len(all_items)} found so far.")
                 continue
             if _in_cooldown(cooldowns, pc.provider):
                 until = cooldowns[pc.provider]
                 notes.append(f"{pc.provider}: in cooldown until {until} UTC — skipping")
                 log.info("%s: skipped (cooldown until %s UTC)", pc.provider, until)
+                _mark_progress(run, f"Skipping {pc.provider} ({idx}/{total}): in cooldown — "
+                                     f"{len(all_items)} found so far.")
                 continue
             creds = _decrypt_creds(secret_key, pc.secret_blob)
 
@@ -276,12 +303,20 @@ def _run_search_locked(trigger="manual"):
                     )
                     log.info("%s: skipped (daily run limit %d reached, %d runs today)",
                              pc.provider, max_runs, runs_today)
+                    _mark_progress(run, f"Skipping {pc.provider} ({idx}/{total}): daily limit "
+                                         f"reached — {len(all_items)} found so far.")
                     continue
 
             # Per-provider title limit (optional; trims the title list for this run).
             max_titles = int(creds.get("max_titles_per_run") or 0)
             run_titles = titles[:max_titles] if max_titles > 0 else titles
 
+            # This is the slow part: search_provider() calls one title at a
+            # time with a THROTTLE_SECONDS pause (default 60-120s) between
+            # each, so this single line can legitimately take many minutes
+            # for a provider with several titles configured.
+            _mark_progress(run, f"Searching {pc.provider} ({idx}/{total}) — "
+                                 f"{len(run_titles)} title(s) — {len(all_items)} found so far…")
             results, err = search_provider(pc.provider, creds, run_titles, cfg)
 
             # Count this as a run regardless of outcome (API credits were consumed).
@@ -295,6 +330,14 @@ def _run_search_locked(trigger="manual"):
                     _set_cooldown(cooldowns, pc.provider)
                     cooldowns_dirty = True
             all_items.extend(results)
+            _mark_progress(
+                run,
+                f"Finished {pc.provider} ({idx}/{total}) — {len(all_items)} found so far."
+                if not err else
+                f"{pc.provider} ({idx}/{total}) hit an error, continuing — "
+                f"{len(all_items)} found so far.",
+                found_so_far=len(all_items),
+            )
 
         if cooldowns_dirty:
             _save_cooldowns(cooldowns)

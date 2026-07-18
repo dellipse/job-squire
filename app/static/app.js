@@ -113,17 +113,23 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   // Getting Started: First Search step. While a search is running in the
-  // background, poll by reloading every 5s so the result appears without a
-  // manual refresh. The server decides whether to keep polling (data-poll)
-  // based on the SearchRun status, so this just stops naturally once done.
+  // background, poll by reloading so the result appears without a manual
+  // refresh. The server decides whether to keep polling (data-poll) based on
+  // the SearchRun status, so this just stops naturally once done.
   //
   // data-poll has three states:
   //   "0"           - nothing running, don't poll
   //   "confirmed"   - a SearchRun row exists with status "running" -- real,
   //                   authoritative state. A run always resolves to ok/error
-  //                   once it finishes (app/search.py), so it's safe to poll
-  //                   for a while, but still capped as a belt-and-suspenders
-  //                   safety net rather than trusting that forever.
+  //                   once it finishes (app/search.py's _run_search_locked
+  //                   wraps the whole thing in try/except), so it's safe to
+  //                   keep polling for as long as it takes rather than
+  //                   giving up on a timer. A run CAN legitimately take tens
+  //                   of minutes -- providers.py throttles 60-120s between
+  //                   every title on a given provider, and providers run one
+  //                   at a time -- so the reload interval backs off the
+  //                   longer it's been running, instead of hammering the
+  //                   server every 5s the whole time.
   //   "unconfirmed" - we just redirected here after clicking "Run first
   //                   search now" but no SearchRun row exists yet. That's
   //                   normal for the first second or two, but if run_search()
@@ -131,27 +137,56 @@ document.addEventListener('DOMContentLoaded', function () {
   //                   another run already holding the lock) no row is ever
   //                   coming and the page would otherwise claim "still
   //                   running" forever, since the URL keeps "started=1" on
-  //                   every reload. Give up quickly here.
+  //                   every reload. Give up quickly here -- a real run's row
+  //                   shows up within a second or two of the redirect.
   var searchStatus = document.getElementById('first-search-status');
   var pollState = searchStatus ? searchStatus.getAttribute('data-poll') : '0';
+  var startedAttr = searchStatus ? searchStatus.getAttribute('data-started') : null;
+  var startedMs = startedAttr ? Date.parse(startedAttr) : NaN;
+
+  // Live elapsed-timer, independent of the reload cycle -- ticks every
+  // second from data-started (set server-side from SearchRun.started_at) so
+  // there's always visible proof of life even between polls.
+  var timerEl = document.getElementById('first-search-timer');
+  if (timerEl && !isNaN(startedMs)) {
+    // Fixed at page-load time (not re-read on every tick) so this is an
+    // honest "as of" stamp for the one-line progress message next to it,
+    // which only actually changes on the next reload/poll.
+    var pageLoadedAt = new Date().toLocaleTimeString();
+    var tick = function () {
+      var elapsed = Math.max(0, Math.floor((Date.now() - startedMs) / 1000));
+      var mins = Math.floor(elapsed / 60);
+      var secs = elapsed % 60;
+      timerEl.textContent = 'Running for ' + mins + 'm ' + (secs < 10 ? '0' : '') + secs + 's'
+        + ' — last checked ' + pageLoadedAt;
+    };
+    tick();
+    window.setInterval(tick, 1000);
+  }
+
   var POLL_COUNT_KEY = 'first-search-poll-count';
-  if (pollState === 'confirmed' || pollState === 'unconfirmed') {
-    var maxPolls = pollState === 'unconfirmed' ? 6 : 60; // ~30s vs. ~5min at 5s/poll
+  if (pollState === 'unconfirmed') {
+    var maxPolls = 6; // ~30s at 5s/poll -- a real run's row appears well before this
     var pollCount = 0;
     try { pollCount = parseInt(sessionStorage.getItem(POLL_COUNT_KEY) || '0', 10) || 0; } catch (e) {}
     if (pollCount < maxPolls) {
       try { sessionStorage.setItem(POLL_COUNT_KEY, String(pollCount + 1)); } catch (e) {}
       window.setTimeout(function () { window.location.reload(); }, 5000);
     } else {
-      // Give up polling. Drop "started=1" so an unconfirmed run stops
-      // claiming to be in progress; for a confirmed run this just stops the
-      // auto-refresh; the manual "Run first search now" button and a normal
-      // page load still show the true status either way.
+      // Give up polling and drop "started=1" so the page stops claiming a
+      // run is in progress that never actually got confirmed.
       try { sessionStorage.removeItem(POLL_COUNT_KEY); } catch (e) {}
       var url = new URL(window.location.href);
       url.searchParams.delete('started');
       window.location.replace(url.toString());
     }
+  } else if (pollState === 'confirmed') {
+    try { sessionStorage.removeItem(POLL_COUNT_KEY); } catch (e) {}
+    // Backed-off reload schedule -- never gives up, since a confirmed row is
+    // guaranteed to eventually resolve to ok/error.
+    var elapsedSec = isNaN(startedMs) ? 0 : (Date.now() - startedMs) / 1000;
+    var reloadDelay = elapsedSec < 120 ? 5000 : (elapsedSec < 600 ? 15000 : 30000);
+    window.setTimeout(function () { window.location.reload(); }, reloadDelay);
   } else {
     try { sessionStorage.removeItem(POLL_COUNT_KEY); } catch (e) {}
   }

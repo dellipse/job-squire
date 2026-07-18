@@ -417,9 +417,12 @@
     </div>
   </form>
   <p class="muted small" id="first-search-status" style="margin-top:0.5rem"
-     data-poll="{{ 'confirmed' if _confirmed_running else ('unconfirmed' if _unconfirmed_running else '0') }}">
+     data-poll="{{ 'confirmed' if _confirmed_running else ('unconfirmed' if _unconfirmed_running else '0') }}"
+     {% if _confirmed_running and last_run.started_at %}data-started="{{ last_run.started_at.strftime('%Y-%m-%dT%H:%M:%S') }}Z"{% endif %}>
     {% if _confirmed_running %}
-      Search running in the background — this page updates automatically every few seconds…
+      Search running in the background — this page updates automatically…
+      <br><span id="first-search-progress">{{ last_run.detail or "Working…" }}</span>
+      <br><span id="first-search-timer"></span>
     {% elif _unconfirmed_running %}
       Starting the search — this page updates automatically once it's under way…
     {% else %}
