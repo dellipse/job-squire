@@ -8,8 +8,23 @@ footer as `<VERSION>-<build-sha>`.
 
 ## [Unreleased]
 
+## [0.7.15] - 2026-07-18
+
 ### Fixed
 
+- Triage Batch failed against a local Ollama/LiteLLM provider on any batch larger than a single
+  job. The manual tool builds one prompt for the whole batch and called the provider with a fixed
+  55-second read timeout, which is fine for a hosted API but far too short for a local model, which
+  generates the entire multi-job response on the user's own hardware and routinely needs minutes.
+  A healthy run was aborted mid-generation with `Read timed out. (read timeout=55)`; a single-job
+  run worked only because it finished in time. `call_openai_compat` now derives its read timeout
+  from the provider: local providers (Ollama, LiteLLM) get a much longer window (default 300s,
+  overridable via `AI_LOCAL_HTTP_TIMEOUT`), while hosted providers keep the short value
+  (overridable via `AI_HTTP_TIMEOUT`). In addition, `run_triage_batch` no longer treats an initial
+  full-batch failure as terminal: it now falls through to the existing sub-batch-of-5 then
+  one-by-one retry ladder, feeding the provider smaller prompts it can complete in time, so only
+  jobs that fail every pass are reported as failed. Tests added for both the timeout wiring and the
+  recovery and persistent-failure paths.
 - Getting Started's "Run first search now" button silently did nothing when the "Automated search
   (3x/day on weekdays)" toggle was left off. The button appears whenever search targets, a location,
   and at least one job board are set, independent of that toggle, but `_run_search_locked()` returned
