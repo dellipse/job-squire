@@ -6,6 +6,43 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows the `VERSION` file at the repo root, displayed in the app
 footer as `<VERSION>-<build-sha>`.
 
+## [0.7.10] - 2026-07-17
+
+### Fixed
+
+- Sporadic `sqlite3.OperationalError: disk I/O error` / `database is locked` under concurrent
+  access has been traced to the bind-mount bridge layer on macOS (OrbStack/Docker Desktop's
+  virtiofs/gRPC-FUSE) rather than real disk, permissions, or corruption problems -- WAL-mode
+  SQLite over that bridge intermittently loses consistency under concurrent access. `/data` is
+  now a named Docker volume (native daemon-managed storage, not bridged through the host
+  filesystem) instead of a host bind mount. Only `data/.env` remains a bind-mounted host file,
+  since compose's `env_file:` directive has to read it before the container or its volume even
+  exist.
+- `db.session.commit()` call sites across the app could still surface that same transient error
+  unhandled, including a worse compounding case where reading an ORM attribute right after commit
+  (SQLAlchemy's default `expire_on_commit` forces a fresh SELECT on next read) crashed a second
+  time inside an exception handler. All commits now route through a new retrying `commit()`
+  helper (`app/db_utils.py`), `expire_on_commit` is disabled app-wide, and a new regression test
+  (`tests/test_no_raw_commits.py`) fails the suite if a raw `db.session.commit()` call reappears
+  outside that helper.
+- CI/CLI lint failures from unused imports left behind by the adopt-command removal below.
+
+### Removed
+
+- `job-squire-cli`'s `adopt` command and all three-container-to-single-container migration
+  tooling (`AdoptResult`, `adopt_instance()`, `NotALegacyInstallError`, `legacy_cookie_name()`,
+  `docs/adopt-single-container.md`, `scripts/adopt-single-container.sh`) -- no installs remain on
+  the old three-container topology, so there was nothing left to migrate. `docker-compose.single.yml`
+  is renamed to `docker-compose.yml`, now the only compose file.
+
+### Changed
+
+- Since `job-squire-cli` can no longer reach a named volume's contents by walking a host path,
+  backup/restore now goes through the running container: new `app/backup_cli.py` (invoked as
+  `python -m app.backup_cli`) streams a WAL-safe snapshot via `docker`/`podman exec`, and
+  `restore_instance` creates the container unstarted, `docker cp`s the restored data into the
+  fresh volume, then starts it. `scripts/backup.sh`/`restore.sh` reworked to match.
+
 ## [0.7.9] - 2026-07-17
 
 ### Fixed
