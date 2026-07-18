@@ -6,6 +6,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows the `VERSION` file at the repo root, displayed in the app
 footer as `<VERSION>-<build-sha>`.
 
+## [0.7.13] - 2026-07-18
+
+### Added
+
+- `job-squire create` now checks this host's local-AI (Ollama) capability once a freshly created
+  instance's container is confirmed running (same detection behind `job-squire ollama
+  check`/`setup`). If the machine can't reasonably run local models, `create` says nothing;
+  otherwise it offers to install Ollama (if missing) or configure it for the new instance (if
+  already installed), stating the model download size before asking. `--yes` (already used to
+  skip the container-runtime install prompt) also skips this prompt; a new `--skip-ollama-check`
+  flag opts out entirely. Any detection/install/configure failure here is reported but never
+  fails `create` itself, since Ollama remains optional.
+
+### Fixed
+
+- `job-squire create` could reuse a leftover Docker volume from a previous instance of the same
+  name and silently boot against its old database instead of a fresh one. Root cause: `/data` is
+  a named Docker volume, not a host bind mount, and `job-squire remove`'s `compose down` was never
+  passed `-v`, so an instance's database (including its admin user/password) outlived removal
+  whenever the operator chose to keep the data -- and even when data was deleted, only the host
+  data directory went away, never the volume itself. A same-named `create` afterward would
+  reattach to that old volume: the freshly generated `ADMIN_PASSWORD` written to the new
+  `data/.env` was never actually applied, since `_seed_users` only seeds a user that doesn't
+  already exist, so the instance's real admin password stayed whatever the old database already
+  had. `create_instance` now checks for a matching leftover volume before writing anything to
+  disk and asks to remove it and continue (or aborts if declined); `remove`/`uninstall` now pass
+  `-v` to `compose down` exactly when the operator chooses to delete an instance's data, plus a
+  `volume ls`/`rm` sweep as a fallback for cases `down -v` can't reach (e.g. the instance's host
+  directory is already gone), and report back which volume(s) were actually removed.
+- Every CLI-generated `docker-compose.yml`, and the repo's own dev-checkout `docker-compose.yml`,
+  now pin their named volume to an explicit `name:` instead of letting Compose apply its default
+  project-prefixed naming. Without it, since a CLI-created instance's `container_name` is used
+  both as the compose project (`-p`) and as the volume key's own prefix, the volume Docker/Podman
+  actually created came out doubled (e.g. `job-squire-testdb_job-squire-testdb-data` instead of
+  `job-squire-testdb-data`).
+
 ## [0.7.12] - 2026-07-17
 
 ### Fixed
