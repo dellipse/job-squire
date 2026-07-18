@@ -64,7 +64,12 @@
       <dt>Contact</dt><dd>{{ job.contact_name or '—' }}{% if job.contact_email %} · {{ job.contact_email }}{% endif %}</dd>
       <dt>Posting</dt><dd>{% if job.url %}<a href="{{ job.url }}" target="_blank" rel="noopener noreferrer">View posting ↗</a>{% else %}—{% endif %}</dd>
     </dl>
-    {% if job.notes %}<h3>Notes</h3><p class="pre">{{ job.notes }}</p>{% endif %}
+    {% if job.notes %}
+    <details class="notes-details">
+      <summary>Notes</summary>
+      <p class="pre notes-body">{{ job.notes }}</p>
+    </details>
+    {% endif %}
   </section>
 
   <section class="card">
@@ -270,5 +275,18 @@
 .fit-score-mid  { color: #ff9800; background: #3a2a10; }
 .fit-score-low  { color: #f44336; background: #3a1010; }
 .prep-notes-details summary { cursor: pointer; color: var(--accent, #6c4beb); font-size: .9rem; }
+/* Collapsible Notes in Details card */
+.notes-details { margin-top: .75rem; }
+.notes-details summary {
+  cursor: pointer; font-weight: 600; font-size: .95rem;
+  color: var(--text); list-style: none; display: flex; align-items: center; gap: .4rem;
+  user-select: none;
+}
+.notes-details summary::-webkit-details-marker { display: none; }
+.notes-details summary::before {
+  content: '▶'; font-size: .65rem; color: var(--muted); transition: transform .15s;
+}
+.notes-details[open] summary::before { transform: rotate(90deg); }
+.notes-body { margin: .5rem 0 0; }
 </style>
 {% endblock %}

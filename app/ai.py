@@ -2213,11 +2213,13 @@ def run_build_kit_api(job) -> str:
 
     Generates a resume, cover letter, application/follow-up emails, and interview
     prep using the candidate profile and job description on file, after a
-    best-effort web research pass (see _safe_research / websearch.py). Saves the
-    result to job.kit_output and attaches a .docx copy to the job (downloadable
-    from the job detail page, like any other uploaded file). Returns the kit
-    markdown string. Raises on API error.
+    best-effort web research pass (see _safe_research / websearch.py). The kit is
+    ATS-cleaned, saved to job.kit_output, and attached to the job as a .docx copy
+    plus separate Tailored Resume and Cover Letter PDFs (all downloadable from the
+    job detail page, like any other uploaded file). Returns the kit markdown
+    string. Raises on API error.
     """
+    from .kit_export import ats_clean, sync_kit_attachments
     job_id = job.id
     profile_text = _load_candidate_profile()
     research_notes = _safe_research(job.company, job.title, job.location or "")
@@ -2226,7 +2228,7 @@ def run_build_kit_api(job) -> str:
         job.work_mode or "", job.notes or "", profile_text,
         research_notes=research_notes,
     )
-    kit_md = _kit_header(job.title, job.company, provider) + raw
+    kit_md = ats_clean(_kit_header(job.title, job.company, provider) + raw.strip())
 
     # call_with_fallback() may call db.session.remove() internally (ranked-chain
     # provider lookup), which detaches any ORM objects loaded before the call —
@@ -2240,6 +2242,7 @@ def run_build_kit_api(job) -> str:
     job.kit_output = kit_md
     commit()
     _save_kit_docx_attachment(job, kit_md, provider)
+    sync_kit_attachments(job)
     log.info("build_kit_api: kit generated for job %d (%s @ %s) via %s",
               job.id, job.title, job.company, provider)
     return kit_md
@@ -2253,11 +2256,12 @@ def build_kit_api_adhoc(title: str, company: str, location: str = "",
     Used by the Kit Hub page's "Build kit via API" button, so kit generation works
     for anyone using an AI API key or a free-tier provider — not just Claude/MCP.
 
-    If `job` (a Job model instance) is given, the result is also saved to
-    job.kit_output and attached as a downloadable .docx on that job. Returns the
-    kit markdown string. Raises on API error (e.g. RuntimeError if no AI
-    provider is configured).
+    If `job` (a Job model instance) is given, the ATS-cleaned result is also saved
+    to job.kit_output and attached to that job as a downloadable .docx plus
+    separate Tailored Resume and Cover Letter PDFs. Returns the kit markdown
+    string. Raises on API error (e.g. RuntimeError if no AI provider is configured).
     """
+    from .kit_export import ats_clean, sync_kit_attachments
     job_id = job.id if job is not None else None
     profile_text = _load_candidate_profile()
     research_notes = _safe_research(company, title, location)
@@ -2265,7 +2269,7 @@ def build_kit_api_adhoc(title: str, company: str, location: str = "",
         title, company, location, salary, "", description, profile_text,
         research_notes=research_notes,
     )
-    kit_md = _kit_header(title, company, provider, url=url) + raw
+    kit_md = ats_clean(_kit_header(title, company, provider, url=url) + raw.strip())
     if job_id is not None:
         # Re-fetch: call_with_fallback() may have called db.session.remove()
         # internally (ranked-chain provider lookup), which detaches any ORM
@@ -2278,6 +2282,7 @@ def build_kit_api_adhoc(title: str, company: str, location: str = "",
         job.kit_output = kit_md
         commit()
         _save_kit_docx_attachment(job, kit_md, provider)
+        sync_kit_attachments(job)
         log.info("build_kit_api_adhoc: kit generated for job %d (%s @ %s) via %s",
                   job.id, title, company, provider)
     else:
