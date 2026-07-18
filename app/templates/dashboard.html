@@ -44,9 +44,9 @@
         <strong>Automated search worker isn't responding</strong>
         <span class="muted small">
           {% if worker_last_seen %}Last heartbeat {{ worker_last_seen | local_dt }} — the
-          job-squire-worker container may have crashed or hung.{% else %}No heartbeat seen yet —
-          the job-squire-worker container may not be running.{% endif %}
-          Check <code>docker logs job-squire-worker</code>.
+          worker process may have crashed or hung.{% else %}No heartbeat seen yet —
+          the worker process may not be running.{% endif %}
+          Check <code>docker logs job-squire | grep worker</code>.
         </span>
       </div>
       <a class="btn btn-sm btn-outline" href="{{ url_for('main.settings', _anchor='tab-history') }}">View history ↗</a>

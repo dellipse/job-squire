@@ -1618,10 +1618,10 @@ openclaw mcp doctor {{ connector }} --probe{% endset %}
   <section class="card">
     <h2>Restoring</h2>
     <p class="muted">
-      Restore is a command-line step, not a button here. Job Squire runs as
-      three containers sharing one data directory; a safe restore has to stop
-      all three before the data directory is replaced, which this web app has
-      no way to do to itself. Run, from the host:
+      Restore is a command-line step, not a button here. Job Squire's data
+      lives in a named Docker volume, and a safe restore has to stop the
+      container and replace that volume before starting it back up, which
+      this web app has no way to do to itself. Run, from the host:
     </p>
     <div class="copy-block"><code>./scripts/restore.sh /path/to/job-squire-backup-&lt;timestamp&gt;.tgz</code></div>
     <p class="muted small">
