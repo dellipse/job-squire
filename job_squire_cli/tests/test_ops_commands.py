@@ -25,6 +25,7 @@ from job_squire_cli.cli import main
 from job_squire_cli.ops import backup as bk
 from job_squire_cli.ops import dns as dns_ops
 from job_squire_cli.ops import lifecycle as lc
+from job_squire_cli.ops import ollama_assist
 from job_squire_cli.ops import proxy as proxy_ops
 from job_squire_cli.ops import registry as reg
 from job_squire_cli.ops import self_update as su
@@ -461,6 +462,92 @@ def test_create_surfaces_guard_failure_lines_on_stderr(runner, monkeypatch, tmp_
     assert result.exit_code == 1
     assert "FATAL: PUBLIC_URL" in result.output
     assert "Traceback" not in result.output
+
+
+# ── automatic Ollama check/offer at the tail of `create` ────────────────
+# `create` now runs ops/ollama_assist.py's capability check on every
+# successful instance creation (bootstrap.sh hands off to `job-squire
+# create`, so this is where "check after the container is up" lands) and
+# offers to install/configure Ollama when the machine can reasonably run
+# local models. These tests stub both lc.create_instance (a real one needs
+# a container runtime) and ollama_assist.detect_host_capabilities/run_setup
+# so only the click-layer wiring in commands.py is under test.
+
+
+def _fake_create_result(name="castelo", data_dir="."):
+    inst = reg.Instance(
+        name=name, mode="local", runtime="docker", data_dir=data_dir,
+        app_port=8080, mcp_port=9000, cookie_name="job_squire_session",
+        public_url="http://localhost:8080", created="2026-07-17T00:00:00Z",
+    )
+    return lc.CreateResult(
+        instance=inst, admin_username="admin", admin_password="generated-pw",
+        admin_password_generated=True, health=None, import_summary=None,
+    )
+
+
+def _caps(*, ollama_installed, ram_gb=16.0):
+    return ollama_assist.HostCapabilities(
+        detected_at="2026-07-17T00:00:00Z", os="Linux", apple_silicon=False,
+        ram_gb=ram_gb, cpu_cores=8, gpu_vendor=None, gpu_vram_gb=None,
+        ollama_installed=ollama_installed, ollama_running=False,
+    )
+
+
+def test_create_offers_ollama_install_when_capable_and_not_installed(runner, monkeypatch, tmp_path):
+    monkeypatch.setattr(lc, "create_instance", lambda **kwargs: _fake_create_result(data_dir=str(tmp_path)))
+    monkeypatch.setattr(ollama_assist, "detect_host_capabilities", lambda **kwargs: _caps(ollama_installed=False))
+
+    result = runner.invoke(main, ["create", "castelo", "--mode", "local"], input="n\n")
+    assert result.exit_code == 0
+    assert "This machine can run local AI models via Ollama" in result.output
+    assert "Install Ollama and configure 'castelo'" in result.output
+    assert "Skipped. Run `job-squire ollama setup castelo`" in result.output
+
+
+def test_create_configures_ollama_when_already_installed_and_confirmed(runner, monkeypatch, tmp_path):
+    monkeypatch.setattr(lc, "create_instance", lambda **kwargs: _fake_create_result(data_dir=str(tmp_path)))
+    monkeypatch.setattr(ollama_assist, "detect_host_capabilities", lambda **kwargs: _caps(ollama_installed=True))
+
+    def fake_run_setup(root, **kwargs):
+        rec = ollama_assist.TIER_TABLE[ollama_assist.TIER_CAPABLE]
+        return ollama_assist.SetupResult(
+            capabilities=_caps(ollama_installed=True), tier=ollama_assist.TIER_CAPABLE, recommendation=rec,
+            host_capabilities_path=None, models_pulled=[rec.triage_model], models_derived={},
+            num_ctx=rec.num_ctx, base_url="http://host.docker.internal:11434/v1",
+            provider_configured=True, automatic_features_enabled=True, roundtrip_ok=True, roundtrip_detail="ok",
+        )
+    monkeypatch.setattr(ollama_assist, "run_setup", fake_run_setup)
+
+    result = runner.invoke(main, ["create", "castelo", "--mode", "local"], input="y\n")
+    assert result.exit_code == 0
+    assert "Ollama is already installed" in result.output
+    assert "Configured Ollama provider for 'castelo'" in result.output
+    assert "Enabled Automatic AI Features" in result.output
+    assert "Round-trip test: ok" in result.output
+
+
+def test_create_says_nothing_about_ollama_when_tier_not_reasonable(runner, monkeypatch, tmp_path):
+    monkeypatch.setattr(lc, "create_instance", lambda **kwargs: _fake_create_result(data_dir=str(tmp_path)))
+    monkeypatch.setattr(
+        ollama_assist, "detect_host_capabilities", lambda **kwargs: _caps(ollama_installed=False, ram_gb=4.0),
+    )
+
+    result = runner.invoke(main, ["create", "castelo", "--mode", "local", "--yes"])
+    assert result.exit_code == 0
+    assert "Ollama" not in result.output
+
+
+def test_create_skip_ollama_check_flag_skips_the_check_entirely(runner, monkeypatch, tmp_path):
+    monkeypatch.setattr(lc, "create_instance", lambda **kwargs: _fake_create_result(data_dir=str(tmp_path)))
+
+    def boom(**kwargs):
+        raise AssertionError("detect_host_capabilities should not run with --skip-ollama-check")
+    monkeypatch.setattr(ollama_assist, "detect_host_capabilities", boom)
+
+    result = runner.invoke(main, ["create", "castelo", "--mode", "local", "--yes", "--skip-ollama-check"])
+    assert result.exit_code == 0
+    assert "Ollama" not in result.output
 
 
 # ── update / rollback (Prompt C7) ────────────────────────────────────────

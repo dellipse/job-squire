@@ -99,9 +99,11 @@ def _handle_lifecycle_error(exc: lifecycle.LifecycleError) -> NoReturn:
 @click.option("--docker-desktop", "prefer_docker_desktop", is_flag=True, default=False,
               help="Prefer Docker Desktop over Podman if a runtime install is needed (Windows).")
 @click.option("--yes", "assume_yes", is_flag=True, default=False,
-              help="Don't ask before installing a container runtime.")
+              help="Don't ask before installing a container runtime or setting up Ollama.")
+@click.option("--skip-ollama-check", is_flag=True, default=False,
+              help="Don't check this machine's local-AI (Ollama) capability after the instance comes up.")
 def create(name, mode, hostname, mcp_hostname, import_from, copy_keys, admin_username, admin_password,
-           user_password, image, prefer_orbstack, prefer_docker_desktop, assume_yes):
+           user_password, image, prefer_orbstack, prefer_docker_desktop, assume_yes, skip_ollama_check):
     if not name:
         name = click.prompt("Instance name")
     if not mode:
@@ -164,6 +166,74 @@ def create(name, mode, hostname, mcp_hostname, import_from, copy_keys, admin_use
             click.echo(f"  Imported schedule vars: {', '.join(summary.schedule_vars_copied)}")
         for warning in summary.warnings:
             click.echo(f"  Warning: {warning}")
+
+    if not skip_ollama_check:
+        _offer_ollama_setup(inst, confirm=confirm)
+
+
+def _offer_ollama_setup(instance: Instance, *, confirm) -> None:
+    """Automatic tail of `create`: once the instance's container is up,
+    check this host's local-AI capability (ops/ollama_assist.py) and, if
+    the machine can reasonably run local models, offer to install Ollama
+    (if missing) or configure it for this instance (if already installed).
+    Mirrors `job-squire ollama check`/`setup` above, but triggered
+    automatically as part of bootstrap rather than requiring the operator
+    to know those subcommands exist -- see docs/PLAN-ollama-assist.md.
+
+    Best-effort only: any failure here is reported and swallowed rather
+    than raised, so a detection/install/configure hiccup never undoes an
+    otherwise-successful `create`. `confirm` is the same callable `create`
+    already built from `--yes` (`assume_yes`), so `--yes` skips this
+    prompt too, same as it does for the container runtime.
+    """
+    try:
+        caps = ollama_assist.detect_host_capabilities()
+    except Exception as exc:  # pragma: no cover - detection is normally infallible; defensive only
+        click.echo(f"\n(Skipped local-AI check: {exc})")
+        return
+
+    rec = ollama_assist.recommend(caps)
+    if rec is None:
+        # This machine can't run local models well -- say nothing further;
+        # the operator didn't ask about Ollama and can't use it here anyway.
+        return
+
+    click.echo(f"\nThis machine can run local AI models via Ollama (tier: {rec.tier}).")
+    click.echo(f"  {rec.description}")
+
+    if caps.ollama_installed:
+        prompt = (
+            f"Ollama is already installed -- configure {instance.name!r} to use it now? "
+            f"(pulls ~{rec.approx_download_gb:.0f} GB of models)"
+        )
+    else:
+        prompt = (
+            f"Install Ollama and configure {instance.name!r} to use it for local, private AI "
+            f"analysis? (installs Ollama, pulls ~{rec.approx_download_gb:.0f} GB of models)"
+        )
+    if not confirm(prompt):
+        click.echo(f"  Skipped. Run `job-squire ollama setup {instance.name}` later if you change your mind.")
+        return
+
+    try:
+        result = ollama_assist.run_setup(
+            Path(instance.data_dir), runtime=instance.runtime,
+            container_name=derive_compose_project(instance.name),
+            confirm=lambda _msg: True,  # consent already captured above
+        )
+    except ollama_assist.OllamaAssistError as exc:
+        click.echo(f"  Ollama setup failed: {exc}")
+        click.echo(f"  Re-run later with `job-squire ollama setup {instance.name}`.")
+        return
+
+    if result.provider_configured:
+        click.echo(f"  Configured Ollama provider for {instance.name!r}: base_url={result.base_url}")
+    if result.automatic_features_enabled:
+        click.echo("  Enabled Automatic AI Features (auto-triage/follow-up drafts/weekly review can now run).")
+    if result.roundtrip_ok is True:
+        click.echo(f"  Round-trip test: ok (model replied: {result.roundtrip_detail!r})")
+    elif result.roundtrip_ok is False:
+        click.echo(f"  Round-trip test: FAILED -- {result.roundtrip_detail}")
 
 
 # ── start / stop / restart ───────────────────────────────────────────────
