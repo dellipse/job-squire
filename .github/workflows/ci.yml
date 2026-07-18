@@ -259,23 +259,35 @@ jobs:
 
       - name: Commit SBOM if changed
         run: |
-          if git diff --quiet -- sbom/job-squire.cdx.json; then
-            echo "SBOM unchanged."
-            exit 0
-          fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add sbom/job-squire.cdx.json
-          git commit -m "CHORE: Update SBOM (${{ env.SHORT_SHA }}) [skip ci]"
-          # release.yml's "Stamp CLI version and commit" step can also push
-          # to main off the same triggering push (whenever that push touched
-          # VERSION), racing this one -- confirmed 2026-07-17 when both
-          # workflows ran concurrently off one push and this step lost the
-          # race with a plain non-fast-forward rejection. Retry with a
-          # fetch+rebase instead of failing the whole build over a
-          # same-second push collision.
-          for _ in 1 2 3 4 5; do
-            git push origin HEAD:main && break
-            git fetch origin main
-            git rebase origin/main
+          # Regenerate-on-latest instead of rebasing. Another push to main off
+          # the same trigger -- a second build-and-publish run, or release.yml's
+          # CLI-stamp commit -- can land first. Rebasing our SBOM commit onto
+          # theirs conflicts whenever both touched sbom/job-squire.cdx.json
+          # (confirmed 2026-07-18: the merge run's SBOM commit vs. the version-
+          # bump run's, a plain rebase conflict that failed the build). So on
+          # every attempt we reset to the current tip of main and regenerate the
+          # SBOM there: the commit always applies cleanly and the file reflects
+          # main's real state. The SBOM is deterministic (generate_sbom.py drops
+          # the per-run timestamp/serialNumber), so an unchanged dependency set
+          # regenerates byte-identically and produces no commit at all.
+          for attempt in 1 2 3 4 5; do
+            git fetch --quiet origin main
+            git reset --quiet --hard origin/main
+            python scripts/generate_sbom.py
+            if git diff --quiet -- sbom/job-squire.cdx.json; then
+              echo "SBOM unchanged on main -- nothing to commit."
+              exit 0
+            fi
+            git add sbom/job-squire.cdx.json
+            git commit -m "CHORE: Update SBOM (${SHORT_SHA}) [skip ci]"
+            if git push origin HEAD:main; then
+              echo "SBOM committed on attempt ${attempt}."
+              exit 0
+            fi
+            echo "Push lost a race (attempt ${attempt}); regenerating on the new tip..."
+            sleep $((RANDOM % 5 + 2))
           done
+          echo "Could not push SBOM update after 5 attempts." >&2
+          exit 1

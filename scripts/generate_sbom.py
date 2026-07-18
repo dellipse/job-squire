@@ -40,6 +40,19 @@ def main() -> None:
     )
 
     data = json.loads(OUTPUT_PATH.read_text())
+
+    # Strip the two fields cyclonedx regenerates on every run: a random
+    # serialNumber UUID and a wall-clock metadata.timestamp. Left in, they make
+    # the SBOM differ on every build even when no dependency changed, so the
+    # "Commit SBOM if changed" step commits and pushes to main every single
+    # build -- which is what keeps racing release.yml's CLI-stamp push. Dropping
+    # them makes the SBOM a pure function of the installed dependencies + the
+    # app version, so an unchanged dependency set produces a byte-identical file
+    # and no commit at all. (Build time/provenance is still recorded out-of-band
+    # by the cosign SBOM attestation on the published image.)
+    data.pop("serialNumber", None)
+    data.get("metadata", {}).pop("timestamp", None)
+
     data["metadata"]["component"] = {
         "bom-ref": "root-component",
         "type": "application",
