@@ -792,9 +792,14 @@ each require a different separator, rather than two independent schemes:
   `0.5.0+162722a`, PEP 440-valid. Produced by
   `scripts/stamp_cli_version.py` (repo root), which rewrites
   `job_squire_cli/pyproject.toml`'s `version` field from the same
-  `VERSION` file plus `git rev-parse --short HEAD`. Run it before building
-  or publishing the CLI package; the committed value in `pyproject.toml`
-  between stamps is a `+dev` placeholder, not a real release version.
+  `VERSION` file plus `git rev-parse --short HEAD`. `.github/workflows/
+  release.yml` runs this and commits the result automatically whenever
+  `VERSION` changes, retargeting that release's tag at the resulting
+  commit -- so every tagged release (and everything `bootstrap.sh`
+  installs from one) always carries a correctly stamped version. The
+  committed value in `pyproject.toml` between releases is a `+dev`
+  placeholder, not a real one; don't hand-run the script expecting that
+  placeholder to matter outside of local/manual builds.
 
 Both numbers always agree on the base (`0.5.0` in the example above) and
 differ only in the separator their target format requires.

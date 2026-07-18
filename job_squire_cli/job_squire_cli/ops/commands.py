@@ -49,6 +49,7 @@ from .registry import (
     InvalidNameError,
     NameCollisionError,
     RegistryError,
+    derive_compose_project,
     get_instance,
     list_instances,
     sanitize_slug,
@@ -1122,7 +1123,8 @@ def ollama_setup_cmd(name, base_url, triage_model, analysis_model, num_ctx, rank
 
     try:
         result = ollama_assist.run_setup(
-            root, base_url=base_url, triage_model=triage_model, analysis_model=analysis_model,
+            root, runtime=instance.runtime, container_name=derive_compose_project(instance.name),
+            base_url=base_url, triage_model=triage_model, analysis_model=analysis_model,
             num_ctx=num_ctx, rank=rank, enable_automatic_features=not skip_enable_features,
             confirm=confirm, dry_run=dry_run, skip_pull=skip_pull,
             skip_derive=skip_derive, skip_test=skip_test,

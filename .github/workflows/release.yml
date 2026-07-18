@@ -81,6 +81,34 @@ jobs:
             echo "PRERELEASE_FLAG=" >> "$GITHUB_ENV"
           fi
 
+      # Without this, job_squire_cli/pyproject.toml's committed `version =
+      # "..."` stays whatever was last hand-stamped (historically, stale for
+      # months at a time -- see docs/job-squire-cli.md "Versioning") and
+      # `job-squire --version` reports that stale value on every fresh
+      # bootstrap.sh install, regardless of which commit/release actually
+      # got installed. scripts/stamp_cli_version.py was only ever wired
+      # into .github/workflows/cli.yml's own lint/test run, which never
+      # commits its result -- this is the one place that both has
+      # `contents: write` and unconditionally runs whenever VERSION changes,
+      # so it's the right place to make the stamp durable. The tag/release
+      # below is retargeted at this new commit (not the triggering one),
+      # since that's the commit whose pyproject.toml actually carries the
+      # correct value.
+      - name: Stamp CLI version and commit
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          python3 scripts/stamp_cli_version.py
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add job_squire_cli/pyproject.toml
+          if git diff --cached --quiet; then
+            echo "job_squire_cli/pyproject.toml already stamped correctly -- nothing to commit."
+          else
+            git commit -m "CHORE: Stamp job-squire-cli version for v${VERSION} [skip ci]"
+            git push origin HEAD:main
+          fi
+          echo "RELEASE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
       - name: Create tag and GitHub Release
         if: steps.check.outputs.exists == 'false'
         env:
@@ -89,5 +117,5 @@ jobs:
           gh release create "v${VERSION}" \
             --title "v${VERSION}" \
             --notes-file release_notes.md \
-            --target "${{ github.sha }}" \
+            --target "${RELEASE_SHA}" \
             $PRERELEASE_FLAG

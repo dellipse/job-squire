@@ -345,7 +345,7 @@ def test_pull_recommended_models_dry_run_pulls_nothing(capsys):
     assert rec.triage_model in capsys.readouterr().out
 
 
-# ── Provider config (raw sqlite3 against ai_provider_configs) ─────────────
+# ── Provider config (execs into the container -- see app/ollama_provider_cli.py) ─
 
 _SCHEMA = """
 CREATE TABLE ai_provider_configs (
@@ -357,13 +357,20 @@ CREATE TABLE ai_config (id INTEGER PRIMARY KEY, api_enabled BOOLEAN DEFAULT 0);
 INSERT INTO ai_config (id, api_enabled) VALUES (1, 0);
 """
 
+_CONTAINER_NAME = "job-squire-castelo"
+
 
 def _make_instance_db(root):
     """A schema matching a real app-initialized instance: both
     `ai_provider_configs` and a seeded `ai_config` (id=1) row -- the latter
     is what `write_provider_config`'s `enable_automatic_features` flips.
-    """
-    db_path = paths.sqlite_db_path(root)
+    `/data` is a named Docker volume now (not a host path -- see
+    ops/compose.py), so this stands in for "what the container's volume
+    contains", the same way test_lifecycle.py's FakeRuntime does for other
+    exec-based commands; it happens to still live on disk under `root` only
+    because that's convenient for a test fixture, not because production
+    code reads it there anymore."""
+    db_path = root / "data" / "job-squire.db"
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path))
     conn.executescript(_SCHEMA)
@@ -372,19 +379,110 @@ def _make_instance_db(root):
     return db_path
 
 
-def test_write_provider_config_raises_if_db_missing(tmp_path):
+def _write_row_like_container_cli(db_path, payload):
+    """Reimplements the handful of statements
+    `app/ollama_provider_cli.py::write_provider_row` runs inside the real
+    container, against `db_path`, standing in for that exec call. This
+    package never imports the app package (see ollama_assist.py's module
+    docstring), so the fake below duplicates just enough of that logic
+    rather than importing it -- deliberately kept in lockstep with that
+    module by the shared behavioral tests over `write_provider_config` in
+    this file, which would fail if the two drifted."""
+    if not db_path.exists():
+        raise oa.OllamaAssistError(f"Database not found at {db_path} inside the container.")
+    base_url, triage_model, analysis_model = payload["base_url"], payload["triage_model"], payload["analysis_model"]
+    num_ctx, rank, enabled = payload.get("num_ctx"), payload.get("rank"), payload.get("enabled", True)
+    enable_automatic_features = payload.get("enable_automatic_features", True)
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        existing = conn.execute(
+            "SELECT id, rank FROM ai_provider_configs WHERE provider = 'ollama'"
+        ).fetchone()
+        if rank is None:
+            rank = existing[1] if existing is not None else (
+                conn.execute("SELECT MAX(rank) FROM ai_provider_configs").fetchone()[0] or 0
+            ) + 1
+        try:
+            if existing is not None:
+                conn.execute(
+                    "UPDATE ai_provider_configs SET rank = ?, label = ?, base_url = ?, model = ?, "
+                    "triage_model = ?, num_ctx = ?, use_for_triage = 1, use_for_analysis = 1, "
+                    "enabled = ? WHERE provider = 'ollama'",
+                    (rank, "Ollama (local)", base_url, analysis_model, triage_model, num_ctx, int(enabled)),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO ai_provider_configs (rank, provider, label, api_key_enc, base_url, "
+                    "model, triage_model, num_ctx, use_for_triage, use_for_analysis, thinking_mode, "
+                    "enabled) VALUES (?, 'ollama', ?, '', ?, ?, ?, ?, 1, 1, NULL, ?)",
+                    (rank, "Ollama (local)", base_url, analysis_model, triage_model, num_ctx, int(enabled)),
+                )
+        except sqlite3.OperationalError as exc:
+            if "num_ctx" in str(exc):
+                raise oa.OllamaAssistError("job-squire update: no num_ctx column") from exc
+            raise
+        automatic_features_enabled = False
+        if enable_automatic_features:
+            try:
+                cur = conn.execute("UPDATE ai_config SET api_enabled = 1 WHERE id = 1")
+                automatic_features_enabled = cur.rowcount > 0
+            except sqlite3.OperationalError:
+                automatic_features_enabled = False
+        conn.commit()
+    finally:
+        conn.close()
+    return automatic_features_enabled
+
+
+def container_fake_run(db_path, *, container_name=_CONTAINER_NAME, running=True, ok_prefixes=(), stdout=""):
+    """`fake_run`, plus handling for the two docker/podman calls
+    `write_provider_config` now makes: `inspect` (is the container up?) and
+    `exec ... python3 -m app.ollama_provider_cli` (perform the write, via
+    `_write_row_like_container_cli` against `db_path` standing in for the
+    container's volume)."""
+    inner = fake_run(ok_prefixes=ok_prefixes, stdout=stdout)
+
+    def _run(args, **kwargs):
+        args = list(args)
+        if len(args) >= 2 and args[1] == "inspect":
+            inner.calls.append(tuple(args))
+            if not running:
+                return SimpleNamespace(returncode=1, stdout="", stderr="no such container")
+            return SimpleNamespace(returncode=0, stdout=json.dumps({"Status": "running"}), stderr="")
+        if len(args) >= 2 and args[1] == "exec":
+            inner.calls.append(tuple(args))
+            payload = json.loads(kwargs["input"])
+            try:
+                enabled = _write_row_like_container_cli(db_path, payload)
+            except oa.OllamaAssistError as exc:
+                return SimpleNamespace(returncode=1, stdout="", stderr=str(exc))
+            return SimpleNamespace(
+                returncode=0, stdout=json.dumps({"automatic_features_enabled": enabled}), stderr="",
+            )
+        return inner(args, **kwargs)
+
+    _run.calls = inner.calls
+    return _run
+
+
+def test_write_provider_config_raises_if_container_not_running(tmp_path):
     root = tmp_path / "castelo"
-    with pytest.raises(oa.OllamaAssistError, match="Database not found"):
-        oa.write_provider_config(root, base_url="http://localhost:11434", triage_model="qwen3:4b",
-                                  analysis_model="qwen3:8b")
+    run = container_fake_run(root / "data" / "job-squire.db", running=False)
+    with pytest.raises(oa.OllamaAssistError, match="must be running"):
+        oa.write_provider_config(root, runtime="docker", container_name=_CONTAINER_NAME,
+                                  base_url="http://localhost:11434", triage_model="qwen3:4b",
+                                  analysis_model="qwen3:8b", run=run)
 
 
 def test_write_provider_config_inserts_new_row(tmp_path):
     root = tmp_path / "castelo"
     db_path = _make_instance_db(root)
+    run = container_fake_run(db_path)
 
-    oa.write_provider_config(root, base_url="http://host.docker.internal:11434",
-                              triage_model="qwen3:8b", analysis_model="gemma4:12b", num_ctx=16384)
+    oa.write_provider_config(root, runtime="docker", container_name=_CONTAINER_NAME,
+                              base_url="http://host.docker.internal:11434",
+                              triage_model="qwen3:8b", analysis_model="gemma4:12b", num_ctx=16384, run=run)
 
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
@@ -404,7 +502,7 @@ def test_write_provider_config_missing_num_ctx_column_raises_actionable_error(tm
     actionable error -- not a raw sqlite3.OperationalError -- telling the
     operator to update the instance first."""
     root = tmp_path / "castelo"
-    db_path = paths.sqlite_db_path(root)
+    db_path = root / "data" / "job-squire.db"
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path))
     conn.executescript("""
@@ -416,10 +514,12 @@ def test_write_provider_config_missing_num_ctx_column_raises_actionable_error(tm
     """)  # no num_ctx column -- simulates a pre-migration schema
     conn.commit()
     conn.close()
+    run = container_fake_run(db_path)
 
-    with pytest.raises(oa.OllamaAssistError, match="job-squire update"):
-        oa.write_provider_config(root, base_url="http://localhost:11434", triage_model="qwen3:8b",
-                                  analysis_model="gemma4:12b", num_ctx=16384)
+    with pytest.raises(oa.OllamaAssistError, match="num_ctx migration"):
+        oa.write_provider_config(root, runtime="docker", container_name=_CONTAINER_NAME,
+                                  base_url="http://localhost:11434", triage_model="qwen3:8b",
+                                  analysis_model="gemma4:12b", num_ctx=16384, run=run)
 
 
 def test_write_provider_config_appends_after_existing_chain(tmp_path):
@@ -432,9 +532,11 @@ def test_write_provider_config_appends_after_existing_chain(tmp_path):
     )
     conn.commit()
     conn.close()
+    run = container_fake_run(db_path)
 
-    oa.write_provider_config(root, base_url="http://localhost:11434", triage_model="qwen3:4b",
-                              analysis_model="qwen3:8b")
+    oa.write_provider_config(root, runtime="docker", container_name=_CONTAINER_NAME,
+                              base_url="http://localhost:11434", triage_model="qwen3:4b",
+                              analysis_model="qwen3:8b", run=run)
 
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
@@ -445,13 +547,16 @@ def test_write_provider_config_appends_after_existing_chain(tmp_path):
 def test_write_provider_config_updates_existing_row_in_place(tmp_path):
     root = tmp_path / "castelo"
     db_path = _make_instance_db(root)
-    oa.write_provider_config(root, base_url="http://localhost:11434", triage_model="qwen3:4b",
-                              analysis_model="qwen3:8b")
+    run = container_fake_run(db_path)
+    oa.write_provider_config(root, runtime="docker", container_name=_CONTAINER_NAME,
+                              base_url="http://localhost:11434", triage_model="qwen3:4b",
+                              analysis_model="qwen3:8b", run=run)
 
     # Re-running setup (e.g. after a hardware upgrade) updates in place --
     # it must not create a second "ollama" row.
-    oa.write_provider_config(root, base_url="http://localhost:11434", triage_model="qwen3:8b",
-                              analysis_model="gemma4:12b")
+    oa.write_provider_config(root, runtime="docker", container_name=_CONTAINER_NAME,
+                              base_url="http://localhost:11434", triage_model="qwen3:8b",
+                              analysis_model="gemma4:12b", run=run)
 
     conn = sqlite3.connect(str(db_path))
     rows = conn.execute("SELECT * FROM ai_provider_configs WHERE provider = 'ollama'").fetchall()
@@ -461,8 +566,10 @@ def test_write_provider_config_updates_existing_row_in_place(tmp_path):
 def test_write_provider_config_never_sets_an_api_key(tmp_path):
     root = tmp_path / "castelo"
     db_path = _make_instance_db(root)
-    oa.write_provider_config(root, base_url="http://localhost:11434", triage_model="qwen3:4b",
-                              analysis_model="qwen3:8b")
+    run = container_fake_run(db_path)
+    oa.write_provider_config(root, runtime="docker", container_name=_CONTAINER_NAME,
+                              base_url="http://localhost:11434", triage_model="qwen3:4b",
+                              analysis_model="qwen3:8b", run=run)
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     row = conn.execute("SELECT api_key_enc FROM ai_provider_configs WHERE provider = 'ollama'").fetchone()
@@ -472,8 +579,10 @@ def test_write_provider_config_never_sets_an_api_key(tmp_path):
 def test_write_provider_config_respects_explicit_rank(tmp_path):
     root = tmp_path / "castelo"
     db_path = _make_instance_db(root)
-    oa.write_provider_config(root, base_url="http://localhost:11434", triage_model="qwen3:4b",
-                              analysis_model="qwen3:8b", rank=5)
+    run = container_fake_run(db_path)
+    oa.write_provider_config(root, runtime="docker", container_name=_CONTAINER_NAME,
+                              base_url="http://localhost:11434", triage_model="qwen3:4b",
+                              analysis_model="qwen3:8b", rank=5, run=run)
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     row = conn.execute("SELECT rank FROM ai_provider_configs WHERE provider = 'ollama'").fetchone()
@@ -486,8 +595,10 @@ def test_write_provider_config_respects_explicit_rank(tmp_path):
 def test_write_provider_config_enables_automatic_features_by_default(tmp_path):
     root = tmp_path / "castelo"
     db_path = _make_instance_db(root)
-    enabled = oa.write_provider_config(root, base_url="http://host.docker.internal:11434",
-                                        triage_model="qwen3:4b", analysis_model="qwen3:8b")
+    run = container_fake_run(db_path)
+    enabled = oa.write_provider_config(root, runtime="docker", container_name=_CONTAINER_NAME,
+                                        base_url="http://host.docker.internal:11434",
+                                        triage_model="qwen3:4b", analysis_model="qwen3:8b", run=run)
     assert enabled is True
     conn = sqlite3.connect(str(db_path))
     row = conn.execute("SELECT api_enabled FROM ai_config WHERE id = 1").fetchone()
@@ -497,9 +608,11 @@ def test_write_provider_config_enables_automatic_features_by_default(tmp_path):
 def test_write_provider_config_can_skip_enabling_automatic_features(tmp_path):
     root = tmp_path / "castelo"
     db_path = _make_instance_db(root)
-    enabled = oa.write_provider_config(root, base_url="http://host.docker.internal:11434",
+    run = container_fake_run(db_path)
+    enabled = oa.write_provider_config(root, runtime="docker", container_name=_CONTAINER_NAME,
+                                        base_url="http://host.docker.internal:11434",
                                         triage_model="qwen3:4b", analysis_model="qwen3:8b",
-                                        enable_automatic_features=False)
+                                        enable_automatic_features=False, run=run)
     assert enabled is False
     conn = sqlite3.connect(str(db_path))
     row = conn.execute("SELECT api_enabled FROM ai_config WHERE id = 1").fetchone()
@@ -512,7 +625,7 @@ def test_write_provider_config_warns_without_crashing_when_ai_config_missing(tmp
     warning, same "additive, never assumed" convention as the num_ctx check
     just above."""
     root = tmp_path / "castelo"
-    db_path = paths.sqlite_db_path(root)
+    db_path = root / "data" / "job-squire.db"
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path))
     conn.executescript("""
@@ -524,9 +637,11 @@ def test_write_provider_config_warns_without_crashing_when_ai_config_missing(tmp
     """)  # no ai_config table at all
     conn.commit()
     conn.close()
+    run = container_fake_run(db_path)
 
-    enabled = oa.write_provider_config(root, base_url="http://host.docker.internal:11434",
-                                        triage_model="qwen3:4b", analysis_model="qwen3:8b")
+    enabled = oa.write_provider_config(root, runtime="docker", container_name=_CONTAINER_NAME,
+                                        base_url="http://host.docker.internal:11434",
+                                        triage_model="qwen3:4b", analysis_model="qwen3:8b", run=run)
     assert enabled is False
     assert "couldn't enable Automatic AI Features" in capsys.readouterr().out
 
@@ -582,7 +697,8 @@ def test_run_setup_dry_run_touches_nothing(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(oa, "test_roundtrip", fail_if_called)
 
     run = fake_run()
-    result = oa.run_setup(root, run=run, which=which_map({}), dry_run=True, confirm=lambda _: True)
+    result = oa.run_setup(root, runtime="docker", container_name=_CONTAINER_NAME, run=run,
+                           which=which_map({}), dry_run=True, confirm=lambda _: True)
 
     assert result.host_capabilities_path is None
     assert result.models_pulled == []
@@ -598,17 +714,18 @@ def test_run_setup_not_reasonable_raises_before_touching_anything(tmp_path, monk
     monkeypatch.setattr(oa, "detect_host_capabilities", lambda **kwargs: _caps(ram_gb=4))
 
     with pytest.raises(oa.OllamaAssistError, match="cloud tier"):
-        oa.run_setup(root, run=fake_run(), which=which_map({}), confirm=lambda _: True)
+        oa.run_setup(root, runtime="docker", container_name=_CONTAINER_NAME, run=fake_run(),
+                     which=which_map({}), confirm=lambda _: True)
     assert not root.exists()
 
 
 def test_run_setup_full_chain_real_writes(tmp_path, monkeypatch):
     root = tmp_path / "castelo"
-    _make_instance_db(root)
+    db_path = _make_instance_db(root)
     monkeypatch.setattr(oa, "detect_host_capabilities", lambda **kwargs: _caps(ram_gb=16, apple_silicon=True))
     monkeypatch.setattr(oa, "test_roundtrip", lambda base_url, model, **kwargs: (True, "ok"))
 
-    run = fake_run(ok_prefixes=[
+    run = container_fake_run(db_path, ok_prefixes=[
         ("ollama", "pull", "qwen3:8b"),
         ("ollama", "pull", "gemma4:12b"),
         ("ollama", "create", "qwen3:8b-ctx16384"),
@@ -616,7 +733,8 @@ def test_run_setup_full_chain_real_writes(tmp_path, monkeypatch):
     ])
 
     result = oa.run_setup(
-        root, run=run, which=which_map({"ollama": "/usr/local/bin/ollama"}), confirm=lambda _: True,
+        root, runtime="docker", container_name=_CONTAINER_NAME, run=run,
+        which=which_map({"ollama": "/usr/local/bin/ollama"}), confirm=lambda _: True,
     )
 
     assert result.provider_configured is True
@@ -650,7 +768,7 @@ def test_run_setup_roundtrip_tests_localhost_not_container_host_by_default(tmp_p
     must probe OLLAMA_DEFAULT_HOST ("localhost") instead when the caller
     left base_url at its default."""
     root = tmp_path / "castelo"
-    _make_instance_db(root)
+    db_path = _make_instance_db(root)
     monkeypatch.setattr(oa, "detect_host_capabilities", lambda **kwargs: _caps(ram_gb=16, apple_silicon=True))
     captured = {}
 
@@ -659,12 +777,13 @@ def test_run_setup_roundtrip_tests_localhost_not_container_host_by_default(tmp_p
         return True, "ok"
 
     monkeypatch.setattr(oa, "test_roundtrip", fake_roundtrip)
-    run = fake_run(ok_prefixes=[
+    run = container_fake_run(db_path, ok_prefixes=[
         ("ollama", "pull", "qwen3:8b"), ("ollama", "pull", "gemma4:12b"),
         ("ollama", "create", "qwen3:8b-ctx16384"), ("ollama", "create", "gemma4:12b-ctx16384"),
     ])
 
-    oa.run_setup(root, run=run, which=which_map({"ollama": "/usr/local/bin/ollama"}), confirm=lambda _: True)
+    oa.run_setup(root, runtime="docker", container_name=_CONTAINER_NAME, run=run,
+                 which=which_map({"ollama": "/usr/local/bin/ollama"}), confirm=lambda _: True)
 
     assert captured["base_url"] == oa.OLLAMA_DEFAULT_HOST
 
@@ -674,7 +793,7 @@ def test_run_setup_roundtrip_tests_explicit_base_url_override_as_given(tmp_path,
     network) is assumed reachable from the CLI host too and tested as-is,
     not redirected to localhost."""
     root = tmp_path / "castelo"
-    _make_instance_db(root)
+    db_path = _make_instance_db(root)
     monkeypatch.setattr(oa, "detect_host_capabilities", lambda **kwargs: _caps(ram_gb=16, apple_silicon=True))
     captured = {}
 
@@ -683,12 +802,13 @@ def test_run_setup_roundtrip_tests_explicit_base_url_override_as_given(tmp_path,
         return True, "ok"
 
     monkeypatch.setattr(oa, "test_roundtrip", fake_roundtrip)
-    run = fake_run(ok_prefixes=[
+    run = container_fake_run(db_path, ok_prefixes=[
         ("ollama", "pull", "qwen3:8b"), ("ollama", "pull", "gemma4:12b"),
         ("ollama", "create", "qwen3:8b-ctx16384"), ("ollama", "create", "gemma4:12b-ctx16384"),
     ])
 
-    oa.run_setup(root, base_url="http://192.168.1.50:11434", run=run,
+    oa.run_setup(root, runtime="docker", container_name=_CONTAINER_NAME,
+                 base_url="http://192.168.1.50:11434", run=run,
                  which=which_map({"ollama": "/usr/local/bin/ollama"}), confirm=lambda _: True)
 
     assert captured["base_url"] == "http://192.168.1.50:11434"
@@ -696,16 +816,17 @@ def test_run_setup_roundtrip_tests_explicit_base_url_override_as_given(tmp_path,
 
 def test_run_setup_can_skip_enabling_automatic_features(tmp_path, monkeypatch):
     root = tmp_path / "castelo"
-    _make_instance_db(root)
+    db_path = _make_instance_db(root)
     monkeypatch.setattr(oa, "detect_host_capabilities", lambda **kwargs: _caps(ram_gb=16, apple_silicon=True))
     monkeypatch.setattr(oa, "test_roundtrip", lambda base_url, model, **kwargs: (True, "ok"))
-    run = fake_run(ok_prefixes=[
+    run = container_fake_run(db_path, ok_prefixes=[
         ("ollama", "pull", "qwen3:8b"), ("ollama", "pull", "gemma4:12b"),
         ("ollama", "create", "qwen3:8b-ctx16384"), ("ollama", "create", "gemma4:12b-ctx16384"),
     ])
 
     result = oa.run_setup(
-        root, run=run, which=which_map({"ollama": "/usr/local/bin/ollama"}), confirm=lambda _: True,
+        root, runtime="docker", container_name=_CONTAINER_NAME, run=run,
+        which=which_map({"ollama": "/usr/local/bin/ollama"}), confirm=lambda _: True,
         enable_automatic_features=False,
     )
 
@@ -717,14 +838,15 @@ def test_run_setup_can_skip_enabling_automatic_features(tmp_path, monkeypatch):
 
 def test_run_setup_skip_derive_writes_base_tags_and_no_num_ctx(tmp_path, monkeypatch):
     root = tmp_path / "castelo"
-    _make_instance_db(root)
+    db_path = _make_instance_db(root)
     monkeypatch.setattr(oa, "detect_host_capabilities", lambda **kwargs: _caps(ram_gb=16, apple_silicon=True))
     monkeypatch.setattr(oa, "test_roundtrip", lambda base_url, model, **kwargs: (True, "ok"))
 
-    run = fake_run(ok_prefixes=[("ollama", "pull", "qwen3:8b"), ("ollama", "pull", "gemma4:12b")])
+    run = container_fake_run(db_path, ok_prefixes=[("ollama", "pull", "qwen3:8b"), ("ollama", "pull", "gemma4:12b")])
 
     result = oa.run_setup(
-        root, run=run, which=which_map({"ollama": "/usr/local/bin/ollama"}), confirm=lambda _: True,
+        root, runtime="docker", container_name=_CONTAINER_NAME, run=run,
+        which=which_map({"ollama": "/usr/local/bin/ollama"}), confirm=lambda _: True,
         skip_derive=True,
     )
 

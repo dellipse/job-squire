@@ -66,7 +66,6 @@ import json
 import platform
 import re
 import shutil
-import sqlite3
 import subprocess
 import urllib.error
 import urllib.request
@@ -77,7 +76,7 @@ from typing import Callable
 
 import click
 
-from . import paths
+from . import compose, paths
 from .runtime import InstallPlan, InstallStep, run_install_plan
 
 Runner = Callable[..., "subprocess.CompletedProcess[str]"]
@@ -624,9 +623,14 @@ def derive_context_models(
 # ── Writing the provider row ──────────────────────────────────────────────
 
 
+_PROVIDER_CLI_ARGV = ["python3", "-m", "app.ollama_provider_cli"]
+
+
 def write_provider_config(
     root: Path,
     *,
+    runtime: str,
+    container_name: str,
     base_url: str,
     triage_model: str,
     analysis_model: str,
@@ -634,13 +638,23 @@ def write_provider_config(
     rank: int | None = None,
     enabled: bool = True,
     enable_automatic_features: bool = True,
+    run: Runner = subprocess.run,
 ) -> bool:
     """Write (or update) the `ai_provider_configs` row for provider="ollama".
 
-    Mirrors ops/secrets_copy.py's raw-`sqlite3` approach to this exact
-    table -- this package never depends on Flask/SQLAlchemy/the app package
-    (see that module's docstring). No `api_key_enc` is set (Ollama needs
-    none by default).
+    `/data` is a named Docker volume, not a host bind mount (see
+    ops/compose.py) -- `<instance_root>/data/job-squire.db` (`root` here)
+    is no longer a path this function can just open with `sqlite3.connect()`
+    the way it did before the 2026-07-17 volume migration; that host path
+    only ever holds `data/.env` now. Mirrors ops/backup.py's
+    `_snapshot_container_data`: the actual write runs inside the instance's
+    own running container via `docker exec`/`podman exec`
+    (`app/ollama_provider_cli.py`, fed a JSON payload on stdin), where
+    `DATA_DIR` correctly resolves to the volume's mount point. This package
+    still never imports Flask/SQLAlchemy/the app package directly -- the
+    exec'd process is the one that does, same boundary ops/backup.py
+    already established. No `api_key_enc` is set (Ollama needs none by
+    default).
 
     `num_ctx` requires the app-side migration that adds this column to
     `ai_provider_configs` (app/__init__.py's _run_migrations) -- older app
@@ -665,77 +679,60 @@ def write_provider_config(
     provider row write above already succeeded and is the more important of
     the two).
     """
-    db_path = paths.sqlite_db_path(root)
-    if not db_path.exists():
+    state = compose.inspect_state(runtime, container_name, run=run)
+    if state is None or state.get("Status") != "running":
         raise OllamaAssistError(
-            f"Database not found at {db_path}. Bring the instance up at least once "
-            f"(`job-squire start NAME`) so the app creates its schema, then re-run this."
+            f"The {container_name!r} container must be running to configure Ollama -- its "
+            f"database now lives in a Docker volume, only reachable while the container is up. "
+            f"Start it first (`job-squire start NAME`), then re-run `job-squire ollama setup`."
         )
-    conn = sqlite3.connect(str(db_path))
+
+    payload = json.dumps({
+        "base_url": base_url,
+        "triage_model": triage_model,
+        "analysis_model": analysis_model,
+        "num_ctx": num_ctx,
+        "rank": rank,
+        "enabled": enabled,
+        "enable_automatic_features": enable_automatic_features,
+    })
+    argv = [compose.runtime_binary(runtime), "exec", "-i", container_name, *_PROVIDER_CLI_ARGV]
     try:
-        existing = conn.execute(
-            "SELECT id, rank FROM ai_provider_configs WHERE provider = ?", (PROVIDER_KEY,)
-        ).fetchone()
+        result = run(argv, input=payload, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise OllamaAssistError(f"Failed to configure Ollama inside {container_name!r}: {exc}") from exc
+    if result.returncode != 0:
+        stderr = (result.stderr or "").strip()
+        if "num_ctx" in stderr:
+            raise OllamaAssistError(
+                "This instance's job-squire image predates the num_ctx migration on "
+                "ai_provider_configs. Update the instance (`job-squire update NAME`) so it boots "
+                "at least once with the newer schema, then re-run `job-squire ollama setup`."
+            )
+        raise OllamaAssistError(f"Configuring Ollama inside {container_name!r} failed: {stderr}")
 
-        if rank is None:
-            if existing is not None:
-                rank = existing[1]
-            else:
-                max_rank = conn.execute("SELECT MAX(rank) FROM ai_provider_configs").fetchone()[0]
-                rank = (max_rank or 0) + 1
+    try:
+        response = json.loads(result.stdout)
+        automatic_features_enabled = bool(response["automatic_features_enabled"])
+    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise OllamaAssistError(
+            f"Configuring Ollama inside {container_name!r} returned an unexpected response: "
+            f"{result.stdout!r}"
+        ) from exc
 
-        try:
-            if existing is not None:
-                conn.execute(
-                    "UPDATE ai_provider_configs SET rank = ?, label = ?, base_url = ?, model = ?, "
-                    "triage_model = ?, num_ctx = ?, use_for_triage = 1, use_for_analysis = 1, "
-                    "enabled = ? WHERE provider = ?",
-                    (rank, "Ollama (local)", base_url, analysis_model, triage_model, num_ctx,
-                     int(enabled), PROVIDER_KEY),
-                )
-            else:
-                conn.execute(
-                    "INSERT INTO ai_provider_configs (rank, provider, label, api_key_enc, base_url, "
-                    "model, triage_model, num_ctx, use_for_triage, use_for_analysis, thinking_mode, "
-                    "enabled) VALUES (?, ?, ?, '', ?, ?, ?, ?, 1, 1, NULL, ?)",
-                    (rank, PROVIDER_KEY, "Ollama (local)", base_url, analysis_model, triage_model,
-                     num_ctx, int(enabled)),
-                )
-        except sqlite3.OperationalError as exc:
-            if "num_ctx" in str(exc):
-                raise OllamaAssistError(
-                    f"{db_path} has no num_ctx column on ai_provider_configs yet -- this instance's "
-                    f"job-squire image predates that migration. Update the instance "
-                    f"(`job-squire update NAME`) so it boots at least once with the newer schema, "
-                    f"then re-run `job-squire ollama setup`."
-                ) from exc
-            raise
-
-        automatic_features_enabled = False
-        if enable_automatic_features:
-            # Defensive like every other read/write in this module (module
-            # docstring's "additive, never assumed"): a missing `ai_config`
-            # row (schema present but not yet seeded) or even a missing
-            # table entirely (an instance old enough to predate this
-            # feature) both just warn here rather than crash -- the
-            # provider row above is already written and is the more
-            # important of the two writes.
-            try:
-                cur = conn.execute("UPDATE ai_config SET api_enabled = 1 WHERE id = 1")
-                automatic_features_enabled = cur.rowcount > 0
-            except sqlite3.OperationalError:
-                automatic_features_enabled = False
-            if not automatic_features_enabled:
-                click.echo(
-                    "Warning: couldn't enable Automatic AI Features (no ai_config row found, or "
-                    "this instance's schema predates it). Bring the instance up at least once "
-                    "(`job-squire start NAME`), then re-run `job-squire ollama setup`, or turn on "
-                    "'Automatic Features' by hand in Settings."
-                )
-
-        conn.commit()
-    finally:
-        conn.close()
+    if enable_automatic_features and not automatic_features_enabled:
+        # Defensive like every other read/write in this module (module
+        # docstring's "additive, never assumed"): a missing `ai_config` row
+        # (schema present but not yet seeded) or even a missing table
+        # entirely (an instance old enough to predate this feature) both
+        # just warn here rather than crash -- the provider row above is
+        # already written and is the more important of the two writes.
+        click.echo(
+            "Warning: couldn't enable Automatic AI Features (no ai_config row found, or "
+            "this instance's schema predates it). Bring the instance up at least once "
+            "(`job-squire start NAME`), then re-run `job-squire ollama setup`, or turn on "
+            "'Automatic Features' by hand in Settings."
+        )
 
     return automatic_features_enabled
 
@@ -788,6 +785,8 @@ class SetupResult:
 def run_setup(
     root: Path,
     *,
+    runtime: str,
+    container_name: str,
     base_url: str | None = None,
     triage_model: str | None = None,
     analysis_model: str | None = None,
@@ -809,6 +808,12 @@ def run_setup(
     (`ensure_ollama_installed`); this only sequences them and is the thing
     the `setup` click command calls, per this package's "thin adapter"
     convention (ops/commands.py's module docstring).
+
+    `runtime`/`container_name` (the instance's registry entry and
+    `derive_compose_project(name)`, respectively) are only used by the
+    "configure" step -- `write_provider_config` execs into the running
+    container to write the provider row, since `/data` is a named Docker
+    volume rather than a path this process can open directly.
 
     The "derive" step matters: Ollama's OpenAI-compatible endpoint (what
     app/ai.py calls) has no per-request way to set context size, so a base
@@ -889,9 +894,10 @@ def run_setup(
             click.echo("  (dry-run) enable Automatic AI Features (ai_config.api_enabled = 1)")
     else:
         automatic_features_enabled = write_provider_config(
-            root, base_url=base_url, triage_model=effective_triage, analysis_model=effective_analysis,
+            root, runtime=runtime, container_name=container_name, base_url=base_url,
+            triage_model=effective_triage, analysis_model=effective_analysis,
             num_ctx=effective_num_ctx if not skip_derive else None, rank=rank,
-            enable_automatic_features=enable_automatic_features,
+            enable_automatic_features=enable_automatic_features, run=run,
         )
         provider_configured = True
 

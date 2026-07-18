@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows the `VERSION` file at the repo root, displayed in the app
 footer as `<VERSION>-<build-sha>`.
 
+## [Unreleased]
+
+### Fixed
+
+- `job-squire ollama setup` still opened `<instance_root>/data/job-squire.db` directly from the
+  host to write the `ai_provider_configs` row -- a path that stopped existing once `/data` became
+  a named Docker volume (0.7.10). The write now execs into the instance's own running container
+  (new `app/ollama_provider_cli.py`, invoked the same way `app/backup_cli.py` already is) instead
+  of assuming host filesystem access, matching backup/restore's existing approach. Requires the
+  instance's container to be running; the error message now says so explicitly instead of the
+  stale "bring the instance up" wording.
+- `job-squire-cli`'s own `--version` reported a stale `0.7.0+dev` placeholder on every fresh
+  `bootstrap.sh` install regardless of which release actually got installed --
+  `scripts/stamp_cli_version.py` was only ever wired into `.github/workflows/cli.yml`'s lint/test
+  run, which never commits its result. `.github/workflows/release.yml` now runs the stamp and
+  commits it as part of cutting each release, retargeting that release's tag at the resulting
+  commit.
+
 ## [0.7.10] - 2026-07-17
 
 ### Fixed
