@@ -417,18 +417,29 @@ def save_kit(job_id: int, kit_markdown: str) -> dict:
     job_id:       the integer ID embedded in the kit file header.
     kit_markdown: the full markdown output Claude produced — all five sections.
 
+    On save the kit is ATS-cleaned (em-dashes, curly quotes, and fancy bullets become
+    plain ASCII), and the Tailored Resume and Cover Letter sections are auto-attached
+    to the job as PDF files.
+
     Returns the job company and title on success, or an error dict.
     """
     from datetime import datetime as _dt, timezone
+    from .kit_export import ats_clean, sync_kit_attachments
     with flask_app.app_context():
         j = db.session.get(Job, job_id)
         if not j:
             return {"error": f"no job with id {job_id}"}
-        j.kit_output = kit_markdown
+        j.kit_output = ats_clean(kit_markdown)
         j.kit_generated_at = _dt.now(timezone.utc)
         commit()
         result = {"ok": True, "job_id": job_id, "company": j.company, "title": j.title,
                   "message": f"Kit saved to job record for {j.company} — {j.title}."}
+
+        # Auto-export the resume and cover letter as PDF attachments.
+        docs = sync_kit_attachments(j)
+        if docs:
+            result["attachments_created"] = docs
+            result["message"] += f" Saved {', '.join(docs)} as PDF attachment(s)."
 
         # Feature 4: Auto-run ATS gap analysis if API mode is enabled.
         _run_ats_after_kit(j)
