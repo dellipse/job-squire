@@ -23,6 +23,20 @@ footer as `<VERSION>-<build-sha>`.
   regardless. `_run_search_locked()` now always finalizes the row to `status="error"` on failure,
   and the Getting Started polling now distinguishes a confirmed running row from an unconfirmed
   one and gives up after a bounded number of reloads instead of trusting `started=1` indefinitely.
+- `job-squire ollama setup` wrote the bare Ollama host (e.g. `http://host.docker.internal:11434`,
+  no `/v1`) straight into `ai_provider_configs.base_url`. `app/ai.py`'s `call_openai_compat()`
+  always appends `/chat/completions`, and Ollama only serves that route under `/v1`, so every real
+  triage/analysis call 404'd -- masked from the CLI's own round-trip test, which deliberately hits
+  a different, always-present Ollama route. Added an idempotent `_openai_compat_base_url()`
+  normalizer at both the DB-write choke point (`app/ollama_provider_cli.py`) and the CLI's
+  dry-run/success-message path.
+- Uploading a docx/pdf directly as `kind="Resume"` (the paste-back markdown slot shown on the
+  Getting Started profile page) stored raw binary and crashed with `UnicodeDecodeError`, because
+  the singleton upsert in `save_resume_draft()` didn't route through the same docx/pdf
+  auto-convert path "Base Resume" uploads already used. `kind="Resume"` can now hold multiple
+  variants with an `is_base` flag marking which one is used for tailoring, and direct uploads to
+  this slot are now converted to markdown or rejected outright -- no raw-binary fallback, which is
+  what makes the original crash structurally impossible now.
 - `ci.yml`'s "Commit SBOM if changed" step and `release.yml`'s new "Stamp CLI version and commit"
   step (0.7.11) can both push to `main` off the same triggering push whenever it touches
   `VERSION` -- observed immediately when 0.7.11 shipped: `release.yml` landed its stamp commit
