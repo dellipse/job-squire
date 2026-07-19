@@ -153,10 +153,10 @@ def test_tailscale_uninstall_plan_windows_uses_winget():
 
 
 def test_tailscale_uninstall_plan_linux_dispatches_by_distro():
-    debian_plan = ts.tailscale_uninstall_plan("Linux")
-    # No os_release override here -- read_os_release() reads the real
-    # /etc/os-release, which may or may not exist in the test environment,
-    # so exercise the distro branching directly instead via _linux_uninstall_plan.
+    # tailscale_uninstall_plan("Linux") has no os_release override here --
+    # read_os_release() reads the real /etc/os-release, which may or may not
+    # exist in the test environment, so exercise the distro branching
+    # directly instead via _linux_uninstall_plan.
     plan = ts._linux_uninstall_plan({"ID": "ubuntu"})
     assert plan.steps[0].command == ("apt-get", "remove", "-y", "tailscale")
     assert plan.steps[0].use_sudo is True
