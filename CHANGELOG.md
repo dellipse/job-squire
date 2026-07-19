@@ -8,6 +8,35 @@ footer as `<VERSION>-<build-sha>`.
 
 ## [Unreleased]
 
+## [0.7.26] - 2026-07-19
+
+### Added
+
+- `job-squire tailscale status` no longer requires an instance NAME -- run bare, it now prints a
+  direct read of the host's Tailscale client itself (installed, daemon reachable, backend state,
+  DNS name, MagicDNS, HTTPS Certificates, operator permission) via a new `check_client_health()`,
+  rather than only ever reporting one instance's Serve on/off flag. With a NAME, it also now shows
+  an in-progress `enable` clearly (stage reached, last error, and whether to re-run `enable` to
+  continue or `disable` to undo), instead of collapsing to a plain "not enabled."
+- `enable_tailscale_serve` now polls the client's backend state up to three times (every attempt
+  must read `Running`, not just the last) before ever calling `tailscale serve`, and fails fast
+  with an actionable message -- pointing at the macOS system-extension approval in System
+  Settings, or the tailnet admin console for HTTPS Certificates -- instead of a bare 30-second
+  timeout with no diagnostic signal. `job-squire tailscale enable NAME` also now prints a resume
+  notice (with the last recorded error) when it picks up an incomplete setup instead of silently
+  redoing everything from scratch.
+
+### Fixed
+
+- `job-squire tailscale disable NAME` used to refuse to do anything ("does not have Tailscale
+  Serve enabled") if a previous `enable` had failed partway through, even when Serve ports had
+  already been turned on for that instance -- there was no way to unwind a partial setup short of
+  running raw `tailscale serve --https=<port> off` by hand. `TailscaleState` now tracks which step
+  `enable` reached (`ports_on` / `env_set` / `recreated` / `done`), and `disable` unwinds from any
+  of those, not only a fully completed enable. `remove`/`uninstall`'s Tailscale cleanup offers
+  were updated to match, so a partially-enabled instance is still offered for cleanup rather than
+  silently skipped.
+
 ## [0.7.25] - 2026-07-19
 
 ### Changed
