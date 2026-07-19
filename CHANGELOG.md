@@ -8,6 +8,16 @@ footer as `<VERSION>-<build-sha>`.
 
 ## [Unreleased]
 
+## [0.7.19] - 2026-07-18
+
+### Added
+
+- Auto-triage (Feature 1) now also runs on its own standalone interval (`TRIAGE_INTERVAL_MINUTES`,
+  default 5, `0` disables), independent of the search cadence. Previously it only fired inside the
+  post-search-run hook, so jobs added between runs (e.g. via the MCP `add_jobs` tool) sat unscored
+  until the next scheduled search. A `threading.Lock` guards against the interval job and the
+  post-search trigger scoring the same job concurrently.
+
 ## [0.7.18] - 2026-07-18
 
 ### Fixed
