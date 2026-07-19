@@ -2702,7 +2702,7 @@
       "version": "2.4.0"
     },
     {
-      "bom-ref": "soupsieve==2.8.4",
+      "bom-ref": "soupsieve==2.9",
       "description": "A modern CSS selector implementation for Beautiful Soup.",
       "externalReferences": [
         {
@@ -2720,9 +2720,9 @@
         }
       ],
       "name": "soupsieve",
-      "purl": "pkg:pypi/soupsieve@2.8.4",
+      "purl": "pkg:pypi/soupsieve@2.9",
       "type": "library",
-      "version": "2.8.4"
+      "version": "2.9"
     },
     {
       "bom-ref": "sse-starlette==3.4.5",
@@ -3261,7 +3261,7 @@
         "chardet==5.2.0",
         "charset-normalizer==3.4.9",
         "lxml==6.1.1",
-        "soupsieve==2.8.4",
+        "soupsieve==2.9",
         "typing_extensions==4.16.0"
       ],
       "ref": "beautifulsoup4==4.15.0"
@@ -3591,7 +3591,7 @@
       "ref": "sortedcontainers==2.4.0"
     },
     {
-      "ref": "soupsieve==2.8.4"
+      "ref": "soupsieve==2.9"
     },
     {
       "dependsOn": [
@@ -3761,7 +3761,7 @@
       "bom-ref": "root-component",
       "type": "application",
       "name": "job-squire",
-      "version": "0.7.18",
+      "version": "0.7.19",
       "description": "Self-hosted, two-user job-search companion: automates job discovery, tracks applications through a hiring funnel, and integrates with Claude as an AI coach via MCP.",
       "licenses": [
         {
