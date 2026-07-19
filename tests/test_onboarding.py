@@ -207,6 +207,51 @@ class TestAiStep:
         assert status["ai"] == "done"
 
 
+class TestNotificationsStep:
+    def test_page_renders_both_provider_options(self, clean_state, client, app):
+        _login_admin(client, app)
+        r = client.get("/getting-started/notifications")
+        assert r.status_code == 200
+        assert b"SMTP2GO" in r.data
+        assert b"apppasswords" in r.data
+        assert b"Continue without email notifications" in r.data
+
+    def test_no_email_marks_done_and_warns(self, clean_state, client, app):
+        _login_admin(client, app)
+        assert client.get("/getting-started/notifications").status_code == 200  # marks visited
+        r = client.post("/getting-started/notifications", data={"action": "no_email"},
+                        follow_redirects=True)
+        assert b"Continuing without email notifications" in r.data
+        from app.onboarding import build_checklist
+        status = {i["key"]: i["status"] for i in build_checklist()}
+        assert status["notifications"] == "done"
+
+    def test_real_smtp_config_marks_done_once_visited(self, clean_state, client, app):
+        """Mirrors the ai step's has_provider check: real, working configuration
+        satisfies the step without an explicit "answered"/"no_email" flag, but
+        only once the step's own page has been visited (see _step_done)."""
+        _login_admin(client, app)
+        client.post("/settings/smtp", data={
+            "enabled": "on", "host": "mail.smtp2go.com", "port": "587",
+            "username": "smtp2go-user", "password": "secret", "from_addr": "me@example.com",
+            "to_addr": "me@example.com",
+        }, follow_redirects=True)
+        from app.onboarding import build_checklist
+        status = {i["key"]: i["status"] for i in build_checklist()}
+        assert status["notifications"] == "todo"  # not visited yet
+        assert client.get("/getting-started/notifications").status_code == 200
+        status = {i["key"]: i["status"] for i in build_checklist()}
+        assert status["notifications"] == "done"
+
+    def test_settings_smtp_from_onboarding_returns_to_onboarding(self, clean_state, client, app):
+        _login_admin(client, app)
+        r = client.post("/settings/smtp", data={
+            "enabled": "on", "host": "mail.smtp2go.com", "port": "587",
+            "to_addr": "me@example.com", "next": "/getting-started/notifications",
+        }, follow_redirects=False)
+        assert r.headers["Location"].endswith("/getting-started/notifications")
+
+
 class TestProfileStep:
     def test_profile_links_append_to_candidate_profile(self, clean_state, client, app):
         from flask import current_app

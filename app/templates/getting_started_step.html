@@ -445,6 +445,79 @@
   </div>
   {% endif %}
 </section>
+{# ══════════════ notifications ══════════════ #}
+{% elif step_key == 'notifications' %}
+<section class="card">
+  <p>Job Squire can email you search digests, follow-up reminders, and the weekly
+    strategy review — sent from your own instance to your own inbox, not bulk mail
+    to strangers. That matters for deliverability: this is exactly the low-volume,
+    single-recipient case that free email providers handle well without tripping
+    spam filters.</p>
+
+  {% if smtp.enabled and smtp.host %}
+  <p><strong>&#10003; Email notifications configured</strong> — sending to
+    {{ smtp.to_addr or "(no recipient set)" }} via {{ smtp.host }}.</p>
+  {% endif %}
+
+  <div class="mode-info-box" style="margin:0.75rem 0">
+    <strong>1. Recommended: SMTP2GO.</strong> Free forever, no credit card, and the
+    best deliverability of any free tier we've tested. Setup is quick:
+    <a href="https://www.smtp2go.com/pricing/" target="_blank" rel="noopener">sign up free</a>,
+    verify a single sender email address by clicking the link it emails you (no
+    domain or DNS records needed), then copy the SMTP username and password it
+    gives you into the fields below. Typical settings:
+    host <code>mail.smtp2go.com</code>, port <code>587</code>.
+  </div>
+  <div class="mode-info-box" style="margin:0.75rem 0">
+    <strong>2. Already have Gmail? Use an app password instead.</strong> No new
+    account needed. Turn on 2-Step Verification if it isn't already, then
+    generate an app password at
+    <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener">myaccount.google.com/apppasswords</a>
+    and use that (not your regular Gmail password) below. Settings:
+    host <code>smtp.gmail.com</code>, port <code>587</code>, username is your
+    full Gmail address.
+  </div>
+
+  <form method="post" action="{{ url_for('main.settings_smtp') }}" class="form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="next" value="{{ back_url }}">
+    <div class="form-grid">
+      <div class="field"><label>SMTP host</label><input type="text" name="host" value="{{ smtp.host }}" placeholder="mail.smtp2go.com"></div>
+      <div class="field"><label>Port</label><input type="text" name="port" value="{{ smtp.port }}"></div>
+      <div class="field"><label>Username</label><input type="text" name="username" value="{{ smtp.username }}" autocomplete="off"></div>
+      <div class="field"><label>Password</label><input type="password" name="password" autocomplete="new-password" placeholder="{{ '•••••• saved (leave blank to keep)' if smtp.password_enc else '' }}"></div>
+      <div class="field"><label>From address</label><input type="text" name="from_addr" value="{{ smtp.from_addr }}"></div>
+      <div class="field"><label>Send to (your inbox)</label><input type="text" name="to_addr" value="{{ smtp.to_addr }}"></div>
+      <div class="field">
+        <label><input type="checkbox" name="use_tls" {% if smtp.use_tls %}checked{% endif %}> Use STARTTLS (port 587)</label>
+      </div>
+      <div class="field">
+        <label><input type="checkbox" name="enabled" {% if smtp.enabled %}checked{% endif %}> Email notifications enabled</label>
+      </div>
+    </div>
+    <div class="actions" style="margin-top:1rem">
+      <button class="btn btn-primary" type="submit">Save email settings</button>
+    </div>
+  </form>
+
+  <div class="test-email" style="margin-top:0.5rem">
+    <form method="post" action="{{ url_for('main.settings_test_email') }}" style="display:inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="next" value="{{ back_url }}">
+      <button class="btn btn-outline" type="submit">Send test email</button>
+    </form>
+    <span class="muted small">Save your settings first, then send a test to confirm they work.</span>
+  </div>
+
+  <form method="post" action="{{ url_for('onboarding.save_notifications') }}" class="form" style="margin-top:0.75rem">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button class="btn btn-outline" type="submit" name="action" value="no_email">Continue without email notifications</button>
+  </form>
+  <p class="muted small" style="margin-top:0.5rem">Without email: everything else works
+    normally — search, tracking, funnel metrics, and follow-up reminders all still show
+    up in the app. Add email any time under
+    <a href="{{ url_for('main.settings', _anchor='tab-email') }}">Settings &rarr; Email</a>.</p>
+</section>
 {% endif %}
 
 {# ══════════════ footer nav ══════════════ #}

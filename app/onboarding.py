@@ -35,7 +35,7 @@ from .db_utils import commit, with_db_retry
 from .extensions import db
 from .models import (AIConfig, AIProviderConfig, CandidateAsset,
                      OnboardingState, ProviderCredential, SearchConfig,
-                     SearchRun, User, ASSET_KINDS)
+                     SearchRun, SmtpConfig, User, ASSET_KINDS)
 from .providers import PROVIDERS, REMOTE_ONLY_PROVIDERS
 
 log = logging.getLogger(__name__)
@@ -60,6 +60,8 @@ STEPS = [
      "blurb": "Connect the boards that feed your searches."},
     {"key": "first_search", "title": "First search",
      "blurb": "Run it and see real results."},
+    {"key": "notifications", "title": "Email notifications",
+     "blurb": "Digests, follow-up reminders, and weekly reviews in your inbox."},
 ]
 STEP_KEYS = [s["key"] for s in STEPS]
 
@@ -287,6 +289,11 @@ def _step_data_satisfied(key: str, state: OnboardingState) -> bool:
         return ProviderCredential.query.filter_by(enabled=True).count() > 0
     if key == "first_search":
         return SearchRun.query.count() > 0
+    if key == "notifications":
+        if answered in ("answered", "no_email"):
+            return True
+        cfg = db.session.get(SmtpConfig, 1)
+        return bool(cfg and cfg.enabled and cfg.host.strip() and cfg.to_addr.strip())
     return False
 
 
@@ -504,6 +511,9 @@ def step(step):
             or (ai_cfg and (ai_cfg.api_enabled or ai_cfg.mcp_enabled)))
         ctx["search_ready"] = bool(cfg and cfg.titles.strip() and cfg.location.strip()
                                    and ctx["enabled_providers"])
+    elif step == "notifications":
+        from .main import _singleton
+        ctx["smtp"] = _singleton(SmtpConfig)
     return render_template("getting_started_step.html", **ctx)
 
 
@@ -580,6 +590,30 @@ def save_ai():
         state.set_step("ai", "answered")
         commit()
     return redirect(url_for("onboarding.step", step="profile"))
+
+
+@onboarding_bp.route("/getting-started/notifications", methods=["POST"])
+@login_required
+@_admin_required
+def save_notifications():
+    """Explicit "no email" bypass for the last step, mirroring save_ai's
+    "no_ai" — a deliberate opt-out marks the step done and stops the
+    checklist nagging, unlike the generic Skip button which leaves it
+    flagged as still needing attention. The actual SMTP fields themselves
+    are saved by main.settings_smtp (posted to directly from the step
+    template with next= this page), not here."""
+    state = get_state()
+    action = request.form.get("action", "")
+    if action == "no_email":
+        state.set_step("notifications", "no_email")
+        commit()
+        flash("Continuing without email notifications. Everything else works "
+              "normally; add email later under Settings → Email whenever "
+              "you're ready.", "info")
+    else:
+        state.set_step("notifications", "answered")
+        commit()
+    return redirect(url_for("onboarding.overview"))
 
 
 @onboarding_bp.route("/getting-started/profile-links", methods=["POST"])

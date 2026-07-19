@@ -155,7 +155,12 @@
   <section class="card">
     <h2>Email notifications</h2>
     <p class="muted small">When a run finds new postings, Job Squire emails this address. Use any SMTP
-      server (Brevo, a Gmail app password, SendGrid, etc.).</p>
+      server — <a href="https://www.smtp2go.com/pricing/" target="_blank" rel="noopener">SMTP2GO</a>'s
+      free tier (no credit card, single sender email verification, no DNS needed) is the easiest
+      no-signup-elsewhere-needed option if you don't already have one you'd rather use. A Gmail app
+      password or Brevo also work. New to this? The
+      <a href="{{ url_for('onboarding.step', step='notifications') }}">Getting Started walkthrough</a>
+      walks through both SMTP2GO and Gmail step by step.</p>
     <p class="muted small"><strong>Username</strong> is the provider's SMTP login, not always your
       account email. For <strong>Brevo</strong>, use the dedicated SMTP login shown on the
       SMTP &amp; API page (not your Brevo account email). <strong>Password</strong> is the SMTP key /

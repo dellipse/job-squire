@@ -3305,6 +3305,7 @@ def settings_provider_pull(provider):
 @admin_required
 def settings_smtp():
     secret = current_app.config["SECRET_KEY"]
+    back = _safe_next(url_for("main.settings"))
     smtp = _singleton(SmtpConfig)
     smtp.enabled = request.form.get("enabled") == "on"
     smtp.host = request.form.get("host", "").strip()
@@ -3319,7 +3320,7 @@ def settings_smtp():
     smtp.admin_email = request.form.get("admin_email", "").strip()
     commit()
     flash("Email settings saved.", "success")
-    return redirect(url_for("main.settings"))
+    return redirect(back)
 
 
 @main_bp.route("/settings/test-email", methods=["POST"])
@@ -3327,10 +3328,11 @@ def settings_smtp():
 @admin_required
 def settings_test_email():
     secret = current_app.config["SECRET_KEY"]
+    back = _safe_next(url_for("main.settings"))
     smtp_row = db.session.get(SmtpConfig, 1)
     if not smtp_row or not smtp_row.host or not smtp_row.to_addr:
         flash("Save the SMTP host and recipient first, then send a test.", "warning")
-        return redirect(url_for("main.settings"))
+        return redirect(back)
     smtp = {
         "host": smtp_row.host,
         "port": smtp_row.port,
@@ -3343,7 +3345,7 @@ def settings_test_email():
     if not smtp["password"] and smtp_row.password_enc:
         log.warning("SMTP password could not be decrypted — SECRET_KEY may have changed; re-enter credentials in Settings.")
         flash("SMTP password could not be decrypted — SECRET_KEY may have changed; re-enter credentials in Settings.", "danger")
-        return redirect(url_for("main.settings"))
+        return redirect(back)
     try:
         send_email(
             smtp,
@@ -3357,7 +3359,7 @@ def settings_test_email():
               "success")
     except Exception as e:  # noqa: BLE001
         flash(f"Test failed: {e.__class__.__name__}: {e}", "danger")
-    return redirect(url_for("main.settings"))
+    return redirect(back)
 
 
 @main_bp.route("/settings/run", methods=["POST"])
