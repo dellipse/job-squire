@@ -8,6 +8,18 @@ footer as `<VERSION>-<build-sha>`.
 
 ## [Unreleased]
 
+## [0.7.21] - 2026-07-18
+
+### Fixed
+
+- `bootstrap.sh`'s venv-reuse check only looked for `bin/python`, not `bin/pip`. `python3 -m venv`
+  creates the interpreter symlink before it bootstraps pip via ensurepip, so a run that failed
+  partway through that step (e.g. ensurepip missing, as in 0.7.20's fix) left a venv with a working
+  python but no pip -- a later run would see `bin/python`, skip both the ensurepip check and
+  recreation, and fail on the `bin/pip install` line with "not found". The check now also requires
+  `bin/pip`, and wipes the venv directory before recreating, so a botched prior attempt self-heals
+  on the next run instead of getting stuck.
+
 ## [0.7.20] - 2026-07-18
 
 ### Added
