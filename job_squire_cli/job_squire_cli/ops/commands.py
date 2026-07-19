@@ -522,13 +522,9 @@ def _offer_tailscale_removal(instance: Instance, state, *, confirm) -> None:
     2. Only if that succeeded (declining step 1 leaves the mapping
        logically "still in use," same as declining `_offer_proxy_removal`'s
        conf-removal leaves confs the later SWAG-teardown check still
-       finds), check whether any *other* registered instance still has
-       Tailscale enabled and whether job-squire is the one that installed
-       the client (`tailscale_ops.load_tailscale_choice` -- never true for
-       a client the operator already had running before `tailscale
-       enable`'s `ensure_tailscale_ready` ran, mirroring the SWAG case's
-       own installed-by-us guard). If both hold, offer to remove Tailscale
-       entirely.
+       finds), hand off to `_offer_tailscale_client_removal_if_unused`,
+       which offers to remove the Tailscale client itself if job-squire
+       installed it and no other instance still uses it.
     """
     if not confirm(
         f"\nTailscale Serve is still on for {instance.name!r} (tailnet ports {state.web_port}/"
@@ -550,6 +546,30 @@ def _offer_tailscale_removal(instance: Instance, state, *, confirm) -> None:
         return
     click.echo(f"  Turned off Tailscale Serve on ports {state.web_port} and {state.mcp_port}.")
 
+    _offer_tailscale_client_removal_if_unused(confirm=confirm)
+
+
+def _offer_tailscale_client_removal_if_unused(*, confirm) -> None:
+    """Shared tail for every place that can leave the Tailscale *client*
+    installed but no longer needed: `_offer_tailscale_removal` above (after
+    `remove` tears down a single Tailscale-enabled instance) and
+    `tailscale_disable_cmd` (after `tailscale disable` turns Serve off for
+    an instance that stays registered). Both call this only once Serve
+    itself is confirmed off for the instance in question -- declining that
+    upstream step leaves the mapping "still in use" and this is never
+    reached.
+
+    Offers removal only if both hold: job-squire is the one that installed
+    the client in the first place (`tailscale_ops.load_tailscale_choice`
+    -- never true for a client the operator already had running before
+    `ensure_tailscale_ready` ran), and no *other* registered instance
+    still has Tailscale Serve enabled. No self-exclusion is needed in
+    either caller: `remove`'s instance is already gone from the registry
+    by the time this runs, and `disable`'s instance's own state was just
+    flipped to `enabled=False` by `disable_tailscale_serve`, so checking
+    every registered instance's on-disk state (including its own) is
+    always correct.
+    """
     choice = tailscale_ops.load_tailscale_choice()
     if not choice or choice.get("source") != "installed":
         return
@@ -557,7 +577,7 @@ def _offer_tailscale_removal(instance: Instance, state, *, confirm) -> None:
         return
 
     if not confirm(
-        "No other instance is using Tailscale anymore, and job-squire installed it on this "
+        "No instance is using Tailscale anymore, and job-squire installed it on this "
         "machine -- remove it entirely too?"
     ):
         click.echo("  Skipped. Remove it later by hand if you change your mind.")
@@ -573,9 +593,9 @@ def _offer_tailscale_removal(instance: Instance, state, *, confirm) -> None:
 
 def _any_other_instance_has_tailscale_enabled() -> bool:
     """True if any currently-registered instance has Tailscale Serve on.
-    Called only after the instance being removed is already gone from the
-    registry (same pattern as `_image_still_in_use` in ops/lifecycle.py),
-    so no self-exclusion is needed."""
+    Safe to call with no self-exclusion from either of
+    `_offer_tailscale_client_removal_if_unused`'s two callers -- see that
+    function's docstring for why."""
     for inst in list_instances():
         try:
             if tailscale_ops.read_state(Path(inst.data_dir)).enabled:
@@ -1493,6 +1513,14 @@ def tailscale_enable_cmd(name, web_port, mcp_port, assume_yes):
     # doesn't necessarily live under the default per-user data root.
     root = Path(instance.data_dir)
 
+    # Check instance mode first -- Tailscale Serve only applies to local instances
+    if instance.mode != "local":
+        _fail(
+            f"Instance {instance.name!r} is in {instance.mode!r} mode -- Tailscale Serve only applies "
+            f"to local instances (it is a private remote-access path for a local "
+            f"install, not a substitute for network mode's own reverse proxy)."
+        )
+
     confirm = (lambda _msg: True) if assume_yes else click.confirm
     try:
         tailscale_ops.ensure_tailscale_ready(confirm=confirm)
@@ -1522,7 +1550,13 @@ def tailscale_enable_cmd(name, web_port, mcp_port, assume_yes):
 @tailscale_group.command(name="disable", help="Turn off Tailscale Serve for an instance and "
                                                "revert it to loopback-only.")
 @click.argument("name")
-def tailscale_disable_cmd(name):
+@click.option("--skip-client-cleanup", "skip_client_cleanup", is_flag=True, default=False,
+              help="Don't offer to remove the Tailscale client itself, even if this was the last "
+                   "instance using it and job-squire installed it.")
+@click.option("--yes", "assume_yes", is_flag=True, default=False,
+              help="Don't ask before removing the Tailscale client, if nothing else is using it "
+                   "and job-squire is the one that installed it.")
+def tailscale_disable_cmd(name, skip_client_cleanup, assume_yes):
     instance = _require_instance(name)
     root = Path(instance.data_dir)
     try:
@@ -1534,6 +1568,15 @@ def tailscale_disable_cmd(name):
     click.echo(f"  Web: {result.public_url}")
     if result.health is not None:
         click.echo(f"  Health: {result.health.get('Health', {}).get('Status') or result.health.get('Status')}")
+
+    # Serve is now off for this instance -- disable_tailscale_serve already
+    # wrote enabled=False to its own tailscale.json before returning, so
+    # `_any_other_instance_has_tailscale_enabled` (inside the helper below)
+    # correctly sees this instance as no longer using it, same as if it had
+    # been excluded by name.
+    if not skip_client_cleanup:
+        confirm = (lambda _msg: True) if assume_yes else click.confirm
+        _offer_tailscale_client_removal_if_unused(confirm=confirm)
 
 
 @tailscale_group.command(name="status", help="Show whether Tailscale Serve is enabled for an instance.")

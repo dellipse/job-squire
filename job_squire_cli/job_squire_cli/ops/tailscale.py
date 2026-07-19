@@ -64,6 +64,7 @@ Tailscale-reachable instance gets the same explicit-opt-in treatment a
 from __future__ import annotations
 
 import json
+import os
 import platform
 import shutil
 import subprocess
@@ -398,6 +399,25 @@ def _run_tailscale_up(*, run: Runner = subprocess.run, timeout: float = 180.0) -
         )
 
 
+def _ensure_operator_permission(*, run: Runner = subprocess.run) -> None:
+    """Set the current user as Tailscale operator so future commands don't
+    require sudo. Idempotent: calling when already set is harmless."""
+    username = os.environ.get("USER")
+    if not username:
+        return  # Can't determine username, skip
+    argv = ["sudo", TAILSCALE_BINARY, "set", f"--operator={username}"]
+    try:
+        result = run(argv, capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            click.echo(
+                f"Warning: couldn't set Tailscale operator permission. "
+                f"You may need to use `sudo tailscale` commands. "
+                f"(Error: {(result.stderr or result.stdout).strip()})"
+            )
+    except (OSError, subprocess.TimeoutExpired):
+        pass  # Not fatal -- operator will just need sudo
+
+
 @dataclass(frozen=True)
 class TailscaleReadiness:
     installed_by_cli: bool
@@ -437,6 +457,7 @@ def ensure_tailscale_ready(
                 "may be needed. Re-run `job-squire tailscale enable` once `tailscale version` works."
             )
         record_tailscale_choice(source="installed")
+        _ensure_operator_permission(run=run)
     else:
         record_tailscale_choice_if_unset(source="detected")
 

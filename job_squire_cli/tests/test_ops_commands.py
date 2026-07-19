@@ -2243,6 +2243,125 @@ def test_tailscale_disable_propagates_error_when_not_enabled(runner, monkeypatch
     assert "does not have Tailscale Serve enabled" in result.output
 
 
+# ── tailscale disable: offer to remove the client itself once unused ────
+# Mirrors `remove`'s own offer (see the "remove: offer to uninstall
+# Tailscale itself" block above) but for the case where the instance
+# stays registered -- Serve was just turned off for it, not the instance
+# itself torn down. Gated the same way: no other registered instance
+# still has Serve enabled, and job-squire is the one that installed the
+# client (`load_tailscale_choice`).
+
+
+def _fake_disable_result(instance, *, root):
+    return tailscale_ops.TailscaleDisableResult(
+        public_url="http://localhost:8080", health={"Status": "running"},
+    )
+
+
+def test_tailscale_disable_offers_to_remove_client_when_last_instance_and_installed_by_cli(
+    runner, monkeypatch, tmp_path,
+):
+    _register_local_instance(tmp_path)
+    monkeypatch.setattr(tailscale_ops, "disable_tailscale_serve", _fake_disable_result)
+    # No instance has Serve on anymore -- disable_tailscale_serve already
+    # flipped castelo's own state to enabled=False before returning (it's
+    # only mocked here, but read_state reflects that post-disable reality).
+    monkeypatch.setattr(tailscale_ops, "read_state", lambda root: tailscale_ops.TailscaleState(enabled=False))
+    monkeypatch.setattr(tailscale_ops, "load_tailscale_choice", lambda: {"source": "installed"})
+    removed = []
+    monkeypatch.setattr(tailscale_ops, "remove_tailscale", lambda **kwargs: removed.append(True))
+
+    result = runner.invoke(main, ["tailscale", "disable", "castelo"], input="y\n")
+    assert result.exit_code == 0
+    assert "remove it entirely too" in result.output
+    assert "Removed Tailscale." in result.output
+    assert removed == [True]
+
+
+def test_tailscale_disable_declines_client_removal(runner, monkeypatch, tmp_path):
+    _register_local_instance(tmp_path)
+    monkeypatch.setattr(tailscale_ops, "disable_tailscale_serve", _fake_disable_result)
+    monkeypatch.setattr(tailscale_ops, "read_state", lambda root: tailscale_ops.TailscaleState(enabled=False))
+    monkeypatch.setattr(tailscale_ops, "load_tailscale_choice", lambda: {"source": "installed"})
+
+    def boom(*args, **kwargs):
+        raise AssertionError("remove_tailscale should not run once declined")
+    monkeypatch.setattr(tailscale_ops, "remove_tailscale", boom)
+
+    result = runner.invoke(main, ["tailscale", "disable", "castelo"], input="n\n")
+    assert result.exit_code == 0
+    assert "Skipped. Remove it later by hand" in result.output
+
+
+def test_tailscale_disable_skips_client_removal_when_another_instance_still_uses_it(
+    runner, monkeypatch, tmp_path,
+):
+    _register_local_instance(tmp_path)
+    reg.add_instance(
+        name="other", mode="local", runtime="docker", data_dir="/data/other",
+        public_url="http://localhost:8081", app_port=8081, mcp_port=9001,
+    )
+    monkeypatch.setattr(tailscale_ops, "disable_tailscale_serve", _fake_disable_result)
+    monkeypatch.setattr(tailscale_ops, "read_state", lambda root: _enabled_tailscale_state())
+    monkeypatch.setattr(tailscale_ops, "load_tailscale_choice", lambda: {"source": "installed"})
+
+    def boom(*args, **kwargs):
+        raise AssertionError("remove_tailscale should not run while another instance still uses it")
+    monkeypatch.setattr(tailscale_ops, "remove_tailscale", boom)
+
+    result = runner.invoke(main, ["tailscale", "disable", "castelo"])
+    assert result.exit_code == 0
+    assert "remove it entirely too" not in result.output
+
+
+def test_tailscale_disable_never_offers_client_removal_when_not_installed_by_cli(
+    runner, monkeypatch, tmp_path,
+):
+    _register_local_instance(tmp_path)
+    monkeypatch.setattr(tailscale_ops, "disable_tailscale_serve", _fake_disable_result)
+    monkeypatch.setattr(tailscale_ops, "read_state", lambda root: tailscale_ops.TailscaleState(enabled=False))
+    monkeypatch.setattr(tailscale_ops, "load_tailscale_choice", lambda: {"source": "detected"})
+
+    def boom(*args, **kwargs):
+        raise AssertionError("remove_tailscale should never be offered when job-squire didn't install it")
+    monkeypatch.setattr(tailscale_ops, "remove_tailscale", boom)
+
+    result = runner.invoke(main, ["tailscale", "disable", "castelo"])
+    assert result.exit_code == 0
+    assert "remove it entirely too" not in result.output
+
+
+def test_tailscale_disable_skip_client_cleanup_flag_suppresses_offer(runner, monkeypatch, tmp_path):
+    _register_local_instance(tmp_path)
+    monkeypatch.setattr(tailscale_ops, "disable_tailscale_serve", _fake_disable_result)
+
+    def boom(*args, **kwargs):
+        raise AssertionError("--skip-client-cleanup must skip the whole offer, including the choice check")
+    monkeypatch.setattr(tailscale_ops, "load_tailscale_choice", boom)
+    monkeypatch.setattr(tailscale_ops, "read_state", boom)
+    monkeypatch.setattr(tailscale_ops, "remove_tailscale", boom)
+
+    result = runner.invoke(main, ["tailscale", "disable", "castelo", "--skip-client-cleanup"])
+    assert result.exit_code == 0
+    assert "remove it entirely too" not in result.output
+
+
+def test_tailscale_disable_yes_flag_skips_confirmation_prompt(runner, monkeypatch, tmp_path):
+    _register_local_instance(tmp_path)
+    monkeypatch.setattr(tailscale_ops, "disable_tailscale_serve", _fake_disable_result)
+    monkeypatch.setattr(tailscale_ops, "read_state", lambda root: tailscale_ops.TailscaleState(enabled=False))
+    monkeypatch.setattr(tailscale_ops, "load_tailscale_choice", lambda: {"source": "installed"})
+    removed = []
+    monkeypatch.setattr(tailscale_ops, "remove_tailscale", lambda **kwargs: removed.append(True))
+
+    # No input provided -- --yes must answer the confirm() itself rather
+    # than block on stdin.
+    result = runner.invoke(main, ["tailscale", "disable", "castelo", "--yes"])
+    assert result.exit_code == 0
+    assert "Removed Tailscale." in result.output
+    assert removed == [True]
+
+
 def test_tailscale_status_not_enabled(runner, tmp_path):
     _register_local_instance(tmp_path)
     result = runner.invoke(main, ["tailscale", "status", "castelo"])

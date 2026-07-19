@@ -221,6 +221,7 @@ def test_ensure_tailscale_ready_installs_with_consent_then_is_already_logged_in(
     run = (
         FakeRun()
         .on(("sh", "-c", "curl -fsSL https://tailscale.com/install.sh | sh"), returncode=0)
+        .on(("sudo", "tailscale", "set"), returncode=0)
         .on(("tailscale", "status", "--json"), stdout=_status_json())
     )
 
