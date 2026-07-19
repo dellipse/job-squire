@@ -300,7 +300,7 @@ def call_with_fallback(system: str, user_content: str,
     secret = current_app.config["SECRET_KEY"]
     is_triage = use_triage_model or (task_name in AI_TRIAGE_TASKS if task_name else False)
 
-    # PII/SPI redaction choke point (docs/PLAN-ai-privacy.md). Redacted variants
+    # PII/SPI redaction choke point. Redacted variants
     # are computed once, lazily — local providers may receive the original text
     # (redact_local off), cloud providers always get the redacted version.
     _redacted: dict = {}
@@ -1011,7 +1011,7 @@ def run_triage_batch(offset: int, limit: int = 20,
         """Make a single triage AI call using the configured provider or chain."""
         if _p is not None:
             # Direct-provider path bypasses call_with_fallback, so it applies
-            # the PII redaction choke point itself (docs/PLAN-ai-privacy.md).
+            # the PII redaction choke point itself.
             out_system, out_content = _TRIAGE_SYSTEM, call_content
             was_redacted = privacy.should_redact_for(_p)
             if was_redacted:

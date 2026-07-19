@@ -360,7 +360,7 @@ def _run_migrations():
         "ALTER TABLE ai_config ADD COLUMN mcp_api_key_last_used_at DATETIME",
         "ALTER TABLE ai_config ADD COLUMN mcp_api_key_expires_at DATETIME",
         "ALTER TABLE ai_config ADD COLUMN mcp_api_key_allow_network BOOLEAN DEFAULT 0",
-        # AI privacy: PII/SPI redaction toggles (docs/PLAN-ai-privacy.md).
+        # AI privacy: PII/SPI redaction toggles.
         # redaction_enabled defaults ON — existing installs gain redaction on upgrade.
         "ALTER TABLE ai_config ADD COLUMN redaction_enabled BOOLEAN DEFAULT 1",
         "ALTER TABLE ai_config ADD COLUMN redact_strict BOOLEAN DEFAULT 0",

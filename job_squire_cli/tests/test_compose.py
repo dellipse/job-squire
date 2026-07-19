@@ -10,8 +10,8 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-"""Compose/env rendering and the runtime-driven compose invocations
-(Prompt C5). Every subprocess call is injected, same pattern as
+"""Compose/env rendering and the runtime-driven compose invocations.
+Every subprocess call is injected, same pattern as
 test_runtime.py, so this never touches a real container runtime.
 """
 import json
@@ -120,7 +120,7 @@ def test_render_compose_yaml_network_mode_binds_all_interfaces():
 
 
 def test_render_compose_yaml_proxy_network_adds_networks_block_without_dropping_ports():
-    """Prompt C9: attaching a network-mode instance to a reverse proxy's
+    """Attaching a network-mode instance to a reverse proxy's
     shared Docker network is additive -- host-port publishing (still
     useful for direct/troubleshooting access) stays exactly as it was."""
     yaml_text = compose.render_compose_yaml(
@@ -170,7 +170,7 @@ def test_render_data_env_sets_explicit_session_cookie_name():
 
 def test_render_data_env_omits_unset_trust_proxy_and_secure_cookie():
     """Leaving these unset lets app/deploy.py's DEPLOY_MODE preset fill
-    them in, per PLAN Section 3's precedence rule."""
+    them in, per its own env-vs-preset precedence rule."""
     env_text = compose.render_data_env(_sample_env())
     assert "TRUST_PROXY" not in env_text
     assert "SESSION_COOKIE_SECURE" not in env_text
@@ -356,7 +356,7 @@ def test_extract_fatal_lines_empty_when_none_present():
     assert compose.extract_fatal_lines("INFO: all good\n") == []
 
 
-# ── update / rollback support (Prompt C7) ────────────────────────────────
+# ── update / rollback support ─────────────────────────────────────────
 
 
 def test_pull_image_invokes_runtime_pull(tmp_path):

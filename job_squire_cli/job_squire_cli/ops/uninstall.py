@@ -12,8 +12,7 @@
 #
 """Full CLI uninstall: `job-squire uninstall`.
 
-Not part of the original C1-C12 grammar (docs/PROMPTS-deployment-cli.md) --
-added afterward because getting job-squire *off* a machine cleanly matters
+Added after the rest of the CLI landed, because getting job-squire *off* a machine cleanly matters
 as much as getting it on. Three independent things this undoes, each with
 its own opt-out so nothing is destroyed silently:
 

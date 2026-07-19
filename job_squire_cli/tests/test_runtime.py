@@ -10,7 +10,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-"""Container runtime detection and per-OS install (Prompt C3).
+"""Container runtime detection and per-OS install.
 
 Detection and install must never touch a real subprocess or the real
 filesystem PATH -- every test injects a fake `run`/`which` pair. The

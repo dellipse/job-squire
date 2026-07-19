@@ -1,16 +1,15 @@
 # Single container running all three Job Squire processes (web, worker, mcp)
-# under s6-overlay as PID 1, on the LinuxServer Alpine base. See
-# docs/PLAN-deployment-modes.md Section 2 for the design and Section 8 for
-# the migration notes. This base has no "latest"; the tag below is pinned to
-# a specific dated release, now on the Alpine 3.24 line.
+# under s6-overlay as PID 1, on the LinuxServer Alpine base. This base has
+# no "latest"; the tag below is pinned to a specific dated release, now on
+# the Alpine 3.24 line.
 #
 # Bumped from 3.23-9ba43c66-ls19 on 2026-07-17: the 3.23 line's curl/libcurl
 # (8.19.0-r0) had two unfixed HIGH CVEs, CVE-2026-5773 and CVE-2026-6276,
 # with no backport landed on that branch. 3.24's main repo carries curl
 # 8.21.0-r0, which resolves both. This also moves the base's python3 package
 # from 3.12 to 3.14 (see the venv comment below); that jump was re-verified
-# before this bump, not assumed. See docs/PLAN-deployment-modes.md Section 8
-# for the record of that verification.
+# before this bump, not assumed -- the full requirements.txt lockfile installs
+# as binary musllinux wheels and imports cleanly at runtime under 3.14.
 FROM ghcr.io/linuxserver/baseimage-alpine:3.24-03b33b49-ls6
 
 # We are a downstream image, not a LinuxServer first-party one, so their init

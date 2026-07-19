@@ -11,11 +11,11 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """Instance lifecycle core: create, start, stop, restart, status, list,
-remove (Prompt C5, docs/PLAN-deployment-modes.md Section 7).
+remove.
 
-This module is the one place that wires together every earlier prompt --
-ops.runtime (C3) for the container runtime, ops.registry (C4) for
-instance metadata, and this prompt's own ops.paths/ops.ports/ops.compose/
+This module is the one place that wires everything else together --
+ops.runtime for the container runtime, ops.registry for
+instance metadata, and its own ops.paths/ops.ports/ops.compose/
 ops.secrets_copy -- into the actual operations `job-squire` exposes.
 Every function takes its I/O (subprocess `run`, `confirm`/prompt
 callables, `sleep`) as parameters with real defaults, the same injection
@@ -72,7 +72,7 @@ class StartupGuardFailure(LifecycleError):
     """The app's own startup safety guard (app/deploy.py) refused to boot
     the instance. `messages` are the exact `FATAL: ...` lines it wrote --
     same reason, same fix, reprinted here instead of a generic container
-    error (PLAN Section 7 "Surfacing failures")."""
+    error."""
 
     def __init__(self, messages: list[str]):
         self.messages = messages
@@ -192,8 +192,7 @@ def create_instance(
     or record a hostname, generate a fresh SECRET_KEY, write the compose
     and env files, register the instance, bring it up, and -- if
     `import_from` names another registered instance -- copy its basic
-    settings in afterward (PLAN Section 7 "Instance lifecycle operations",
-    Section 4 "Setup and the import prompt").
+    settings in afterward.
     """
     if mode not in VALID_MODES:
         raise LifecycleError(f"mode must be one of {VALID_MODES}, got {mode!r}.")
@@ -413,7 +412,7 @@ def restart_instance(name: str, *, data_root: Path | None = None, run: Runner = 
     return state
 
 
-# ── update / rollback (Prompt C7) ────────────────────────────────────────
+# ── update / rollback ──────────────────────────────────────────────────
 
 
 @dataclass(frozen=True)
@@ -431,8 +430,8 @@ def update_instance(
     """Move `name` to `version` (default `latest`; also accepts a pinned
     tag or a full image ref) and recreate its container.
 
-    Order matters for the "never kills the container mid-write" guarantee
-    (PLAN Section 7 "Update"): the new image is pulled *first*, with the
+    Order matters for the "never kills the container mid-write" guarantee:
+    the new image is pulled *first*, with the
     old container still running and untouched -- if the pull fails,
     nothing about the instance has changed. Only once the pull succeeds is
     the container stopped, which is the same `compose stop` (graceful
@@ -548,10 +547,9 @@ def remove_instance(
     backing its database/uploads and the host directory (`root`) holding
     its SECRET_KEY. `keep_data` set explicitly skips the prompt (for
     scripted use); left `None`, `confirm_delete` is asked -- and if that's
-    *also* not given, the safe default is to keep the data, since "removing
-    an instance never silently destroys someone's job-search history"
-    (PLAN Section 4) is the one rule that matters more here than
-    convenience.
+    *also* not given, the safe default is to keep the data, since removing
+    an instance should never silently destroy someone's job-search
+    history -- that rule matters more here than convenience.
 
     Resolving `keep_data` before tearing anything down (rather than after,
     as this used to) is what lets it decide whether `compose down` also

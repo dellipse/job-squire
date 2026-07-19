@@ -10,8 +10,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-"""Instance lifecycle core: create/start/stop/restart/status/remove
-(Prompt C5).
+"""Instance lifecycle core: create/start/stop/restart/status/remove.
 
 FakeRuntime stands in for `docker`/`podman` end to end: it answers
 `docker info` (runtime detection), `docker compose ... up/stop/start/
@@ -283,7 +282,7 @@ def test_create_local_instance_end_to_end(fake, data_root):
     assert result.health["Status"] == "running"
     assert result.health["Health"]["Status"] == "healthy"
 
-    # Only localhost/127.0.0.1 links -- never a LAN IP (PLAN Section 5).
+    # Only localhost/127.0.0.1 links -- never a LAN IP.
     assert inst.public_url.startswith("http://localhost:")
     assert "127.0.0.1" in paths.compose_path(paths.instance_root("castelo", data_root)).read_text()
 
@@ -475,9 +474,9 @@ def test_remove_keeps_data_when_declined(fake, data_root):
 
 
 def test_remove_defaults_to_keeping_data_when_nothing_asks(fake, data_root):
-    """No confirm_delete and no explicit keep_data: the safe default wins,
-    per PLAN Section 4 ("removing an instance never silently destroys
-    someone's job-search history")."""
+    """No confirm_delete and no explicit keep_data: the safe default wins --
+    removing an instance should never silently destroy someone's
+    job-search history."""
     lc.create_instance(name="castelo", mode="local", data_root=data_root, **create_kwargs(fake))
     root = paths.instance_root("castelo", data_root)
 
@@ -669,7 +668,7 @@ def test_status_for_healthy_instance(fake, data_root):
 def test_status_reports_drift_when_container_missing_outside_the_cli(fake, data_root):
     lc.create_instance(name="castelo", mode="local", data_root=data_root, **create_kwargs(fake))
     # Simulate the container having been removed by a direct `docker rm`
-    # outside the CLI (PLAN Section 7 "If a divergence does happen").
+    # outside the CLI.
     del fake.containers["job-squire-castelo"]
 
     status = lc.status_for(reg.get_instance("castelo"), run=fake.run)
@@ -737,7 +736,7 @@ def test_create_import_from_unknown_instance_raises(fake, data_root):
         )
 
 
-# ── update / rollback (Prompt C7) ────────────────────────────────────────
+# ── update / rollback ──────────────────────────────────────────────────
 
 
 def test_update_pulls_stops_swaps_and_recreates_in_order(fake, data_root):

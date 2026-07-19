@@ -2092,7 +2092,7 @@ def kit_download_docx():
 @login_required
 def export_ai():
     # Manual-mode export goes to whatever AI chat the user pastes it into —
-    # redact it like any other transmission (docs/PLAN-ai-privacy.md).
+    # redact it like any other transmission.
     export = ai.build_export_dict()
     if privacy.redaction_enabled():
         export = privacy.redact_obj(export)
@@ -2835,7 +2835,7 @@ def ai_provider_test(pid):
 @login_required
 @admin_required
 def settings_ai_privacy():
-    """Save the AI privacy (redaction) toggles — see docs/PLAN-ai-privacy.md."""
+    """Save the AI privacy (redaction) toggles."""
     cfg = _singleton(AIConfig)
     cfg.redaction_enabled = bool(request.form.get("redaction_enabled"))
     cfg.redact_strict = bool(request.form.get("redact_strict"))

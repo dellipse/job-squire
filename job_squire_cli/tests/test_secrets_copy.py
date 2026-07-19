@@ -10,7 +10,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-"""Importing basic settings between instances (Prompt C5).
+"""Importing basic settings between instances.
 
 The Fernet-derivation cross-check against the real app/crypto.py (loaded
 directly from its file, bypassing app/__init__.py's Flask-only imports so

@@ -10,8 +10,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-"""Local-mode port pair allocation (Prompt C5, PLAN Section 4 "Port
-allocation and lifecycle bookkeeping").
+"""Local-mode port pair allocation.
 
 `create` needs a free web/MCP host port pair that doesn't collide with any
 other *registered* instance (the registry is the source of truth) and is
@@ -39,7 +38,7 @@ def default_port_free(port: int, host: str = "127.0.0.1") -> bool:
     """True if `port` can be bound on loopback right now.
 
     Loopback specifically, not "" (all interfaces): local-mode instances
-    always publish on loopback only (PLAN Section 5), so that's the
+    always publish on loopback only, so that's the
     interface that actually matters for a collision.
     """
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:

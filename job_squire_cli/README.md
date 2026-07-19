@@ -16,9 +16,9 @@ command grammar and the versioning rule.
 
 - **Deployment/lifecycle** (top-level): `create`, `start`, `stop`,
   `restart`, `status`, `list`, `update`, `remove`, `configure`, `backup`,
-  `restore`. These drive an instance's container lifecycle. Landing
-  incrementally -- see `docs/PROMPTS-deployment-cli.md` in the `job-squire`
-  repo for the prompt that adds each one.
+  `restore`. These drive an instance's container lifecycle. See
+  `docs/job-squire-cli.md` in the `job-squire` repo for the full command
+  grammar.
 - **Query** (`job-squire query ...`): `health`, `list`, `pipeline`,
   `contacts`, `job`, `contact`, `followups`. Talks to a running instance's
   MCP server directly over the standard Streamable HTTP transport -- no

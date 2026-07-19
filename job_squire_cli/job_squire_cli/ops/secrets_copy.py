@@ -10,12 +10,10 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-"""Importing basic settings from an existing instance into a new one
-(Prompt C5, PLAN Section 4 "Setup and the import prompt").
+"""Importing basic settings from an existing instance into a new one.
 
 Two independent sources feed the import, because Job Squire itself splits
-config the same way (app/deploy.py's module docstring, and
-docs/PLAN-deployment-modes.md Section 3): environment variables in
+config the same way (see app/deploy.py's module docstring): environment variables in
 `data/.env` for deployment shape, and database rows for everything the
 running app can change on the fly.
 
@@ -37,16 +35,15 @@ running app can change on the fly.
     with "additive, never assumed" migrations elsewhere in this project.
 
 Secrets are excluded by default (CLAUDE.md: "ALL stored secrets encrypted
-... never plaintext"; PLAN Section 4: "Secrets are excluded by default").
-`copy_db_settings(..., copy_keys=True)` is the explicit opt-in, and because
-every instance gets its own independently random SECRET_KEY (PLAN Section
-4 "Keys and secrets are always independent"), copying an *encrypted*
+... never plaintext"). `copy_db_settings(..., copy_keys=True)` is the
+explicit opt-in, and because every instance gets its own independently
+random SECRET_KEY, copying an *encrypted*
 column verbatim would not decrypt at the destination -- so opting in
 decrypts with the source instance's SECRET_KEY and re-encrypts with the
 destination's, using the HKDF-SHA256 -> Fernet derivation mirrored from
-app/crypto.py in ops/crypto_mirror.py (shared with ops/mcp_token.py,
-Prompt C6, so that mirrored contract lives in one place -- see that
-module's docstring for why it isn't imported from app/crypto.py directly).
+app/crypto.py in ops/crypto_mirror.py (shared with ops/mcp_token.py, so
+that mirrored contract lives in one place -- see that module's docstring
+for why it isn't imported from app/crypto.py directly).
 """
 from __future__ import annotations
 

@@ -10,14 +10,12 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-"""Passphrase-encrypted archive sealing (Prompt C8, PLAN Section 7 "Backup
-and restore" and the resolved KDF/cipher open item in Section 8).
+"""Passphrase-encrypted archive sealing.
 
 A backup archive necessarily contains the instance's SECRET_KEY and OAuth
 token store, so encryption is mandatory -- `ops/backup.py` never writes an
 unencrypted archive to disk, and this module is the only place that knows
-how to seal or open one. The two primitives are exactly what the plan
-settles: the passphrase is stretched with Argon2id (the current
+how to seal or open one. The passphrase is stretched with Argon2id (the current
 OWASP-recommended passphrase KDF), and the archive is sealed with
 AES-256-GCM for authenticated encryption, so a corrupted or tampered
 archive fails loudly on open rather than decrypting to garbage. Both come

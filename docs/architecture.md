@@ -64,9 +64,9 @@ container over a shared Docker network by container name:
 ```
 
 In local mode there is no proxy at all — the container publishes its two ports straight to
-`127.0.0.1` and the browser talks to it directly (see
-[`PLAN-deployment-modes.md`](PLAN-deployment-modes.md) Section 5 for why loopback is a safe,
-warning-free trust boundary on its own).
+`127.0.0.1` and the browser talks to it directly. Loopback (`localhost`/`127.0.0.1`) is treated
+as a secure context by every modern browser, so this is a safe, warning-free trust boundary on
+its own, with no certificate needed.
 
 ## Request lifecycle (web)
 

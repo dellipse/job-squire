@@ -16,8 +16,7 @@ reachability rule.
 OAuth 2.0/PKCE is the primary, untouched MCP auth flow everywhere. This
 token is the sanctioned escape hatch for headless/non-browser clients that
 can't complete OAuth's browser redirect (scripts, `jobsquire-cli`,
-`mcp-remote` bridges). Per the settled spec (PLAN-deployment-modes.md
-Section 8):
+`mcp-remote` bridges). The settled spec:
 
   * 256 bits of cryptographically random data, URL-safe base64, prefixed
     "jsq_mcp_" so it's recognizable in logs and by secret scanners.
@@ -32,7 +31,7 @@ Section 8):
     this structurally).
   * Loopback-only unless the operator explicitly opts in on a
     network-reachable instance. "Network-reachable" is the resolved
-    DEPLOY_MODE from app/deploy.py (Prompt 4), not a raw guess -- see that
+    DEPLOY_MODE from app/deploy.py, not a raw guess -- see that
     module's docstring for why the app can't actually detect its own
     socket exposure and doesn't try to.
   * No forced expiry by default; an optional TTL is supported.

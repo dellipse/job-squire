@@ -12,8 +12,7 @@
 #
 """Container runtime detection and per-OS install with consent.
 
-Implements Prompt C3 (docs/PROMPTS-deployment-cli.md) and
-docs/PLAN-deployment-modes.md Section 6. Two rules drive everything here:
+Two rules drive everything here:
 
   1. Detect first. If docker, podman, orbstack, or colima is already on
      PATH *and actually runs*, use it and install nothing -- never install
@@ -56,8 +55,7 @@ from ..query.config import config_dir
 
 RUNTIME_STATE_FILENAME = "runtime.json"
 
-# Licensing thresholds verified 2026-07-11 (docs/PLAN-deployment-modes.md
-# Section 6/8). Podman carries no threshold and is the default everywhere,
+# Licensing thresholds verified 2026-07-11. Podman carries no threshold and is the default everywhere,
 # so these are only ever shown at the point OrbStack or Docker Desktop is
 # actually offered as an opt-in/fallback, never proactively.
 ORBSTACK_LICENSE_NOTICE = (
@@ -162,7 +160,7 @@ def linux_install_plan(os_release: dict[str, str] | None = None) -> InstallPlan:
 
     Docker Engine is used only if already present -- which detection would
     already have found -- and is never auto-installed here. Never Docker
-    Desktop on a server (PLAN Section 6).
+    Desktop on a server.
     """
     if os_release is None:
         os_release = read_os_release()

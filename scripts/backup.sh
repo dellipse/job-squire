@@ -9,8 +9,8 @@
 #   DATA_ENV_DIR     Path to the directory holding data/.env (default:
 #                     ./job-squire/data) -- the only thing this script still
 #                     reads directly off the host; everything else the app
-#                     itself owns lives in a named Docker volume now (see
-#                     docs/PLAN-deployment-modes.md), not a host path.
+#                     itself owns lives in a named Docker volume now, not a
+#                     host path.
 #
 # What this does:
 #   /data is a named Docker volume, not a host bind mount, so this script

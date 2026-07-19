@@ -10,7 +10,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-"""Argon2id + AES-256-GCM archive sealing (Prompt C8).
+"""Argon2id + AES-256-GCM archive sealing.
 
 Every test uses cheap Argon2id parameters (time_cost=1, memory_cost=8 MiB,
 lanes=1) purely for test speed -- ops/backup.py's real callers use

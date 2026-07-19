@@ -3,7 +3,7 @@
 #
 # The one command that lands the `job-squire` CLI and hands off to it. This
 # script installs the CLI and nothing else — every step after this is a
-# `job-squire` subcommand (see docs/PLAN-deployment-modes.md Section 6).
+# `job-squire` subcommand.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/dellipse/job-squire/main/bootstrap.sh | sh
@@ -50,7 +50,7 @@ die()  { printf "%b\n" "${RED}x${RESET} $*" >&2; exit 1; }
 # ── Prerequisites ─────────────────────────────────────────────────────────
 # Deliberately not auto-installed: the bootstrap installs the CLI and
 # nothing else (see the file header). Runtime (Podman/Docker) install-with-
-# consent is the CLI's own job (Prompt C3), not this script's.
+# consent is the CLI's own job, not this script's.
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "'$1' is required but wasn't found on PATH. Install it and re-run this command."
 }

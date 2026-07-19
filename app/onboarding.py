@@ -44,7 +44,7 @@ onboarding_bp = Blueprint("onboarding", __name__)
 
 # Ordered walkthrough steps. AI setup deliberately precedes the profile step:
 # the Phase 2 resume interview needs an AI provider (or the manual-mode
-# prompt), so users decide their AI posture first. See the plan doc.
+# prompt), so users decide their AI posture first.
 STEPS = [
     {"key": "persona",      "title": "Welcome",
      "blurb": "Tell Job Squire who this install is for."},

@@ -10,7 +10,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-"""Local-mode port pair allocation (Prompt C5)."""
+"""Local-mode port pair allocation."""
 import pytest
 
 from job_squire_cli.ops import ports

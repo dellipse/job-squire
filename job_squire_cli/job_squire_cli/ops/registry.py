@@ -10,12 +10,11 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-"""The cross-platform instance registry (Prompt C4).
+"""The cross-platform instance registry.
 
-Implements docs/PLAN-deployment-modes.md Section 4: a per-user, per-OS
-JSON file the CLI owns, recording non-secret instance metadata as the
-source of truth for lifecycle (C5 onward drives create/start/stop/status
-against it; this module only owns the registry itself).
+A per-user, per-OS JSON file the CLI owns, recording non-secret instance
+metadata as the source of truth for lifecycle (create/start/stop/status
+drive against it; this module only owns the registry itself).
 
 Lives at the same per-user config directory query.config already uses
 (`config_dir()`), so the CLI has one config home per user, not one per
@@ -82,7 +81,7 @@ def sanitize_slug(raw: str) -> str:
 
 def derive_cookie_name(name: str) -> str:
     """`<name>_session` -- keeps instances on a shared hostname/localhost
-    from clobbering each other's session cookies (PLAN Section 4)."""
+    from clobbering each other's session cookies."""
     return f"{name}_session"
 
 
@@ -97,9 +96,8 @@ def derive_compose_project(name: str) -> str:
 @dataclass(frozen=True)
 class Instance:
     """One registry entry. Every field here is non-secret by construction --
-    see this module's docstring. Field order matches the JSON shape in
-    PLAN-deployment-modes.md Section 4 so serialized entries read the same
-    as the design doc."""
+    see this module's docstring. Field order matches the on-disk JSON
+    shape so serialized entries stay stable and readable."""
 
     name: str
     mode: str

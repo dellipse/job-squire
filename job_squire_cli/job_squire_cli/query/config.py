@@ -10,12 +10,11 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-"""Where the query group gets its MCP endpoint and token (Prompt C6,
-docs/PROMPTS-deployment-cli.md).
+"""Where the query group gets its MCP endpoint and token.
 
 The on-disk shape is keyed by instance name, because one machine can have
-several registered instances (docs/PLAN-deployment-modes.md Section 4) and
-each needs its own endpoint and, usually, its own bearer token:
+several registered instances and each needs its own endpoint and,
+usually, its own bearer token:
 
     {
       "version": 1,
@@ -25,7 +24,7 @@ each needs its own endpoint and, usually, its own bearer token:
       }
     }
 
-`ops/commands.py`'s `configure` command (Prompt C6) is the only writer:
+`ops/commands.py`'s `configure` command is the only writer:
 `--mcp-token generate/rotate` calls ops/mcp_token.py to mint and store the
 local static token in the instance's own database, then records the
 plaintext token and derived endpoint here so the query group can use it
@@ -70,7 +69,7 @@ class QueryConfig:
 def config_dir() -> Path:
     """The per-user, per-OS config directory job-squire owns.
 
-    Matches PLAN-deployment-modes.md Section 4's registry location so the
+    Matches the instance registry's own location so the
     CLI has exactly one config home per user, not one per subsystem:
       macOS:   ~/Library/Application Support/job-squire/
       Linux:   ~/.config/job-squire/ (honoring XDG_CONFIG_HOME)

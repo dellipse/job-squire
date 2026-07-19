@@ -2,7 +2,7 @@
 # Licensed under the GNU Affero General Public License v3 or later.
 """Tests for the PII/SPI redaction layer (``app/privacy.py``) and its wiring.
 
-The contract under test (docs/PLAN-ai-privacy.md):
+The contract under test:
 
 - identifiers the app knows about (accounts, contacts, SMTP addresses) and
   identifier-shaped strings (emails, phones, SSNs, addresses, LinkedIn URLs)

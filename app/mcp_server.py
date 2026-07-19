@@ -100,7 +100,7 @@ mcp = FastMCP("JobSquire", stateless_http=True, transport_security=_transport_se
 
 
 def _ptool():
-    """``mcp.tool()`` plus the PII/SPI privacy boundary (docs/PLAN-ai-privacy.md).
+    """``mcp.tool()`` plus the PII/SPI privacy boundary.
 
     Every tool result is redacted before it leaves the server, so the AI on the
     other end sees placeholders (``{{PII:NAME_…}}``) instead of identifiers, and

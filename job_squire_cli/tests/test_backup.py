@@ -10,7 +10,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-"""Instance backup and restore (Prompt C8).
+"""Instance backup and restore.
 
 Reuses test_lifecycle.py's FakeRuntime and fixtures (same rationale as
 test_lifecycle.py importing from test_secrets_copy.py: one FakeRuntime,
@@ -181,8 +181,8 @@ def test_restore_round_trip_preserves_whole_directory_and_registers_instance(fak
 
 
 def test_restore_preserves_stored_secret_key_so_encrypted_settings_still_decrypt(fake, data_root, tmp_path):
-    """The archive's whole point is carrying SECRET_KEY along (PLAN Section
-    7) -- confirm data/.env's SECRET_KEY survives the round trip unchanged."""
+    """The archive's whole point is carrying SECRET_KEY along -- confirm
+    data/.env's SECRET_KEY survives the round trip unchanged."""
     instance = _make_instance(fake, data_root)
     root = paths.instance_root("castelo", data_root)
     original_secret_key = [

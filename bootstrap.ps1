@@ -2,7 +2,7 @@
 #
 # The one command that lands the `job-squire` CLI and hands off to it. This
 # script installs the CLI and nothing else -- every step after this is a
-# `job-squire` subcommand (see docs/PLAN-deployment-modes.md Section 6).
+# `job-squire` subcommand.
 #
 # Usage (PowerShell):
 #   irm https://raw.githubusercontent.com/dellipse/job-squire/main/bootstrap.ps1 | iex
@@ -56,7 +56,7 @@ function Invoke-NativeOrDie {
 # ── Prerequisites ─────────────────────────────────────────────────────────
 # Deliberately not auto-installed: the bootstrap installs the CLI and
 # nothing else (see the file header). Runtime (Podman/Docker) install-with-
-# consent is the CLI's own job (Prompt C3), not this script's.
+# consent is the CLI's own job, not this script's.
 $GitCmd = Get-Command git -ErrorAction SilentlyContinue
 if (-not $GitCmd) {
     Die "'git' is required but wasn't found on PATH. Install Git for Windows (https://git-scm.com/download/win or 'winget install Git.Git') and re-run this command."

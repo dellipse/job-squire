@@ -11,7 +11,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """ops/mcp_token.py -- the jsq_mcp_ static token, written directly into an
-instance's database (Prompt C6).
+instance's database.
 
 Builds its own minimal ai_config table (mirroring tests/test_secrets_copy.py's
 _SCHEMA) rather than importing it, since some tests here deliberately start

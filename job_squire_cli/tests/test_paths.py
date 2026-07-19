@@ -10,7 +10,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-"""Per-instance directory layout (Prompt C5)."""
+"""Per-instance directory layout."""
 from pathlib import Path
 
 from job_squire_cli.ops import paths

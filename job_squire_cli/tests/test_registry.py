@@ -10,7 +10,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-"""Cross-platform instance registry (Prompt C4).
+"""Cross-platform instance registry.
 
 Pins config_dir() to its Linux/XDG branch the same way test_runtime.py and
 test_query_config.py do, since registry.py reuses that exact helper for

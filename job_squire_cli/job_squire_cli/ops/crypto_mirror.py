@@ -13,8 +13,8 @@
 """The HKDF-SHA256 -> Fernet derivation, mirrored byte-for-byte from
 app/crypto.py.
 
-Shared by ops/secrets_copy.py (Prompt C5, re-encrypting settings copied
-between instances) and ops/mcp_token.py (Prompt C6, writing the encrypted
+Shared by ops/secrets_copy.py (re-encrypting settings copied
+between instances) and ops/mcp_token.py (writing the encrypted
 MCP static token directly into an instance's database) so this
 compatibility contract -- what the app can decrypt -- lives in exactly one
 place inside this package, rather than being copied a second time. It is

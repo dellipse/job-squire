@@ -16,11 +16,10 @@ license = "AGPL-3.0-or-later"
 dependencies = [
     "click>=8.0",
     # ops/secrets_copy.py mirrors app/crypto.py's HKDF->Fernet derivation
-    # (Prompt C5, "explicit opt-in to also copy provider keys") without
-    # depending on the app package itself. Also the primitive Prompt C8's
-    # backup/restore encryption is specified to use, so this is not new
-    # weight added just for C5 -- it's brought forward from what C8 would
-    # add anyway.
+    # (an explicit opt-in to also copy provider keys) without
+    # depending on the app package itself. Also the primitive backup/restore
+    # encryption uses, so this isn't new weight added just for one feature --
+    # it's shared by both.
     "cryptography>=42.0",
 ]
 

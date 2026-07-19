@@ -71,8 +71,7 @@ known-unsafe combinations into an early, explicit signal rather than a silent mi
   that port). The banner clears on the next boot once the underlying variable is fixed.
 
 Every message names the offending variable, its value, why it's unsafe, and the fix. See
-`app/deploy.py` and [`PLAN-deployment-modes.md`](PLAN-deployment-modes.md) Section 3 for the full
-precedence rules and guard logic.
+`app/deploy.py` for the full precedence rules and guard logic.
 
 ### Scheduler (worker)
 

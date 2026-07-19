@@ -10,7 +10,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-"""The `configure` click command (Prompt C6): MCP authentication and the
+"""The `configure` click command: MCP authentication and the
 query-group token-config plumbing, end to end through the CLI (no real
 container runtime involved -- the instance's data directory and database
 are built by hand, the same way tests/test_lifecycle.py's FakeRuntime does
@@ -196,7 +196,7 @@ def test_network_instance_allows_static_token_with_explicit_opt_in(runner):
     assert query_config_module.load_query_config().endpoint == "https://mcp-squire.example.com"
 
 
-# ── tailnet reachability rule (Prompt C11) ────────────────────────────────
+# ── tailnet reachability rule ──────────────────────────────────────────
 # A Tailscale-Serve-fronted instance stays mode="local" by design (ops/
 # tailscale.py's module docstring), so Instance.mode alone can't tell
 # `configure` it's reachable beyond this machine -- the state manifest

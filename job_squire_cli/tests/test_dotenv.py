@@ -10,7 +10,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-"""Line-preserving .env read/append/set helpers (Prompt C7)."""
+"""Line-preserving .env read/append/set helpers."""
 from job_squire_cli.ops import dotenv
 
 

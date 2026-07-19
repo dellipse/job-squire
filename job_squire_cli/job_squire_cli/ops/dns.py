@@ -10,12 +10,9 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-"""DNS and TLS provisioning for the CLI-installed SWAG proxy (Prompt C10,
-docs/PLAN-deployment-modes.md Section 5 "Free and low-cost domain and DNS
-options for personal use" and the resolved auto-configure-versus-document
-open item in Section 8).
+"""DNS and TLS provisioning for the CLI-installed SWAG proxy.
 
-Three tiers, matching the plan exactly:
+Three tiers:
 
   1. **DuckDNS (fully automated).** `configure_duckdns` collects the
      operator's DuckDNS subdomain and account token, rewrites the SWAG
@@ -36,9 +33,9 @@ Three tiers, matching the plan exactly:
   3. **Everything else is documented only.** Cloudflare Tunnel and the
      long tail of other SWAG DNS plugins (Route53, Google Domains, Porkbin,
      ...) are not wired to any function here -- see docs/job-squire-cli.md's
-     "DNS and TLS provisioning" section and PLAN Section 5's own prose.
-     They use a different topology (Tunnel) or open-ended provider-specific
-     credentials this module does not try to enumerate.
+     "DNS and TLS provisioning" section. They use a different topology
+     (Tunnel) or open-ended provider-specific credentials this module does
+     not try to enumerate.
 
 **Scope.** Both automated paths only ever touch the CLI's *own* SWAG
 install -- the one `job-squire proxy` creates at `proxy.swag_root()` when
@@ -46,9 +43,9 @@ no existing proxy was found (`_managed_swag_target` refuses anything
 else). If the operator's `job-squire proxy` run instead found and reused
 an existing third-party SWAG or nginx, that proxy's DNS/TLS setup already
 predates job-squire and is the operator's own to manage; this module does
-not reach into it. Neither path can conjure a domain and working DNS
-(PLAN Section 5 restated in Section 7's touchpoints): the operator must
-already hold the DuckDNS subdomain (registered free at duckdns.org) or
+not reach into it. Neither path can conjure a domain and working DNS: the
+operator must already hold the DuckDNS subdomain (registered free at
+duckdns.org) or
 the Cloudflare-managed domain and API token before running either
 command. This is a network-mode-only concern; a local install uses
 loopback and needs none of it.
@@ -267,7 +264,7 @@ def configure_duckdns(
     proxy = _managed_swag_target(data_root)
     url = f"{_bare_label(subdomain, DUCKDNS_SUFFIX)}.{DUCKDNS_SUFFIX}"
 
-    # DuckDNS's own tradeoff (PLAN Section 5): the wildcard needs DNS-01
+    # DuckDNS's own tradeoff: the wildcard needs DNS-01
     # (SWAG's native `VALIDATION=duckdns` mode, which drives DuckDNS's own
     # TXT-record API -- no inbound port), while the main subdomain alone
     # can use ordinary HTTP-01 (port 80 must be reachable). Not both from

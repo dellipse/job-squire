@@ -10,7 +10,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-"""query.config -- multi-instance mcp.json (Prompt C6), and no ~/.hermes/
+"""query.config -- multi-instance mcp.json, and no ~/.hermes/
 anywhere in the resolution path.
 
 config_dir() branches on platform.system(), so tests pin that function

@@ -16,14 +16,14 @@ These tests don't need the [query] extra installed and must keep passing
 without it -- if they ever import job_squire_cli.query.commands eagerly,
 the whole point of the lazy group is defeated.
 
-Prompt C5 made create/start/stop/restart/status/list/remove real (see
+create/start/stop/restart/status/list/remove are real (see
 ops/lifecycle.py and tests/test_lifecycle.py, tests/test_ops_commands.py
-for their behavior). Prompt C6 made `configure` real too (see
-tests/test_configure.py). Prompt C7 made `update` real (see
-tests/test_lifecycle.py and tests/test_ops_commands.py). Prompt C8 made
-`backup`/`restore` real too (see tests/test_backup.py) -- every deployment
-verb is real as of this prompt, so there is no longer a stub set here.
-(Prompt C7 also shipped an `adopt` command for migrating an existing
+for their behavior). `configure` is real too (see
+tests/test_configure.py), as is `update` (see
+tests/test_lifecycle.py and tests/test_ops_commands.py), as is
+`backup`/`restore` (see tests/test_backup.py) -- every deployment
+verb is real, so there is no longer a stub set here.
+(An `adopt` command also shipped for migrating an existing
 three-container install onto the single-container image; removed
 2026-07-17 once no installs remained on the old topology to migrate.)
 """

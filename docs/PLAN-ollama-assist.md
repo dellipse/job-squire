@@ -9,7 +9,7 @@ existed on the model but had no form field at all until now). Also same day: pro
 task doesn't just fail outright when nothing in the provider chain has enough context — see "Prompt
 chunking" below. Remaining web-app integration points below (onboarding step 3, the guided-install
 panel proper, in-app "Test Ollama" button) are not started.
-**Goal:** Help the user determine whether their machine can reasonably run Ollama. If not, present it as an option anyway and explain concretely why it won't work on this machine. If it can, guide (or automate) installation and recommend specific models suited to Job Squire's workloads. Companion to `PLAN-ai-privacy.md`, where Ollama is the zero-egress privacy option.
+**Goal:** Help the user determine whether their machine can reasonably run Ollama. If not, present it as an option anyway and explain concretely why it won't work on this machine. If it can, guide (or automate) installation and recommend specific models suited to Job Squire's workloads. Ollama is the zero-egress privacy option: running AI entirely on the user's own machine, so nothing about their job search leaves it.
 
 ---
 
@@ -25,7 +25,7 @@ Job Squire runs in Docker. What the container can see about the host varies by p
 
 An in-app-only detector would tell a 64 GB M4 Mac owner they have 8 GB. Detection therefore uses three sources with strict precedence:
 
-1. **CLI host detection (authoritative).** `job-squire ollama check` runs on the host: OS/arch, physical RAM, CPU cores, Apple Silicon (`sysctl`/`system_profiler`), NVIDIA VRAM (`nvidia-smi`), AMD (`rocm-smi`), whether Ollama is already installed/running. Writes `host_capabilities.json` into the instance's `DATA_DIR`, which the web app reads (CLI already knows each instance's data dir via the instance registry — `PLAN-deployment-modes.md`).
+1. **CLI host detection (authoritative).** `job-squire ollama check` runs on the host: OS/arch, physical RAM, CPU cores, Apple Silicon (`sysctl`/`system_profiler`), NVIDIA VRAM (`nvidia-smi`), AMD (`rocm-smi`), whether Ollama is already installed/running. Writes `host_capabilities.json` into the instance's `DATA_DIR`, which the web app reads (CLI already knows each instance's data dir via the instance registry).
 2. **In-app best-effort auto-detect.** Reads `/proc/meminfo`, `/proc/cpuinfo`, and virtualization signals. On Linux-native it may be trusted; when VM/Docker-Desktop signals are present it must NOT assert numbers — it only pre-fills the questionnaire with "we can't see your real hardware from inside the container."
 3. **Questionnaire fallback.** Three questions in the wizard: OS, approximate RAM, GPU (Apple Silicon / NVIDIA + VRAM / none). Pre-filled from source 2 where honest.
 
@@ -149,7 +149,7 @@ configured model genuinely can't fit it.
 
 - **Onboarding step 3** (`PLAN-onboarding.md`): the AI setup step leads with the privacy framing; "Local AI (Ollama)" branch runs detection → tier verdict → guided install or the not-reasonable explanation.
 - **Settings → AI providers:** same detection panel available permanently, not just during onboarding.
-- **`PLAN-ai-privacy.md`:** when the active provider chain is Ollama-only, the UI shows the zero-egress badge; redaction defaults off for local (`redact_local`).
+- **AI privacy:** when the active provider chain is Ollama-only, the UI shows the zero-egress badge; redaction defaults off for local (`redact_local`).
 - **Worker:** triage via local model may be slow on Entry tier — the search-run pipeline already runs async; add a per-run timeout suited to CPU inference rather than cloud latencies.
 
 ---

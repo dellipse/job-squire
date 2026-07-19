@@ -1,6 +1,6 @@
 """PII/SPI redaction and rehydration for every AI transmission path.
 
-Design (see docs/PLAN-ai-privacy.md):
+Design:
 
 - Identifiers (names, emails, phones, addresses, SSNs, LinkedIn URLs, work
   authorization / clearance statements) are replaced with deterministic
@@ -23,7 +23,9 @@ pattern pass; placeholders for known values can always be recomputed.
 
 Detection is local-only: exact matching of values the app already knows
 (candidate account, SMTP settings, contacts) plus regexes for common
-identifier shapes. No NER/ML dependencies — see the plan doc for why.
+identifier shapes. No NER/ML dependencies -- those add hundreds of MB to
+a single-container image, and detecting PII with a cloud AI would be
+circular anyway.
 """
 
 from __future__ import annotations
@@ -110,7 +112,8 @@ _PATTERN_PASS = [
 # ---------------------------------------------------------------------------
 # SPI/PHI strip pass — content that should not reach employers at all.
 # Matched sentences are removed from outbound text and reported as coaching
-# flags (warn + coach; see plan doc "SPI rule").
+# flags (warn + coach: content that shouldn't reach an employer at all
+# gets flagged for removal rather than tokenized and sent through).
 # ---------------------------------------------------------------------------
 
 _SPI_HEALTH_RE = re.compile(

@@ -1,5 +1,5 @@
 # Single-container topology: web, worker, and mcp all run inside one
-# container under s6-overlay. See docs/PLAN-deployment-modes.md Section 2.
+# container under s6-overlay.
 # This is the file the `job-squire` CLI's `create` command generates a
 # per-instance copy of (see docs/job-squire-cli.md); this checkout copy is
 # for local development.

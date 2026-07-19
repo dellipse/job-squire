@@ -352,9 +352,9 @@ def read_host_capabilities(root: Path) -> HostCapabilities | None:
 
 
 # ── Capability tiers -> model recommendations ────────────────────────────
-# Tags verified against https://ollama.com/library on 2026-07-16. Per the
-# plan doc: this table "reflects the mid-2026 landscape and will age" --
-# re-check before trusting it more than a few months out. Kept as one data
+# Tags verified against https://ollama.com/library on 2026-07-16. This
+# table reflects the mid-2026 landscape and will age -- re-check before
+# trusting it more than a few months out. Kept as one data
 # structure, not scattered across callers or templates.
 
 TIER_NOT_REASONABLE = "not_reasonable"

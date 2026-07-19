@@ -26,7 +26,7 @@ analysis later in the flow needs it too.
 2. **Accounts** — offer the optional second account (helper/coach in self mode; job seeker in helper mode). Requires a new in-app route: accounts are currently seeded only from `ADMIN_PASSWORD` / `USER_PASSWORD` env vars (`_seed_users()` in `__init__.py`).
 3. **AI setup** —
    - "Will you use AI for job scoring, resumes, cover letters?"
-   - Privacy posture up front: Ollama presented as the zero-egress option; for cloud providers, explain automatic identifier redaction (see `PLAN-ai-privacy.md`).
+   - Privacy posture up front: Ollama presented as the zero-egress option; for cloud providers, explain that identifiers are automatically replaced with placeholders before transmission.
    - Ollama branch: hardware capability detection → tier verdict → guided install and model recommendations, or an honest "why not on this machine" explanation (see `PLAN-ollama-assist.md`).
    - If yes: Claude account? (Free/Pro/Max → MCP connector setup, existing Settings → Claude tab). Other subscriptions (ChatGPT, Gemini, xAI, Nous Portal, ...)? Free/low-cost API routes (Gemini free tier, Groq, OpenRouter, GitHub Models, Ollama local)? Walk through provider config (existing multi-provider chain UI).
    - If no: explain the reduced feature set (no auto-triage, no drafts, no weekly review; Manual mode still works) and continue.

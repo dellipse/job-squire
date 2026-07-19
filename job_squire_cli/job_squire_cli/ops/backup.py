@@ -10,8 +10,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-"""Instance backup and restore (Prompt C8, docs/PLAN-deployment-modes.md
-Section 7 "Backup and restore").
+"""Instance backup and restore.
 
 `backup` produces one self-contained, mandatory-encrypted archive per
 instance: the whole instance directory as it would look if it were still
@@ -124,8 +123,7 @@ def _utc_stamp_minutes() -> str:
 
 
 def default_backup_dir() -> Path:
-    """The user's home folder (PLAN Section 7: "written to the user's home
-    folder")."""
+    """Backups are written to the user's home folder by default."""
     return Path.home()
 
 
@@ -192,7 +190,7 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-# ── Building the archive payload (Prompt C8 step 1-2) ────────────────────
+# ── Building the archive payload ──────────────────────────────────────────
 
 
 def _write_tar_gz(entries: list[tuple[str, Path]], manifest_bytes: bytes) -> bytes:
@@ -358,8 +356,8 @@ def create_all_backups(
     argon2_memory_cost_kib: int = backup_crypto.DEFAULT_MEMORY_COST_KIB,
     argon2_lanes: int = backup_crypto.DEFAULT_LANES,
 ) -> list[BackupResult]:
-    """One archive per registered instance (PLAN Section 7: "an option can
-    back up every registered instance in one run")."""
+    """One archive per registered instance -- an option to back up every
+    registered instance in one run."""
     return [
         create_backup(
             instance, data_root=data_root, dest_dir=dest_dir, passphrase=passphrase, ext=ext, run=run,
@@ -411,10 +409,10 @@ def _read_manifest(payload: bytes, container_format: int) -> dict:
 
 
 def _verify_checksums(payload: bytes, container_format: int, checksums: dict[str, str]) -> None:
-    """Verify every file's checksum *before* anything is written to disk
-    (PLAN Section 7's restore ordering: decrypt, then verify, then unpack),
-    so a corrupted archive is caught before it touches the target
-    directory rather than partway through extraction."""
+    """Verify every file's checksum *before* anything is written to disk --
+    the restore ordering is decrypt, then verify, then unpack -- so a
+    corrupted archive is caught before it touches the target directory
+    rather than partway through extraction."""
     seen = set()
     for rel, data in _iter_payload_members(payload, container_format):
         seen.add(rel)
@@ -571,7 +569,7 @@ def restore_instance(
     registered, pass either `target_name` (a different name -- the caller,
     typically the click layer, resolves the rename interactively) or
     `overwrite=True`; leaving both unset/False raises NameCollisionError
-    rather than clobbering silently (PLAN Section 7).
+    rather than clobbering silently.
 
     The container is always created (`compose create`) and its restored
     data always copied in, regardless of `bring_up` -- the named volume

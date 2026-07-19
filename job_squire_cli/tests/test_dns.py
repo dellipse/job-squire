@@ -10,7 +10,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-"""DNS and TLS provisioning (Prompt C10).
+"""DNS and TLS provisioning.
 
 Every subprocess call is injected, same philosophy as test_proxy.py and
 test_runtime.py, so this never touches a real container runtime or real

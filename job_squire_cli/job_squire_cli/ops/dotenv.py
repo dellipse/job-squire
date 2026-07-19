@@ -10,8 +10,8 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-"""Minimal, line-preserving `KEY=value` env-file read/append/set helpers
-(Prompt C7), used by ops/compose.py (compose-level bookkeeping like
+"""Minimal, line-preserving `KEY=value` env-file read/append/set helpers,
+used by ops/compose.py (compose-level bookkeeping like
 `update`'s `PREVIOUS_IMAGE`), ops/tailscale.py, and ops/backup.py's restore.
 
 `set_line`/`append_if_absent` never reorder or rewrite a file's other

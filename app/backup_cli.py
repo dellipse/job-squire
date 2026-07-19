@@ -12,8 +12,8 @@
 #
 """Container-side backup entrypoint for job-squire-cli.
 
-Since /data may be a named Docker volume rather than a host bind mount
-(docs/PLAN-deployment-modes.md), the CLI cannot always read a WAL-safe
+Since /data may be a named Docker volume rather than a host bind mount,
+the CLI cannot always read a WAL-safe
 snapshot of the database straight off the host filesystem the way it once
 did. Instead it runs this module inside the running container --
 `docker exec <container> python -m app.backup_cli` (or the `podman`

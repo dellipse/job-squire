@@ -10,8 +10,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-"""CLI-side management of the `jsq_mcp_` local static MCP bearer token
-(Prompt C6, docs/PLAN-deployment-modes.md Section 5 "MCP authentication").
+"""CLI-side management of the `jsq_mcp_` local static MCP bearer token.
 
 The app's own generate/rotate/revoke logic (app/mcp_auth.py's
 generate_token()/expires_at_from_ttl_hours(), and app/main.py's
@@ -90,8 +89,8 @@ def is_static_token_allowed(mode: str, allow_network: bool) -> bool:
     DEPLOY_MODE -- lifecycle.create_instance writes DEPLOY_MODE=mode
     verbatim into the instance's data/.env (ops/compose.py's
     render_data_env), so the two are the same value by construction, which
-    is what PLAN Section 5 means by "matching the resolved deployment
-    posture from the app set, not a raw guess."
+    is what matches this check to the resolved deployment posture from the
+    app set, rather than guessing at it independently.
     """
     return mode != "network" or bool(allow_network)
 
