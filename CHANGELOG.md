@@ -8,6 +8,29 @@ footer as `<VERSION>-<build-sha>`.
 
 ## [Unreleased]
 
+## [0.7.23] - 2026-07-19
+
+### Added
+
+- `job-squire tailscale disable` now offers to remove the Tailscale client itself once it turns
+  Serve off, mirroring `remove`'s existing offer: only if no other registered instance still has
+  Serve enabled and job-squire is the one that installed the client (`tailscale enable`'s
+  `ensure_tailscale_ready`, never a client the operator already had running). New
+  `--skip-client-cleanup` opts out of the offer entirely; `--yes` skips the prompt. The shared
+  "offer to remove the client" logic used by both `remove` and `tailscale disable` now lives in
+  one helper (`_offer_tailscale_client_removal_if_unused`) instead of two copies.
+
+### Fixed
+
+- `tailscale enable` now checks the target instance's mode before installing or logging into
+  Tailscale, failing immediately for a network-mode instance instead of only after walking the
+  operator through a full client install and `tailscale up` login -- Tailscale Serve is a
+  local-mode-only private front door and was never going to apply once that setup finished.
+- A fresh Tailscale client install (via `tailscale enable`) now automatically runs `sudo tailscale
+  set --operator=$USER`, so the newly-installed client doesn't require `sudo` for every subsequent
+  `tailscale` command. Previously the operator had to notice and run this by hand after `tailscale
+  up` failed with "Access denied: prefs write access denied."
+
 ## [0.7.22] - 2026-07-19
 
 ### Added
