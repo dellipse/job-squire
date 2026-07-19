@@ -67,6 +67,129 @@ if [ "$PY_OK" != "1" ]; then
   die "Python 3.11+ is required (found: $(python3 --version 2>&1)). Install a newer Python 3 and re-run this command."
 fi
 
+# python3's `venv` module needs `ensurepip` to bootstrap pip into the new
+# environment. Several distros package that separately from base python3
+# (Debian/Ubuntu split it into python3.X-venv; Fedora/openSUSE/Alpine have
+# their own python3-venv package), so `python3 -m venv` fails with
+# "ensurepip is not available" until the right one is installed. Unlike
+# Podman/Docker (see the Prerequisites note above), this isn't a downstream
+# runtime the CLI manages later -- it's a hard dependency of this script's
+# own venv step, so it's in scope here. Still asks before touching the
+# system, and installs via whatever package manager actually matches the
+# distro rather than guessing.
+
+distro_family() {
+  # Reads /etc/os-release (standard on all mainstream Linux distros) and
+  # buckets ID/ID_LIKE into a family. Run in a subshell so sourcing the file
+  # doesn't leak NAME/VERSION_ID/etc. into the rest of the script. Prints ""
+  # on macOS or anything unrecognized.
+  [ -r /etc/os-release ] || { echo ""; return 0; }
+  (
+    . /etc/os-release 2>/dev/null
+    ident="${ID:-}_${ID_LIKE:-}"
+    case "$ident" in
+      *ubuntu*|*debian*|*mint*|*raspbian*) echo debian ;;
+      *fedora*|*rhel*|*centos*|*rocky*|*alma*|*ol_*) echo fedora ;;
+      *opensuse*|*suse*) echo suse ;;
+      *alpine*) echo alpine ;;
+      *arch*|*manjaro*|*endeavour*) echo arch ;;
+      *) echo "" ;;
+    esac
+  )
+}
+
+pkg_manager_for_family() {
+  case "$1" in
+    debian) echo apt-get ;;
+    fedora) command -v dnf >/dev/null 2>&1 && echo dnf || echo yum ;;
+    suse)   echo zypper ;;
+    alpine) echo apk ;;
+    arch)   echo pacman ;;
+    *)      echo "" ;;
+  esac
+}
+
+venv_pkg_for_family() {
+  # Debian/Ubuntu pin the package to the running python3's minor version
+  # (matches the actual "apt install python3.12-venv" hint in the error);
+  # everyone else that splits this out uses a plain, unversioned name.
+  case "$1" in
+    debian) python3 -c 'import sys; print("python3.%d-venv" % sys.version_info[1])' ;;
+    fedora) echo "python3-venv" ;;
+    suse)   echo "python3-venv" ;;
+    alpine) echo "python3-venv" ;;
+    *)      echo "" ;;
+  esac
+}
+
+run_privileged() {
+  if [ "$(id -u)" = "0" ]; then
+    "$@"
+  else
+    require_cmd sudo
+    sudo "$@"
+  fi
+}
+
+install_pkg() {
+  # install_pkg <manager> <package>
+  case "$1" in
+    apt-get) run_privileged apt-get update -qq && run_privileged apt-get install -y "$2" ;;
+    dnf)     run_privileged dnf install -y "$2" ;;
+    yum)     run_privileged yum install -y "$2" ;;
+    zypper)  run_privileged zypper --non-interactive install "$2" ;;
+    apk)     run_privileged apk add "$2" ;;
+    *)       return 1 ;;
+  esac
+}
+
+ensure_venv_module() {
+  python3 -c 'import ensurepip' >/dev/null 2>&1 && return 0
+  warn "python3's venv module is missing ensurepip (needed to create ${VENV_DIR})."
+
+  family=$(distro_family)
+  manager=$(pkg_manager_for_family "$family")
+  if [ -z "$manager" ] || ! command -v "$manager" >/dev/null 2>&1; then
+    # Distro wasn't identified, or reported a manager that isn't actually on
+    # PATH (e.g. a minimal/custom image) -- fall back to whichever known
+    # package manager we can actually find.
+    manager=""
+    for candidate in apt-get dnf yum zypper apk pacman; do
+      command -v "$candidate" >/dev/null 2>&1 && { manager="$candidate"; break; }
+    done
+  fi
+
+  pkg=$(venv_pkg_for_family "$family")
+  [ -n "$pkg" ] || pkg="python3-venv"
+
+  # Arch bundles ensurepip with the base `python` package rather than
+  # splitting it out, and pacman has no mapping above -- if it's still
+  # missing there, a package install isn't the fix.
+  if [ -z "$manager" ] || [ "$family" = "arch" ]; then
+    die "Install the package that provides ensurepip/venv support for your system's python3 (commonly '${pkg}'), then re-run this command."
+  fi
+
+  if [ -t 1 ] && [ -r /dev/tty ]; then
+    printf "%b" "${YELLOW}?${RESET} Install ${pkg} now via ${manager}? [Y/n] " > /dev/tty
+    read -r reply < /dev/tty || reply=""
+  else
+    reply="n"
+    warn "Not running interactively -- skipping the install prompt."
+  fi
+
+  case "$reply" in
+    ""|y|Y|yes|YES|Yes)
+      info "Installing ${pkg} via ${manager} ..."
+      install_pkg "$manager" "$pkg" || die "Failed to install ${pkg} with ${manager}. Install it manually and re-run this command."
+      python3 -c 'import ensurepip' >/dev/null 2>&1 || die "${pkg} was installed but ensurepip is still unavailable. Install it manually and re-run this command."
+      ok "Installed ${pkg}"
+      ;;
+    *)
+      die "${pkg} is required to create the CLI's virtual environment. Install it (via ${manager}) and re-run this command."
+      ;;
+  esac
+}
+
 # ── GitHub API helper ────────────────────────────────────────────────────
 # Sets API_STATUS (HTTP status code) and API_BODY_FILE (path to the response
 # body) as globals. Not run inside a command substitution, so the globals it
@@ -169,6 +292,7 @@ ok "Pinned to commit ${sha}"
 # system Python, and keeps the CLI's dependencies from ever colliding with
 # anything else on the machine. Safe to re-run: reuses the venv if present.
 if [ ! -x "$BIN_DIR/python" ]; then
+  ensure_venv_module
   info "Creating an isolated environment at ${VENV_DIR} ..."
   python3 -m venv "$VENV_DIR"
 fi
