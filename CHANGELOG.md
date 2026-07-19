@@ -8,6 +8,19 @@ footer as `<VERSION>-<build-sha>`.
 
 ## [Unreleased]
 
+## [0.7.20] - 2026-07-18
+
+### Added
+
+- `bootstrap.sh` now detects a missing `ensurepip`/`venv` module before creating the CLI's virtual
+  environment (the "ensurepip is not available" failure some distros hit on `python3 -m venv`).
+  It reads `/etc/os-release` to identify the distro family (Debian/Ubuntu, Fedora/RHEL/CentOS/
+  Rocky/Alma, openSUSE/SLES, Alpine, Arch), maps that to the matching package manager and package
+  name (version-pinned `python3.X-venv` on Debian/Ubuntu, plain `python3-venv` elsewhere), and
+  prompts before installing it with `sudo` if needed. Falls back to probing for any known package
+  manager if the distro can't be identified, and to a clear manual-install message if nothing
+  matches (or on Arch, where this is bundled by default and not a package issue).
+
 ## [0.7.19] - 2026-07-18
 
 ### Added
