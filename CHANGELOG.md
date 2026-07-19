@@ -8,6 +8,8 @@ footer as `<VERSION>-<build-sha>`.
 
 ## [Unreleased]
 
+## [0.7.22] - 2026-07-19
+
 ### Added
 
 - `job-squire create --mode network` now offers to provision a reverse proxy automatically right
@@ -45,6 +47,17 @@ footer as `<VERSION>-<build-sha>`.
   installed the client (same "last instance + installed by the CLI" shape as the SWAG offer);
   `uninstall` offers it unconditionally, once, since every instance is already gone by the time it
   runs. Both stay under `--skip-tailscale-cleanup`.
+
+### Changed
+
+- Removed internal AI-build-process documentation and code comments: the `docs/PROMPTS-*.md` build
+  scripts, a `docs/PLAN-*.md` session-starter script, and the `docs/PLAN-*.md` design docs whose
+  work has since fully shipped (multi-provider AI, the single-container/CLI deployment overhaul, AI
+  privacy redaction) are removed, and every `(Prompt Cx)` / `(PLAN-deployment-modes.md Section N)`
+  citation pointing at them across the app, the CLI package, tests, and deployment scripts is
+  rewritten to explain itself inline instead. `docs/PLAN-onboarding.md` and
+  `docs/PLAN-ollama-assist.md` are kept, since both still track real unfinished work. No behavior
+  change.
 
 ## [0.7.21] - 2026-07-18
 
