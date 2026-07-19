@@ -8,6 +8,17 @@ footer as `<VERSION>-<build-sha>`.
 
 ## [Unreleased]
 
+## [0.7.25] - 2026-07-19
+
+### Changed
+
+- The Getting Started walkthrough's "Email notifications" step (added in 0.7.24) now sits right
+  after AI setup instead of at the end, before profile/search/job boards -- grouping the two "how
+  much does this instance talk to the outside world" decisions together so the rest of the
+  walkthrough runs uninterrupted once they're settled. `save_ai`'s "continue" now lands on
+  notifications instead of profile, and notifications' own "continue"/"no email" now lands on
+  profile instead of the checklist overview.
+
 ## [0.7.24] - 2026-07-19
 
 ### Added
