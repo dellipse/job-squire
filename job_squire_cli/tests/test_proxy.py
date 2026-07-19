@@ -10,7 +10,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-"""Reverse-proxy provisioning (Prompt C9).
+"""Reverse-proxy provisioning.
 
 Every subprocess call is injected, same pattern as test_runtime.py and
 test_compose.py, so this never touches a real container runtime or a real
@@ -165,6 +165,92 @@ def test_install_confs_manual_proxy_uses_host_ports(tmp_path):
     )
     assert "proxy_pass http://127.0.0.1:8081;" in web_path.read_text()
     assert "proxy_pass http://127.0.0.1:9001;" in mcp_path.read_text()
+
+
+# ── remove_confs / is_managed_swag / remove_managed_swag (`job-squire remove`'s
+# proxy/DNS cleanup offer, ops/commands.py's `_offer_proxy_removal`) ────────
+
+
+def test_remove_confs_deletes_both_files_and_returns_their_paths(tmp_path):
+    target = proxy.ProxyTarget(config_dir=tmp_path / "swag-config", container_name="swag", kind="swag")
+    proxy.install_confs(
+        target, instance_name="castelo", subdomain_web="squire", subdomain_mcp="mcp-squire",
+        container_name="job-squire-castelo", app_port=8081, mcp_port_host=9001, mcp_port_internal=9000,
+    )
+    confs_dir = tmp_path / "swag-config" / "nginx" / "proxy-confs"
+    assert len(list(confs_dir.iterdir())) == 2
+
+    removed = proxy.remove_confs(target, instance_name="castelo")
+    assert {p.name for p in removed} == {
+        "job-squire-castelo.subdomain.conf", "mcp-job-squire-castelo.subdomain.conf",
+    }
+    assert list(confs_dir.iterdir()) == []
+
+
+def test_remove_confs_returns_empty_list_when_neither_file_exists(tmp_path):
+    target = proxy.ProxyTarget(config_dir=tmp_path / "swag-config", container_name="swag", kind="swag")
+    assert proxy.remove_confs(target, instance_name="castelo") == []
+
+
+def test_is_managed_swag_true_for_the_clis_own_install(tmp_path):
+    target = proxy.ProxyTarget(
+        config_dir=proxy.swag_root(tmp_path) / "config", container_name=proxy.SWAG_CONTAINER_NAME, kind="swag",
+    )
+    assert proxy.is_managed_swag(target, data_root=tmp_path) is True
+
+
+def test_is_managed_swag_false_for_a_third_party_swag_with_the_same_container_name(tmp_path):
+    # Same container name as the CLI's own, but a config directory that
+    # doesn't resolve to swag_root() -- an operator's own SWAG install
+    # `detect_existing_proxy` found and reused, not one this CLI created.
+    target = proxy.ProxyTarget(
+        config_dir=tmp_path / "someone-elses-swag" / "config", container_name=proxy.SWAG_CONTAINER_NAME, kind="swag",
+    )
+    assert proxy.is_managed_swag(target, data_root=tmp_path) is False
+
+
+def test_is_managed_swag_false_for_bare_nginx(tmp_path):
+    target = proxy.ProxyTarget(config_dir=proxy.swag_root(tmp_path) / "config", container_name="my-nginx", kind="nginx")
+    assert proxy.is_managed_swag(target, data_root=tmp_path) is False
+
+
+def _install_fake_swag(tmp_path):
+    run = (
+        FakeRun()
+        .on(("docker", "network", "create", "job-squire-proxy"), returncode=0)
+        .on(("docker", "compose"), returncode=0)
+    )
+    return proxy.install_swag(runtime="docker", network="job-squire-proxy", data_root=tmp_path, run=run)
+
+
+def test_remove_managed_swag_stops_the_container_and_deletes_the_config_dir(tmp_path):
+    _install_fake_swag(tmp_path)
+    root = proxy.swag_root(tmp_path)
+    assert root.exists()
+
+    run = FakeRun().on(("docker", "compose"), returncode=0)
+    proxy.remove_managed_swag("docker", data_root=tmp_path, run=run)
+    assert not root.exists()
+    assert (
+        "docker", "compose", "--project-directory", str(root), "-f", str(root / "docker-compose.yml"),
+        "-p", "job-squire-proxy", "down",
+    ) in run.calls
+
+
+def test_remove_managed_swag_raises_and_leaves_everything_in_place_on_compose_failure(tmp_path):
+    _install_fake_swag(tmp_path)
+    root = proxy.swag_root(tmp_path)
+
+    run = FakeRun().on(("docker", "compose"), returncode=1, stderr="boom")
+    with pytest.raises(proxy.ProxyError):
+        proxy.remove_managed_swag("docker", data_root=tmp_path, run=run)
+    assert root.exists()
+
+
+def test_remove_managed_swag_is_a_no_op_when_nothing_was_ever_installed(tmp_path):
+    run = FakeRun()  # no responses registered -- any subprocess call fails the test loudly
+    proxy.remove_managed_swag("docker", data_root=tmp_path, run=run)  # does not raise
+    assert run.calls == []
 
 
 # ── detection ─────────────────────────────────────────────────────────────

@@ -236,12 +236,14 @@ personal use) and a certificate, and the setup tool automates most of both:
 
 ```bash
 job-squire create --mode network --hostname castelo.example.com
-job-squire proxy castelo                                              # sets up the reverse proxy
 job-squire dns duckdns castelo --subdomain castelo --token <your-duckdns-token>  # domain + certificate
 ```
 
-Full walkthrough, including what to do if you already have a domain on Cloudflare instead of
-DuckDNS, is in [`deployment.md`](deployment.md#network-mode-the-reverse-proxy).
+Right after the instance comes up, `create` will ask whether to set up the reverse proxy — detect
+one already running, or install SWAG if you don't have one yet. Answer yes there and you're done
+with that part; if you skip it (or ran with `--yes`/`--skip-proxy-setup`), do it after the fact with
+`job-squire proxy castelo`. Full walkthrough, including what to do if you already have a domain on
+Cloudflare instead of DuckDNS, is in [`deployment.md`](deployment.md#network-mode-the-reverse-proxy).
 
 ---
 

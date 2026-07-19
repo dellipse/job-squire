@@ -1,9 +1,8 @@
 # The `job-squire` CLI: package, command grammar, and versioning
 
-This is the one place Prompt C1 (`docs/PROMPTS-deployment-cli.md`) asks for
-the settled command grammar and version scheme to live. It documents the
-outcome of folding the old `jobsquire-cli` project into `job_squire_cli/`
-inside this repo.
+This is the settled command grammar and version scheme for the
+`job-squire` CLI. It documents the outcome of folding the old
+`jobsquire-cli` project into `job_squire_cli/` inside this repo.
 
 ## Package layout
 
@@ -15,21 +14,21 @@ job_squire_cli/
   pyproject.toml
   job_squire_cli/
     cli.py            # top-level click group; wires ops + lazy query group
-    ops/commands.py    # deployment/lifecycle click commands (C5-C7); backup/restore stubs remain (C8)
-    ops/runtime.py     # container runtime detection and per-OS install (Prompt C3)
-    ops/registry.py    # cross-platform instance registry (Prompt C4)
-    ops/paths.py       # per-instance directory layout (Prompt C5)
-    ops/ports.py       # local-mode port pair allocation (Prompt C5)
-    ops/compose.py     # compose/env rendering + runtime-driven compose invocations (C5/C7)
-    ops/dotenv.py      # line-preserving .env read/append/set helpers (Prompt C7)
-    ops/crypto_mirror.py  # HKDF-SHA256 -> Fernet derivation mirrored from app/crypto.py (C5/C6)
-    ops/secrets_copy.py  # Fernet-aware settings import between instances (Prompt C5)
-    ops/lifecycle.py   # create/start/stop/restart/status/list/remove/update orchestration (C5/C7)
-    ops/mcp_token.py   # jsq_mcp_ static token generate/rotate/revoke (Prompt C6)
-    ops/backup.py      # backup/restore orchestration (Prompt C8)
-    ops/backup_crypto.py  # Argon2id + AES-256-GCM archive encryption (Prompt C8)
-    ops/proxy.py       # reverse-proxy provisioning: detect/install SWAG, nginx confs (Prompt C9)
-    ops/dns.py         # DNS/TLS validation for the CLI-installed SWAG: DuckDNS auto, Cloudflare DNS-01 semi-auto (Prompt C10)
+    ops/commands.py    # deployment/lifecycle click commands; backup/restore stubs remain
+    ops/runtime.py     # container runtime detection and per-OS install
+    ops/registry.py    # cross-platform instance registry
+    ops/paths.py       # per-instance directory layout
+    ops/ports.py       # local-mode port pair allocation
+    ops/compose.py     # compose/env rendering + runtime-driven compose invocations
+    ops/dotenv.py      # line-preserving .env read/append/set helpers
+    ops/crypto_mirror.py  # HKDF-SHA256 -> Fernet derivation mirrored from app/crypto.py
+    ops/secrets_copy.py  # Fernet-aware settings import between instances
+    ops/lifecycle.py   # create/start/stop/restart/status/list/remove/update orchestration
+    ops/mcp_token.py   # jsq_mcp_ static token generate/rotate/revoke
+    ops/backup.py      # backup/restore orchestration
+    ops/backup_crypto.py  # Argon2id + AES-256-GCM archive encryption
+    ops/proxy.py       # reverse-proxy provisioning: detect/install SWAG, nginx confs
+    ops/dns.py         # DNS/TLS validation for the CLI-installed SWAG: DuckDNS auto, Cloudflare DNS-01 semi-auto
     query/
       commands.py      # health, list, pipeline, contacts, job, contact, followups
       mcp_client.py     # self-contained MCP client (Streamable HTTP, no Hermes)
@@ -62,19 +61,18 @@ own subcommand:
 | Ollama | `job-squire ollama <cmd>` | `check`, `setup` |
 | Query | `job-squire query <cmd>` | `health`, `list`, `pipeline`, `contacts`, `job`, `contact`, `followups` |
 
-The deployment group is new in this fold-in; its commands are structural
-placeholders as of Prompt C1 (grammar and `--help` text are real, behavior
-is not) and land incrementally in Prompts C2-C11 of
-`docs/PROMPTS-deployment-cli.md`. `proxy` wasn't part of C1's
-original table either -- C1 deliberately deferred `update`'s rollback
-design to Prompt C7, the dedicated session for version movement, and
-deferred `proxy` to Prompt C9, the dedicated session for reverse-proxy
-provisioning (PLAN Section 5). `dns` is namespaced under its own subcommand
-for the same reason `query` is (a natural home for two related verbs,
-`duckdns` and `cloudflare`, rather than two more flat top-level names) and
-was deferred to Prompt C10, the dedicated session for DNS/TLS provisioning.
+The deployment group is new in this fold-in; its commands started as
+structural placeholders (grammar and `--help` text real, behavior not)
+and landed incrementally. `proxy` wasn't part of the original command
+table either -- `update`'s rollback design and `proxy` were both
+deliberately deferred until version movement and reverse-proxy
+provisioning were fully worked out. `dns` is namespaced
+under its own subcommand for the same reason `query` is (a natural home
+for two related verbs, `duckdns` and `cloudflare`, rather than two more
+flat top-level names) and was deferred the same way, until DNS/TLS
+provisioning was designed.
 
-### Update and rollback (Prompt C7; self-update and `--all` added later)
+### Update and rollback (self-update and `--all` added later)
 
 ```
 job-squire update                         # self-update the CLI only; no instance touched
@@ -143,7 +141,7 @@ running instance. It reads these from, in order:
    (useful for smoke-testing and CI, and for overriding the file without
    editing it).
 2. A JSON file at the per-OS, per-user config directory (the same one the
-   instance registry from `PLAN-deployment-modes.md` Section 4 uses):
+   instance registry uses):
    `~/.config/job-squire/mcp.json` (Linux, honoring `XDG_CONFIG_HOME`),
    `~/Library/Application Support/job-squire/mcp.json` (macOS),
    `%APPDATA%\job-squire\mcp.json` (Windows), keyed by instance name so one
@@ -176,7 +174,7 @@ server itself depends on. Hermes (or any other MCP host) can still use the
 Job Squire MCP server by reading its published MCP documentation; that
 coupling runs one way, through docs, never through shared code.
 
-## MCP authentication (Prompt C6)
+## MCP authentication
 
 OAuth 2.0/PKCE stays the default, untouched MCP flow in every mode --
 `job-squire configure` generates nothing for it. Where a browser flow is
@@ -184,16 +182,13 @@ available, `job-squire configure NAME --token <oauth-access-token>
 [--endpoint URL]` wires an OAuth access token obtained elsewhere into the
 query group's config, without the CLI implementing the OAuth dance itself.
 OAuth is preferred whenever an instance is reachable beyond the one
-machine (network mode, or a Tailscale-Serve-fronted local instance --
-Prompt C11).
+machine (network mode, or a Tailscale-Serve-fronted local instance).
 
 The one sanctioned alternative is the local `jsq_mcp_` static bearer
-token, matching the settled spec in `PLAN-deployment-modes.md` Section 5:
-256 bits of URL-safe base64, Fernet-encrypted at rest, constant-time
+token: 256 bits of URL-safe base64, Fernet-encrypted at rest, constant-time
 compared, loopback-only unless explicitly enabled. `app/mcp_auth.py` and
-`app/main.py`'s `settings_mcp_api_key()` route implement the app side
-(Prompt 6 of `PROMPTS-deployment-modes.md`), reachable only from an
-authenticated, CSRF-protected browser session -- there is no Flask CLI
+`app/main.py`'s `settings_mcp_api_key()` route implement the app side,
+reachable only from an authenticated, CSRF-protected browser session -- there is no Flask CLI
 command or admin API route to call into instead. So `job_squire_cli/ops/
 mcp_token.py` writes the same `AIConfig` columns directly with the stdlib
 `sqlite3` module, mirroring the app's token shape and its HKDF-SHA256 ->
@@ -235,9 +230,8 @@ that same value by construction, since `create` writes
 
 ## Container runtime detection and install
 
-Prompt C3 adds `job_squire_cli/ops/runtime.py`, which `create` (Prompt C5)
-calls before it can bring an instance up. It follows
-`docs/PLAN-deployment-modes.md` Section 6 exactly:
+`job_squire_cli/ops/runtime.py` implements this, and `create` calls it
+before it can bring an instance up:
 
 1. **Detect first.** `detect_working_runtime()` looks for `docker`,
    `podman`, `orbstack` (checked via its `orbctl`/`orb` binary), and
@@ -273,8 +267,8 @@ calls before it can bring an instance up. It follows
    `load_runtime_choice()` persist `{"runtime", "source", "recorded_at"}`
    to `runtime.json` in the same per-user config directory `mcp.json`
    lives in (see above) — never a secret, just which runtime was detected
-   or installed and when. This is an interim, machine-wide cache; Prompt
-   C4 formalizes the same information into the `runtime` field of each
+   or installed and when. This is an interim, machine-wide cache; the same
+   information is also formalized into the `runtime` field of each
    instance's registry entry, one per instance rather than one per
    machine.
 
@@ -284,14 +278,13 @@ branch — detect-and-reuse, each OS's install plan, the WSL2 guard, consent
 gating, and the recording round-trip — without ever touching a real
 container runtime or a real `PATH`.
 
-## Instance lifecycle core (Prompt C5)
+## Instance lifecycle core
 
 `create`, `start`, `stop`, `restart`, `status`, `list`, and `remove` are
-real as of Prompt C5, wired to `ops/lifecycle.py` (`configure` followed in
-Prompt C6, wired to `ops/mcp_token.py` and `query/config.py` -- see "MCP
-authentication" below); `update`, `backup`, and `restore` remain
-structural stubs until C7-C8. Every real
-command follows the same shape as `ops/runtime.py`: `ops/commands.py` is a
+real, wired to `ops/lifecycle.py` (`configure` is wired to
+`ops/mcp_token.py` and `query/config.py` -- see "MCP authentication"
+below); `update`, `backup`, and `restore` remain structural stubs for
+now. Every real command follows the same shape as `ops/runtime.py`: `ops/commands.py` is a
 thin click adapter (prompting, printing, mapping exceptions to a clean
 `exit(1)`), and `ops/lifecycle.py` takes no click objects at all -- every
 function accepts its subprocess `run`, `PATH` `which`, `confirm`, and
@@ -315,8 +308,8 @@ self-contained directory, `~/job-squire/<name>/` by default
 in the instance's own named Docker volume (`<container_name>-data`,
 declared in `docker-compose.yml`, addressed by `job-squire backup`/
 `restore` through the container itself, never by walking a host path). This
-directory is deliberately the whole thing an operator needs for "direct
-runtime access remains available" (PLAN Section 7): `cd` into it and run
+directory is deliberately the whole thing an operator needs for direct
+runtime access to always stay available: `cd` into it and run
 `docker compose ...` or `podman compose ...` directly. It's also the exact
 directory registered as the instance's `data_dir` -- `SECRET_KEY` is what a
 backup archive needs from here, alongside the database pulled out of the
@@ -331,7 +324,7 @@ hand-rolled f-string templates (no new YAML/dotenv dependency) covering
 the fixed, small shape both files need. `runtime_binary`/`compose_binary`
 translate the registry's `runtime` field (`docker`, `podman`, `orbstack`,
 `colima`) into the right CLI: OrbStack and Colima both provide the
-`docker` binary (PLAN Section 6), so only Podman gets its own branch.
+`docker` binary, so only Podman gets its own branch.
 `inspect_state`/`container_logs`/`extract_fatal_lines` are what `status`
 and the startup-guard surfacing below read back.
 
@@ -372,7 +365,7 @@ volume would come out doubled (e.g. `job-squire-testdb_job-squire-testdb-
 data` instead of `job-squire-testdb-data`).
 
 **Importing settings from an existing instance** (`ops/secrets_copy.py`,
-`create --import-from`). PLAN Section 4's import prompt splits across the
+`create --import-from`). The import splits across the
 same two config layers the app itself uses: schedule hours/timezone are
 `data/.env` variables, read as plain text before the new instance's first
 boot; everything else (search targets, enabled providers, SMTP host/port,
@@ -390,7 +383,7 @@ first boot (so the app's own schema creation/seeding has already run),
 bracketed by a compose `stop`/`start` so it never races the app's own
 writes to the same SQLite file.
 
-**Surfacing the startup guard** (PLAN Section 7). When `app/deploy.py`'s
+**Surfacing the startup guard.** When `app/deploy.py`'s
 startup safety guard refuses to boot (an unsafe `DEPLOY_MODE`/`PUBLIC_URL`/
 `TRUST_PROXY` combination), s6 brings the whole container down and it
 writes `FATAL: ...` lines to stderr before exiting. `create`/`start`/
@@ -406,9 +399,8 @@ bad `create` invocation never has side effects to clean up.
 (via an injected `confirm_delete` callable) before deleting an instance's
 data -- both its named Docker volume (the database and uploads) and its
 host data directory (`SECRET_KEY`); if nothing asks (no `confirm_delete`,
-no explicit `keep_data`), the default is to keep the data -- PLAN Section
-4's rule that removing an instance must never silently destroy someone's
-job-search history. The volume cleanup itself is two-layered: `compose
+no explicit `keep_data`), the default is to keep the data -- removing an
+instance must never silently destroy someone's job-search history. The volume cleanup itself is two-layered: `compose
 down` gets `-v` whenever data is being deleted (removes the volume the
 compose file itself declares), and a direct `volume ls`/`rm` sweep runs
 afterward regardless -- catching a volume `down -v` didn't reach (e.g. the
@@ -432,6 +424,37 @@ image) is reported, not raised, so it never blocks the rest of the
 removal. `uninstall` uses the exact same machinery but flips the
 operator-facing default to "remove" -- see below.
 
+**`remove` also offers to clean up a network-mode instance's reverse-proxy
+configuration.** `_offer_proxy_removal` (ops/commands.py), the reverse of
+`create`'s own `_offer_proxy_setup`: if a proxy is currently running and
+this instance's confs are sitting in it, offer to delete them
+(`proxy_ops.remove_confs`) and reload. Only if that proxy turns out to be
+the CLI's own managed SWAG install (`proxy_ops.is_managed_swag` -- never a
+third-party proxy the operator already had running, same scope guard
+`ops/dns.py` uses for `dns duckdns`/`dns cloudflare`) *and* no other
+instance's confs are left in it afterward (checked by globbing the
+proxy-confs directory, not the registry -- filesystem truth over recorded
+state, same philosophy `status`'s drift detection uses elsewhere), a second
+offer appears: tear the whole SWAG container and its config directory
+down. There is no separate "per-instance DNS configuration" to remove --
+DuckDNS/Cloudflare credentials and the Let's Encrypt certificate all live
+in that one shared config directory, not per instance -- so this is the
+only place that state ever gets cleaned up automatically. `--skip-proxy-
+cleanup` opts out entirely; `--yes` answers both prompts. Also checks the
+registry (not just the confs directory) for any other still-registered
+network-mode instance before offering the second step -- catches the edge
+case of a registered instance whose confs went missing some other way, so
+it doesn't get its shared SWAG pulled out from under it.
+
+`uninstall` gets the same two-tier offer (`_offer_proxy_cleanup_for_uninstall`,
+also gated by `--skip-proxy-cleanup`), applied once to the whole batch
+instead of per instance: it collects every network-mode instance being
+uninstalled, asks once whether to clean up all of their confs together,
+then applies the identical CLI-managed/nothing-else-using-it gate before
+offering to remove SWAG entirely. "Last instance" is trivially satisfied
+for `uninstall` once its own removal loop has already run, since nothing
+is left registered at that point by definition.
+
 ## Uninstalling (`ops/uninstall.py`)
 
 ```
@@ -444,9 +467,8 @@ job-squire uninstall --keep-image             # skip the keep-image prompt; leav
 job-squire uninstall --yes                    # no prompts: keeps data, removes images, leaves the runtime alone
 ```
 
-Not part of the original C1-C12 set (`docs/PROMPTS-deployment-cli.md`) --
-added afterward, since getting job-squire *off* a machine cleanly matters
-as much as getting it on. `bootstrap.sh`/`bootstrap.ps1` already put the
+Added after the rest of the CLI landed, since getting job-squire *off* a
+machine cleanly matters as much as getting it on. `bootstrap.sh`/`bootstrap.ps1` already put the
 CLI on `PATH` idempotently (a marker-commented line appended to
 `~/.zshrc`/`~/.bashrc`/`~/.profile` on macOS/Linux, the `HKCU\Environment`
 `Path` value on Windows, each guarded so re-running the bootstrap never
@@ -471,8 +493,7 @@ other things a full setup can leave behind:
    reached.
 2. **The container runtime** (Podman, OrbStack, or Docker Desktop) --
    opt-in only, via `--remove-runtime`, and even then only if
-   `ops/runtime.py`'s `runtime.json` recorded `source: "installed"` (Prompt
-   C3). A runtime `ensure_runtime` found already working (`source:
+   `ops/runtime.py`'s `runtime.json` recorded `source: "installed"`. A runtime `ensure_runtime` found already working (`source:
    "detected"`) is never touched, mirroring "never install over one that
    already works" in reverse: never uninstall one job-squire didn't put
    there. `runtime_uninstall_plan` is the literal reverse of each per-OS
@@ -497,7 +518,15 @@ removed by hand, never "data" in the job-search sense (that's each
 instance's own named Docker volume plus its host `data_dir`, together
 governed by `--keep-data`/`--delete-data` above).
 
-## Reverse-proxy provisioning (Prompt C9)
+## Reverse-proxy provisioning
+
+`create` now offers this automatically for a `network`-mode instance (see
+`_offer_proxy_setup` in `ops/commands.py`) right after the container comes
+up -- same two branches as the standalone command below, just prompted
+inline instead of requiring the operator to already know `job-squire proxy`
+exists. `--skip-proxy-setup` on `create` opts out; declining the prompt (or
+`--yes` skipping past it) leaves it exactly where it was before -- a normal
+follow-up command, safe to (re-)run any time:
 
 ```
 job-squire proxy NAME                       # detect an existing proxy, or offer to install SWAG
@@ -507,7 +536,7 @@ job-squire proxy NAME --no-install          # fail instead of installing SWAG if
 job-squire proxy NAME --yes                 # don't prompt before installing SWAG
 ```
 
-Only applies to a `network`-mode instance (PLAN Section 5: local modes use
+Only applies to a `network`-mode instance (local modes use
 loopback only and need no proxy). `ops/proxy.py` covers the two cases from
 "Optional proxy provisioning":
 
@@ -520,9 +549,10 @@ loopback only and need no proxy). `ops/proxy.py` covers the two cases from
   `~/job-squire/_proxy/` (sibling to, but not one of, the per-instance
   directories in `ops/paths.py` -- it's never registered as an instance)
   and brings up a LinuxServer SWAG container. DNS/certificate validation
-  (DuckDNS, Cloudflare DNS-01, ...) is Prompt C10's job, not this one --
-  `--url`/`--validation` here are just SWAG's own required env vars,
-  passed through as-is or left as placeholders C10 fills in later.
+  (DuckDNS, Cloudflare DNS-01, ...) is handled separately by the `dns`
+  commands below, not this one -- `--url`/`--validation` here are just
+  SWAG's own required env vars, passed through as-is or left as
+  placeholders the `dns` commands fill in later.
 
 **The nginx conf templates are hand-rolled in `ops/proxy.py`, not read from
 `examples/nginx/` at runtime**, for the same reason `ops/compose.py`
@@ -561,10 +591,10 @@ Either way, the proxy stays a separate, independently maintained component
 -- nothing here is baked into the Job Squire image, and TLS still
 terminates at the proxy. Network mode is still not considered configured
 without a working proxy in front, which the app's own startup guard
-(PLAN Section 3) already enforces regardless of whether `job-squire proxy`
+already enforces regardless of whether `job-squire proxy`
 was ever run.
 
-## DNS and TLS provisioning (Prompt C10)
+## DNS and TLS provisioning
 
 ```
 job-squire dns duckdns NAME --subdomain castelo --token <duckdns-token>              # wildcard, DNS-01 (default)
@@ -579,9 +609,8 @@ anything instance-specific otherwise. Both commands prompt for `--token`
 (hidden input) if it's omitted rather than accepting it only on the
 command line, where it would land in shell history.
 
-`ops/dns.py` implements the two auto-configured paths from PLAN Section 5
-("Free and low-cost domain and DNS options for personal use") plus the
-resolved auto-configure-versus-document open item in Section 8:
+`ops/dns.py` implements the two auto-configured paths -- DuckDNS and
+Cloudflare DNS-01 -- plus documents everything else:
 
 - **DuckDNS (fully automated).** `configure_duckdns` rewrites the
   CLI-installed SWAG's compose file with the operator's subdomain and
@@ -613,8 +642,10 @@ resolved auto-configure-versus-document open item in Section 8:
   `config/` directory (`swag_root()/config`, see `ops/proxy.py`) using
   SWAG's own documentation for that plugin, then restarts the SWAG
   container by hand; nothing about a manually configured SWAG conflicts
-  with what `job-squire proxy` already installed. See PLAN Section 5's own
-  prose on Tailscale Funnel and Cloudflare Tunnel for the tradeoffs.
+  with what `job-squire proxy` already installed. Tailscale Funnel and
+  Cloudflare Tunnel use a fundamentally different topology (TLS terminates
+  at the tunnel provider, not at a locally facing proxy), which is why
+  neither is automated here either.
 
 Neither automated path will touch a proxy `job-squire proxy` didn't
 install itself. If that instance's `proxy` run detected and reused an
@@ -639,12 +670,11 @@ entirely and just applies the configuration.
 **Never conjures a domain or working DNS.** Both commands assume the
 operator already holds a registered DuckDNS subdomain (free, from
 duckdns.org) or a Cloudflare-managed domain and API token before running
-either one -- exactly the PLAN Section 5/7 boundary restated: "there is one
-thing the CLI cannot conjure: a domain and working DNS." This is a
-network-mode-only concern; a local install uses loopback and needs none of
-it.
+either one -- there is one thing the CLI cannot conjure: a domain and
+working DNS. This is a network-mode-only concern; a local install uses
+loopback and needs none of it.
 
-## Tailscale Serve for private remote access (Prompt C11)
+## Tailscale Serve for private remote access
 
 ```
 job-squire tailscale enable NAME                                  # Serve on 443 (web) / 8443 (MCP), the defaults
@@ -669,8 +699,8 @@ valid certificate on three ports -- `443`, `8443`, `10000` -- so an
 operator running Tailscale for a second instance on the same machine picks
 a different pair from that same set of three with `--web-port`/`--mcp-port`.
 
-**Local mode stays local mode.** Per PLAN Section 5, this is "local mode
-with a private Serve front door rather than a separate mode." `enable`
+**Local mode stays local mode.** This is local mode
+with a private Serve front door rather than a separate mode. `enable`
 never touches `Instance.mode` or `DEPLOY_MODE` -- both stay `local`. What
 it does flip, in the instance's `data/.env`, are the individual overrides
 `app/deploy.py`'s `DEPLOY_MODE` resolution already supports independently
@@ -691,23 +721,83 @@ instance is exactly that combination by design, so `enable` prints this
 expectation up front rather than leaving the operator to discover a
 surprise banner and wonder if something broke.
 
-**Where the on/off state lives.** Not the registry -- `Instance` (Prompt
-C4) is a fixed, non-secret schema, and this is a toggle on an existing
-field's *meaning*, not new instance identity. Instead a small
+**Where the on/off state lives.** Not the registry -- `Instance` is a
+fixed, non-secret schema, and this is a toggle on an existing field's
+*meaning*, not new instance identity. Instead a small
 `tailscale.json` manifest sits beside `docker-compose.yml` in the
 instance's own directory (`ops/tailscale.py`'s `read_state`/`is_tailnet_
 reachable`), the same per-instance-directory precedent `ops/mcp_token.py`
 already established for state with no natural home in the registry.
 
 **MCP over the tailnet, and the reachability rule.** Because `Instance.mode`
-stays `"local"` for a Serve-fronted instance, Prompt C6's `is_static_token_
+stays `"local"` for a Serve-fronted instance, the `is_static_token_
 allowed()` check (keyed on `mode`) can't see the tailnet reachability on
 its own. `job-squire configure`'s static-token gate additionally consults
 `ops/tailscale.py`'s state manifest: a tailnet-reachable instance is
 refused the static token exactly like a `network`-mode one, unless the
-operator passes the *same* `--allow-network` opt-in C6 defines -- never a
-separate flag, never implicit. OAuth remains preferred there, same as any
+operator passes the *same* `--allow-network` opt-in used elsewhere -- never
+a separate flag, never implicit. OAuth remains preferred there, same as any
 instance reachable beyond the one machine.
+
+**`enable` installs and logs in the Tailscale client itself, with consent.**
+Before `enable` will touch `tailscale serve`, `ops/tailscale.py`'s
+`ensure_tailscale_ready()` first checks whether the `tailscale` binary is on
+PATH at all (`is_tailscale_installed`, via `shutil.which`). If it isn't,
+`enable` explains that and asks to install it now -- accepting runs a
+per-OS `InstallPlan` (Homebrew cask on macOS, the official
+`curl | sh` install script on Linux, `winget` on Windows; the same
+`InstallPlan`/`InstallStep`/`run_install_plan` machinery `ops/runtime.py`
+already uses for the container runtime, reused rather than duplicated) and,
+once the binary is confirmed present, records `source: "installed"` to a
+machine-wide `tailscale_install.json` in `config_dir()` -- mirroring exactly
+how `ops/runtime.py`'s `ensure_runtime` tracks "did job-squire put this
+here, or was it already on the machine" for Docker/Podman. If Tailscale was
+already installed, `enable` instead records `source: "detected"`, and only
+if no record exists yet (`record_tailscale_choice_if_unset` never
+downgrades an earlier "installed" stamp back to "detected" on a later run).
+Either way, `enable` then checks whether this device is logged into a
+tailnet (`device_dns_name`, which fails if not); if not, it asks to run
+`tailscale up` (opens a browser to authenticate) before proceeding to the
+actual Serve setup described above. Declining either prompt raises
+`TailscaleError` and `enable` exits cleanly with an explanation instead of
+attempting Serve against a client that isn't ready. `--yes` answers both
+automatically.
+
+**`remove`/`uninstall` offer to turn Serve off too -- and to remove
+Tailscale itself, if job-squire is the one who put it there.**
+`_offer_tailscale_removal`/`_offer_tailscale_cleanup_for_uninstall`
+(ops/commands.py) read the state manifest *before* tearing the instance
+down -- `--delete-data` removes the instance's whole directory,
+`tailscale.json` included, so reading after would silently miss it. If
+Serve was on, they offer to turn it off (`tailscale_ops.disable_serve_port`
+directly, not the full `disable_tailscale_serve` orchestration, which
+assumes a live container to recreate with reverted env vars -- not true
+once `remove`/`uninstall` has already run). Left on, `tailscale serve`
+keeps forwarding that tailnet HTTPS port to a container that no longer
+exists -- the same dead-upstream problem the proxy/DNS cleanup above fixes
+for a reverse proxy, just at the host level. Serve itself is per-instance
+(each enabled instance uses its own dedicated port pair), so turning it off
+never needs an "is anything else using it" check the way SWAG's shared
+config does.
+
+The Tailscale *client*, once `enable` can install it, is a different
+story -- one client, one machine, shared by every instance, same shape as
+SWAG. So both commands add a second, separate offer after the Serve-off
+step, gated on `tailscale_ops.load_tailscale_choice()` showing
+`source: "installed"` (job-squire put it there, not the operator):
+`remove` additionally checks whether any *other* registered instance still
+has Serve enabled (`_any_other_instance_has_tailscale_enabled`) and only
+offers full removal if this was the last one -- the same "last instance +
+installed by the CLI" gate `_offer_proxy_removal` applies to SWAG.
+`uninstall` skips that check entirely and asks once, unconditionally,
+since by the time it runs every instance is already gone. Accepting either
+offer calls `tailscale_ops.remove_tailscale()`, which dispatches a
+per-OS uninstall `InstallPlan` (`apt-get`/`dnf`/`pacman` by distro on
+Linux, Homebrew cask on macOS, `winget` on Windows) -- deliberately without
+also running `tailscale logout` first, so a botched uninstall never leaves
+the operator logged out of a tailnet with no client left to log back in.
+`--skip-tailscale-cleanup` opts out of the whole section (both the Serve-off
+offer and the client-removal offer) on either command.
 
 ## Local AI capability detection and guided Ollama install (docs/PLAN-ollama-assist.md)
 
@@ -748,8 +838,7 @@ so it's the authoritative source the plan's "Container Blindness" section
 calls for. Passing `NAME` additionally writes the result into that
 instance's `data/host_capabilities.json` -- `data/`, not the instance root,
 though note `data/` is host-only now (only `data/.env` is still bind-mounted
-into the container; the rest of `/data` is a named Docker volume, see
-`docs/PLAN-deployment-modes.md`), so this file is CLI/host tooling reading
+into the container; the rest of `/data` is a named Docker volume), so this file is CLI/host tooling reading
 CLI/host tooling's own output, not something the running app can see. The
 web app's own onboarding integration this was meant to feed was never
 actually built.
@@ -820,7 +909,7 @@ each require a different separator, rather than two independent schemes:
 
 - **Single source of truth:** the root `VERSION` file (currently `0.5.0`).
 - **Docker image tag** (`.github/workflows/ci.yml`, `BUILD_VERSION`):
-  `<VERSION>-<short-sha>`, e.g. `0.5.0-162722a`. Unchanged by this prompt.
+  `<VERSION>-<short-sha>`, e.g. `0.5.0-162722a`.
 - **`job-squire-cli` package version:** `<VERSION>+<short-sha>`, e.g.
   `0.5.0+162722a`, PEP 440-valid. Produced by
   `scripts/stamp_cli_version.py` (repo root), which rewrites

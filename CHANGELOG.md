@@ -8,6 +8,44 @@ footer as `<VERSION>-<build-sha>`.
 
 ## [Unreleased]
 
+### Added
+
+- `job-squire create --mode network` now offers to provision a reverse proxy automatically right
+  after the instance comes up, instead of requiring a separate, easy-to-miss `job-squire proxy
+  NAME` afterward -- detects an existing SWAG/nginx proxy and asks to configure it, or offers to
+  install a fresh SWAG container if none is found. `--skip-proxy-setup` opts out; `--yes` (already
+  used for the runtime/Ollama prompts) skips the prompt too. The standalone `job-squire proxy`
+  command is unchanged and still the way to (re-)configure it later.
+- `job-squire remove` now offers the reverse of the above for a network-mode instance: delete its
+  confs from whatever proxy is running and reload it, then -- only if that proxy is the CLI's own
+  installed SWAG and no other instance still uses it -- offers to remove SWAG entirely, including
+  its DNS/TLS configuration (DuckDNS/Cloudflare credentials, the Let's Encrypt certificate), which
+  isn't per-instance and has nowhere else to be cleaned up automatically. A third-party proxy the
+  operator already had running is never touched beyond its own confs. `--skip-proxy-cleanup` opts
+  out of both offers. The "no other instance still needs it" check now cross-references the
+  registry as well as the confs directory, so a registered network-mode instance missing its confs
+  for some other reason doesn't get its shared SWAG pulled out from under it.
+- `job-squire uninstall` now gets the same reverse-proxy/SWAG cleanup offer as `remove` above,
+  applied once to the whole batch of network-mode instances being uninstalled rather than per
+  instance. Also gated by `--skip-proxy-cleanup`.
+- `job-squire remove`/`uninstall` now also offer to turn off Tailscale Serve for a local-mode
+  instance that had it enabled -- otherwise `tailscale serve` keeps forwarding that tailnet HTTPS
+  port to a container that no longer exists. State is read before teardown so `--delete-data`
+  doesn't remove the manifest out from under the check. `--skip-tailscale-cleanup` opts out;
+  `uninstall` asks once for the whole batch, same shape as its proxy/DNS offer.
+- `job-squire tailscale enable` now installs and logs in the Tailscale client itself, with consent,
+  instead of assuming it's already there: if the binary isn't on PATH, it offers a per-OS install
+  (Homebrew cask on macOS, the official install script on Linux, `winget` on Windows) via the same
+  `InstallPlan` machinery `ops/runtime.py` uses for the container runtime; if it's installed but this
+  device isn't logged into a tailnet yet, it offers to run `tailscale up`. Whether job-squire
+  installed the client or found it already there is recorded to a machine-wide
+  `tailscale_install.json`, mirroring how `ops/runtime.py` tracks the container runtime. `remove`/
+  `uninstall`'s Tailscale offers now extend to the client itself, gated on that record: `remove`
+  offers full removal only when this was the last instance with Serve enabled *and* job-squire
+  installed the client (same "last instance + installed by the CLI" shape as the SWAG offer);
+  `uninstall` offers it unconditionally, once, since every instance is already gone by the time it
+  runs. Both stay under `--skip-tailscale-cleanup`.
+
 ## [0.7.21] - 2026-07-18
 
 ### Fixed
@@ -575,7 +613,7 @@ footer as `<VERSION>-<build-sha>`.
 
 ### Added
 
-- **AI privacy redaction** (`app/privacy.py`, `docs/PLAN-ai-privacy.md`): personal
+- **AI privacy redaction** (`app/privacy.py`): personal
   identifiers (names, emails, phones, addresses, SSNs, LinkedIn URLs, clearance /
   work-authorization statements) are replaced with deterministic
   `{{PII:KIND_digest}}` placeholders before anything is sent to an AI provider,
@@ -596,9 +634,9 @@ footer as `<VERSION>-<build-sha>`.
 
 ## [0.7.0] - 2026-07-12
 
-Prompt C12 (`docs/PROMPTS-deployment-cli.md`), the last in the `job-squire` CLI's
-deployment/lifecycle build-out: documentation supersession and the rewritten
-user setup guide, now that Prompts C1-C11 have landed the whole CLI
+The last release in the `job-squire` CLI's deployment/lifecycle build-out:
+documentation supersession and the rewritten user setup guide, now that
+the whole CLI has landed
 (create/start/stop/restart/status/list/remove/update/adopt/configure/backup/
 restore/proxy/dns/tailscale).
 
@@ -632,7 +670,7 @@ dropping the pre-release label.
   '--instance'" and `job-squire query --help` omitted every group-level
   option, even though the same options worked fine in tests that invoked the
   real `query` group directly (never through the lazy wrapper). Found during
-  this prompt's own end-to-end MCP verification. Fixed by having
+  this release's own end-to-end MCP verification. Fixed by having
   `_LazyGroup.get_params()` load and delegate to the real group's params.
 - `job-squire proxy`'s fresh-SWAG-install path could never actually finish:
   a blank `--url` (the documented default, since DNS/TLS is deliberately a
@@ -640,7 +678,7 @@ dropping the pre-release label.
   waiting forever (`sleep infinity`), so nginx's real config was never
   generated from its `.sample` templates and every reload failed with
   `nginx: [emerg] open() ".../proxy.conf" failed`. Found during this
-  prompt's own end-to-end network-mode dry run. Fixed by defaulting the SWAG
+  release's own end-to-end network-mode dry run. Fixed by defaulting the SWAG
   `URL` env var to the instance's own hostname (still correct once DNS/TLS
   is configured for real) and by waiting for SWAG's init to actually
   populate its config before the first reload, rather than assuming the
@@ -650,7 +688,7 @@ dropping the pre-release label.
 
 - The legacy three-container `docker-compose.yml` and `docker-compose.swag.yml`,
   now that the single-container image (`docker-compose.single.yml`) is
-  proven in practice (`docs/PLAN-deployment-modes.md` Section 8). Existing
+  proven in practice. Existing
   three-container installs move onto the single-container image with
   `job-squire adopt` or `scripts/adopt-single-container.sh`, both unaffected
   by this removal.
@@ -686,17 +724,17 @@ dropping the pre-release label.
 
 ## [0.6.1] - 2026-07-11
 
-Continues the `job-squire` CLI's deployment/lifecycle build-out from 0.6.0
-(`docs/PROMPTS-deployment-cli.md`, Prompts C3-C7). The command grammar has
-been real and discoverable via `--help` since 0.6.0; this release is where
-most of it stops being a stub. Still a pre-release: `backup`/`restore` are
-the only commands left unimplemented (Prompt C8). The three-container
-Docker Compose install documented in `docs/install/` is unaffected.
+Continues the `job-squire` CLI's deployment/lifecycle build-out from 0.6.0.
+The command grammar has been real and discoverable via `--help` since
+0.6.0; this release is where most of it stops being a stub. Still a
+pre-release: `backup`/`restore` are the only commands left unimplemented.
+The three-container Docker Compose install documented in `docs/install/`
+is unaffected.
 
 ### Added
 
 - `job_squire_cli/ops/runtime.py`: container runtime detection and per-OS
-  install with consent (Prompt C3). Detects a working `docker`, `podman`,
+  install with consent. Detects a working `docker`, `podman`,
   `orbstack`, or `colima` and reuses it, installing nothing. When none is
   present, proposes the per-OS default only with explicit consent: Podman
   rootless on Linux (package manager chosen from `/etc/os-release`), Podman
@@ -706,7 +744,7 @@ Docker Compose install documented in `docs/install/` is unaffected.
   `wsl --install` plus a reboot when missing). See `docs/job-squire-cli.md`
   ("Container runtime detection and install").
 - `job_squire_cli/ops/registry.py`: the cross-platform instance registry
-  (Prompt C4) — a per-user `instances.json` at the platform's config
+  — a per-user `instances.json` at the platform's config
   directory (`~/Library/Application Support/job-squire` on macOS,
   `~/.config/job-squire` on Linux, `%APPDATA%\job-squire` on Windows),
   holding only non-secret metadata (name, mode, runtime, data directory,
@@ -715,7 +753,7 @@ Docker Compose install documented in `docs/install/` is unaffected.
   report drift between the registry and what a runtime inspect actually
   observes (a renamed/missing container, a deleted data directory).
 - Real `create`, `start`, `stop`, `restart`, `status`, `list`, and `remove`
-  commands (Prompt C5), replacing their 0.6.0 stubs. `create` writes a
+  commands, replacing their 0.6.0 stubs. `create` writes a
   self-contained per-instance directory (compose file, compose-level
   `.env`, `data/.env`), allocates a free local-mode port pair, generates a
   fresh `SECRET_KEY`, and brings the instance up on its recorded runtime,
@@ -725,14 +763,14 @@ Docker Compose install documented in `docs/install/` is unaffected.
   explicit opt-in that decrypts with the source `SECRET_KEY` and
   re-encrypts with the destination's. `remove` always asks before deleting
   an instance's data directory and defaults to keeping it.
-- `job-squire configure` (Prompt C6): manages the local `jsq_mcp_` static
+- `job-squire configure`: manages the local `jsq_mcp_` static
   MCP bearer token end to end (generate/rotate/revoke, optional TTL,
   loopback-only unless explicitly opted in on a network-reachable
   instance), and wires in an OAuth access token obtained elsewhere as the
   alternative. Persists each instance's MCP endpoint and token in the
   CLI's own per-user `mcp.json` (keyed by instance name, selected with
   `job-squire query --instance/-i`) rather than any Hermes token store.
-- `job-squire update` (Prompt C7): moves an instance to a new image
+- `job-squire update`: moves an instance to a new image
   version (`--version`, default `latest`) or rolls back to the image it
   was running before its last update (`--rollback`). The new image is
   pulled before anything about the running instance changes; only once
@@ -741,7 +779,7 @@ Docker Compose install documented in `docs/install/` is unaffected.
   the image swapped, and the container recreated. The previous image is
   recorded so a rollback can undo it, and each rollback swaps current and
   previous again.
-- `job-squire adopt` (Prompt C7): turns an existing three-container
+- `job-squire adopt`: turns an existing three-container
   install's data directory into a registered, single-container instance
   in place, wrapping `scripts/adopt-single-container.sh`'s logic as a
   first-class command. Derives the instance name and cookie name from the
@@ -757,14 +795,13 @@ Docker Compose install documented in `docs/install/` is unaffected.
 ## [0.6.0] - 2026-07-11
 
 First increment of the single-container / `DEPLOY_MODE` / `job-squire` CLI
-deployment overhaul described in `docs/PLAN-deployment-modes.md`. This is a
+deployment overhaul. This is a
 pre-release: the CLI's deployment/lifecycle commands (`create`, `start`,
 `update`, `backup`, ...) are structural placeholders that print "not
 implemented yet" — the command grammar is real and discoverable via
-`--help`, but real behavior lands incrementally in the prompts tracked in
-`docs/PROMPTS-deployment-cli.md`. The three-container Docker Compose install
-documented in `docs/install/` is unaffected and remains the supported path
-until that CLI is complete.
+`--help`, but real behavior lands incrementally in later releases. The
+three-container Docker Compose install documented in `docs/install/` is
+unaffected and remains the supported path until that CLI is complete.
 
 ### Added
 
@@ -784,7 +821,7 @@ until that CLI is complete.
 - `DEPLOY_MODE` (`local` or `network`, default `local`): a preset that fills
   in granular, independently-overridable defaults — `TRUST_PROXY` (new) and
   `SESSION_COOKIE_SECURE` (existing) — rather than being read directly by
-  application code. See `docs/PLAN-deployment-modes.md` Section 3.
+  application code.
 - Startup safety guard: the app validates its effective deploy configuration
   at boot and refuses to start (or shows a persistent in-app banner, for
   risky-but-runnable cases) on unsafe combinations such as network mode

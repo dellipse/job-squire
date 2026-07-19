@@ -12,16 +12,16 @@
 #
 """Deployment/lifecycle command grammar.
 
-Prompt C1 settled the full grammar and shipped every command as a
-structural stub. Prompt C5 made `create`, `start`, `stop`, `restart`,
-`status`, `list`, and `remove` real, wired to ops/lifecycle.py. Prompt C6
-made MCP authentication real too (`configure`). Prompt C7 made version
-movement real (`update`). Prompt C8 (this file, as of `backup`/`restore`
-below) makes passphrase-encrypted backup and restore real, wired to
-ops/backup.py. (Prompt C7 also shipped an `adopt` command for migrating an
-existing three-container install onto the single-container image; removed
-2026-07-17 once no installs remained on the old topology to migrate.)
-Every real command here is a thin click
+The full grammar shipped up front with every command as a structural
+stub, and each landed for real incrementally: `create`, `start`, `stop`,
+`restart`, `status`, `list`, and `remove` wired to ops/lifecycle.py; MCP
+authentication (`configure`) wired to ops/mcp_token.py; version movement
+(`update`) wired to version-swap logic in ops/compose.py; and
+passphrase-encrypted backup and restore (this file) wired to
+ops/backup.py. (An `adopt` command for migrating an existing
+three-container install onto the single-container image also shipped
+along the way; removed 2026-07-17 once no installs remained on the old
+topology to migrate.) Every real command here is a thin click
 adapter: it does the interactive prompting and prints results, and
 delegates every actual decision to ops/lifecycle.py (or, for `configure`,
 ops/mcp_token.py and query/config.py; for `backup`/`restore`,
@@ -67,8 +67,8 @@ def _fail(message: str) -> NoReturn:
 
 def _handle_lifecycle_error(exc: lifecycle.LifecycleError) -> NoReturn:
     if isinstance(exc, lifecycle.StartupGuardFailure):
-        # Reprint the app's own FATAL reason/fix verbatim (PLAN Section 7
-        # "Surfacing failures") rather than a generic "container exited".
+        # Reprint the app's own FATAL reason/fix verbatim, rather than a
+        # generic "container exited".
         for line in exc.messages:
             click.echo(line, err=True)
         if not exc.messages:
@@ -99,11 +99,15 @@ def _handle_lifecycle_error(exc: lifecycle.LifecycleError) -> NoReturn:
 @click.option("--docker-desktop", "prefer_docker_desktop", is_flag=True, default=False,
               help="Prefer Docker Desktop over Podman if a runtime install is needed (Windows).")
 @click.option("--yes", "assume_yes", is_flag=True, default=False,
-              help="Don't ask before installing a container runtime or setting up Ollama.")
+              help="Don't ask before installing a container runtime, configuring a reverse proxy, "
+                   "or setting up Ollama.")
 @click.option("--skip-ollama-check", is_flag=True, default=False,
               help="Don't check this machine's local-AI (Ollama) capability after the instance comes up.")
+@click.option("--skip-proxy-setup", "skip_proxy_setup", is_flag=True, default=False,
+              help="Don't offer to configure a reverse proxy after creating a network-mode instance.")
 def create(name, mode, hostname, mcp_hostname, import_from, copy_keys, admin_username, admin_password,
-           user_password, image, prefer_orbstack, prefer_docker_desktop, assume_yes, skip_ollama_check):
+           user_password, image, prefer_orbstack, prefer_docker_desktop, assume_yes, skip_ollama_check,
+           skip_proxy_setup):
     if not name:
         name = click.prompt("Instance name")
     if not mode:
@@ -167,8 +171,72 @@ def create(name, mode, hostname, mcp_hostname, import_from, copy_keys, admin_use
         for warning in summary.warnings:
             click.echo(f"  Warning: {warning}")
 
+    if inst.mode == "network" and not skip_proxy_setup:
+        _offer_proxy_setup(inst, confirm=confirm)
+
     if not skip_ollama_check:
         _offer_ollama_setup(inst, confirm=confirm)
+
+
+def _offer_proxy_setup(instance: Instance, *, confirm) -> None:
+    """Automatic tail of `create` for network-mode instances: detect an
+    existing reverse proxy and offer to configure it for this instance, or
+    offer to install a fresh LinuxServer SWAG container and configure that
+    if none is running. Same two branches `job-squire proxy NAME` already
+    implements (ops/proxy.py's `provision_instance_proxy`/
+    `detect_existing_proxy`) -- this just folds the offer into `create`
+    itself, gated behind its own confirm prompt either way, since
+    bootstrap.sh hands off straight into `create` and an operator following
+    that path has no reason to already know `job-squire proxy` exists as a
+    separate command (see the "did not put the file down anywhere"
+    diagnosis that prompted this).
+
+    Best-effort only, same as `_offer_ollama_setup` below: any failure here
+    is reported and swallowed rather than raised, so a proxy hiccup never
+    undoes an otherwise-successful `create`. `confirm` is the same callable
+    `create` already built from `--yes`, so `--yes` skips this prompt too,
+    same as it does for the container runtime and Ollama.
+    """
+    try:
+        existing = proxy_ops.detect_existing_proxy(instance.runtime)
+    except Exception as exc:  # pragma: no cover - detection is normally infallible; defensive only
+        click.echo(f"\n(Skipped reverse-proxy check: {exc})")
+        return
+
+    if existing is not None:
+        prompt = (
+            f"\nAn existing reverse proxy ({existing.kind}) was found on this machine -- "
+            f"configure it for {instance.name!r} now?"
+        )
+    else:
+        prompt = (
+            f"\nNo reverse proxy was found on this machine. Install a LinuxServer SWAG "
+            f"container and configure it for {instance.name!r} now?"
+        )
+    if not confirm(prompt):
+        click.echo(f"  Skipped. Run `job-squire proxy {instance.name}` later to configure a reverse proxy.")
+        return
+
+    try:
+        result = proxy_ops.provision_instance_proxy(
+            instance, root=Path(instance.data_dir), install_if_missing=True,
+            confirm=lambda _msg: True,  # consent already captured above
+        )
+    except proxy_ops.ProxyError as exc:
+        click.echo(f"  Reverse proxy setup failed: {exc}")
+        click.echo(f"  Re-run later with `job-squire proxy {instance.name}`.")
+        return
+
+    click.echo(f"  Reverse proxy provisioned ({result.proxy.kind}).")
+    if result.installed_swag:
+        click.echo(f"  Installed a new SWAG container (config at {result.proxy.config_dir}).")
+        click.echo(
+            "  DNS/TLS validation isn't fully configured yet -- run `job-squire dns duckdns` or "
+            "`job-squire dns cloudflare` next; network mode isn't considered fully configured without it."
+        )
+    click.echo(f"  Web conf installed: {result.web_conf_path}")
+    click.echo(f"  MCP conf installed: {result.mcp_conf_path}")
+    click.echo("  Proxy reloaded.")
 
 
 def _offer_ollama_setup(instance: Instance, *, confirm) -> None:
@@ -269,7 +337,7 @@ def restart(name):
     click.echo(f"Instance {name!r} restarted.")
 
 
-# ── update / rollback (Prompt C7) ────────────────────────────────────────
+# ── update / rollback ──────────────────────────────────────────────────
 
 
 def _run_self_update(skip: bool, cli_version: str | None) -> None:
@@ -385,9 +453,31 @@ def status(name):
               help="Also remove the instance's container image with 'rmi' -- but only if no other "
                    "registered instance still references it. 'compose down' alone never removes "
                    "the image it was running.")
+@click.option("--skip-proxy-cleanup", "skip_proxy_cleanup", is_flag=True, default=False,
+              help="Don't offer to remove this instance's reverse-proxy configuration (and, if it "
+                   "was the last one using it, the CLI-installed SWAG proxy) after removing a "
+                   "network-mode instance.")
+@click.option("--skip-tailscale-cleanup", "skip_tailscale_cleanup", is_flag=True, default=False,
+              help="Don't offer to turn off Tailscale Serve after removing a local-mode instance "
+                   "that had it enabled (and, if it was the last one using it and job-squire "
+                   "installed Tailscale, don't offer to remove Tailscale itself).")
 @click.option("--yes", "assume_yes", is_flag=True, default=False,
               help="Don't prompt; without --keep-data/--delete-data this keeps the data (the safe default).")
-def remove(name, keep_data, remove_image, assume_yes):
+def remove(name, keep_data, remove_image, skip_proxy_cleanup, skip_tailscale_cleanup, assume_yes):
+    instance = _require_instance(name)
+
+    # Read *before* teardown: `tailscale.json` lives inside the instance's
+    # own data_dir (ops/tailscale.py -- there's no room for this in the
+    # fixed registry schema), so with --delete-data it's gone by the time
+    # `_offer_tailscale_removal` would otherwise get to look, and Serve
+    # would be silently left on for a container that no longer exists.
+    tailscale_state = None
+    if instance.mode == "local" and not skip_tailscale_cleanup:
+        try:
+            tailscale_state = tailscale_ops.read_state(Path(instance.data_dir))
+        except tailscale_ops.TailscaleError:
+            tailscale_state = None  # unreadable -- nothing to safely offer
+
     confirm_delete = None if (keep_data is not None or assume_yes) else click.confirm
     try:
         result = lifecycle.remove_instance(
@@ -408,13 +498,191 @@ def remove(name, keep_data, remove_image, assume_yes):
         elif result.image:
             click.echo(f"Image kept ({result.image}): {result.image_kept_reason}")
 
+    confirm = (lambda _msg: True) if assume_yes else click.confirm
+    if instance.mode == "network" and not skip_proxy_cleanup:
+        _offer_proxy_removal(instance, confirm=confirm)
+    if instance.mode == "local" and not skip_tailscale_cleanup and tailscale_state is not None and tailscale_state.enabled:
+        _offer_tailscale_removal(instance, tailscale_state, confirm=confirm)
+
+
+def _offer_tailscale_removal(instance: Instance, state, *, confirm) -> None:
+    """Tail of `remove` for a local-mode instance that had Tailscale Serve
+    on. Two steps:
+
+    1. Turn Serve off for this instance's two ports -- otherwise
+       `tailscale serve` keeps forwarding that tailnet HTTPS port to a
+       container that no longer exists, the same dead-upstream problem
+       `_offer_proxy_removal` fixes for a reverse proxy, just at the host
+       level instead of nginx's. Turns the ports off directly
+       (`tailscale_ops.disable_serve_port`) rather than the full
+       `disable_tailscale_serve` orchestration, which assumes a live
+       container to recreate with reverted env vars -- not true here; the
+       container, and possibly the whole data directory (`--delete-data`),
+       is already gone by the time this runs.
+    2. Only if that succeeded (declining step 1 leaves the mapping
+       logically "still in use," same as declining `_offer_proxy_removal`'s
+       conf-removal leaves confs the later SWAG-teardown check still
+       finds), check whether any *other* registered instance still has
+       Tailscale enabled and whether job-squire is the one that installed
+       the client (`tailscale_ops.load_tailscale_choice` -- never true for
+       a client the operator already had running before `tailscale
+       enable`'s `ensure_tailscale_ready` ran, mirroring the SWAG case's
+       own installed-by-us guard). If both hold, offer to remove Tailscale
+       entirely.
+    """
+    if not confirm(
+        f"\nTailscale Serve is still on for {instance.name!r} (tailnet ports {state.web_port}/"
+        f"{state.mcp_port}) -- turn it off now?"
+    ):
+        click.echo(
+            f"  Skipped. Turn it off later by hand: `tailscale serve --https={state.web_port} off` "
+            f"and `tailscale serve --https={state.mcp_port} off`."
+        )
+        return
+
+    try:
+        if state.web_port is not None:
+            tailscale_ops.disable_serve_port(state.web_port)
+        if state.mcp_port is not None:
+            tailscale_ops.disable_serve_port(state.mcp_port)
+    except tailscale_ops.TailscaleError as exc:
+        click.echo(f"  Failed to turn off Tailscale Serve: {exc}")
+        return
+    click.echo(f"  Turned off Tailscale Serve on ports {state.web_port} and {state.mcp_port}.")
+
+    choice = tailscale_ops.load_tailscale_choice()
+    if not choice or choice.get("source") != "installed":
+        return
+    if _any_other_instance_has_tailscale_enabled():
+        return
+
+    if not confirm(
+        "No other instance is using Tailscale anymore, and job-squire installed it on this "
+        "machine -- remove it entirely too?"
+    ):
+        click.echo("  Skipped. Remove it later by hand if you change your mind.")
+        return
+
+    try:
+        tailscale_ops.remove_tailscale()
+    except tailscale_ops.TailscaleError as exc:
+        click.echo(f"  Failed to remove Tailscale: {exc}")
+        return
+    click.echo("  Removed Tailscale.")
+
+
+def _any_other_instance_has_tailscale_enabled() -> bool:
+    """True if any currently-registered instance has Tailscale Serve on.
+    Called only after the instance being removed is already gone from the
+    registry (same pattern as `_image_still_in_use` in ops/lifecycle.py),
+    so no self-exclusion is needed."""
+    for inst in list_instances():
+        try:
+            if tailscale_ops.read_state(Path(inst.data_dir)).enabled:
+                return True
+        except tailscale_ops.TailscaleError:
+            continue
+    return False
+
+
+def _offer_proxy_removal(instance: Instance, *, confirm) -> None:
+    """Tail of `remove` for a network-mode instance -- the reverse of
+    `_offer_proxy_setup` above. Two independent offers:
+
+    1. If a reverse proxy is currently running and this instance's own
+       web/MCP confs are sitting in it, offer to delete them and reload --
+       otherwise they're dead weight nginx keeps trying (and failing) to
+       route to, for a container that's already gone by the time this
+       runs.
+    2. Only if all three hold -- it's the CLI's own managed SWAG install
+       (`proxy_ops.is_managed_swag`, never a third-party proxy the operator
+       already had running, same scope guard `ops/dns.py` uses), nothing
+       else is using it (no other instance's confs left in its proxy-confs
+       directory), and this was the last instance (no other *registered*
+       network-mode instance remains either -- checked independently of the
+       confs sweep, since a registered instance whose confs went missing
+       some other way would otherwise slip past a confs-only check) --
+       additionally offer to tear the whole thing down. There is no
+       separate "per-instance DNS configuration" to remove -- `ops/dns.py`
+       configures the one shared SWAG install for every network-mode
+       instance behind it (DuckDNS token, Cloudflare credentials, the
+       Let's Encrypt certificate all live in *its* config directory, not
+       per instance) -- so removing "the DNS configuration" only makes
+       sense once nothing is left that still needs it.
+
+    Best-effort, same shape as `_offer_proxy_setup`: the instance is
+    already gone from the registry by the time this runs, so a failure
+    here is reported, never raised -- there's nothing left to roll back,
+    only stale proxy/DNS state to flag for a manual follow-up.
+    """
+    try:
+        existing = proxy_ops.detect_existing_proxy(instance.runtime)
+    except Exception as exc:  # pragma: no cover - detection is normally infallible; defensive only
+        click.echo(f"\n(Skipped reverse-proxy check: {exc})")
+        return
+    if existing is None:
+        return  # nothing running to clean up
+
+    confs_dir = existing.config_dir.joinpath(*proxy_ops.PROXY_CONFS_SUBPATH)
+    web_name, mcp_name = proxy_ops.conf_filenames(instance.name)
+    if not any((confs_dir / n).exists() for n in (web_name, mcp_name)):
+        return  # a proxy is running, but this instance was never configured into it
+
+    if not confirm(
+        f"\nRemove the reverse-proxy configuration for {instance.name!r} from the running "
+        f"{existing.kind} proxy now?"
+    ):
+        click.echo(
+            f"  Skipped. Its confs are still at {confs_dir} -- remove them by hand later if you want."
+        )
+        return
+
+    for path in proxy_ops.remove_confs(existing, instance_name=instance.name):
+        click.echo(f"  Removed {path}")
+    try:
+        proxy_ops.reload_proxy(existing, runtime=instance.runtime)
+        click.echo("  Proxy reloaded.")
+    except proxy_ops.ProxyError as exc:
+        click.echo(f"  Confs removed, but reloading the proxy failed: {exc}")
+
+    if not proxy_ops.is_managed_swag(existing):
+        return
+    if any(confs_dir.glob("*job-squire-*.subdomain.conf")):
+        return  # another instance still has confs in this SWAG -- leave it and its DNS/TLS config alone
+    if any(i.mode == "network" for i in list_instances()):
+        return  # another registered network-mode instance still exists, even if its confs are missing
+
+    if not confirm(
+        "No other instance is using the CLI-installed SWAG proxy anymore -- remove it entirely too? "
+        "This also deletes its DNS/TLS configuration (DuckDNS/Cloudflare credentials, the Let's "
+        "Encrypt certificate) -- there's no way back from this short of running `job-squire proxy` "
+        "and `job-squire dns` again from scratch for whatever instance needs a proxy next."
+    ):
+        click.echo(f"  Skipped. Remove it later by hand at {proxy_ops.swag_root()} if you change your mind.")
+        return
+
+    try:
+        proxy_ops.remove_managed_swag(instance.runtime)
+    except proxy_ops.ProxyError as exc:
+        click.echo(f"  Failed to remove the SWAG proxy: {exc}")
+        return
+    click.echo("  Removed the CLI-installed SWAG proxy and its DNS/TLS configuration.")
+
 
 # ── uninstall ────────────────────────────────────────────────────────────
 # Removes every registered instance and, by default, each instance's
 # container image (unlike `remove`, where image cleanup stays opt-in --
 # see ops/uninstall.py's module docstring), then (opt-in) the container
 # runtime job-squire itself installed, then the CLI's own venv and PATH
-# entry. Not part of the original C1-C12 grammar; added because getting
+# entry, then two more offers mirroring what `remove` does for a single
+# instance, just asked once each for the whole batch: any network-mode
+# instances' reverse-proxy confs and, if it's the CLI's own SWAG install
+# and nothing else needs it, SWAG itself (`_offer_proxy_cleanup_for_
+# uninstall`); and any local-mode instances that had Tailscale Serve on
+# (`_offer_tailscale_cleanup_for_uninstall` -- job-squire never installs
+# the Tailscale client itself, only ever the per-instance Serve port
+# mappings, so there's no equivalent "installation" step to remove there).
+# Not part of the original C1-C12 grammar; added because getting
 # job-squire *off* a machine matters as much as getting it on, and the
 # bootstrap scripts already modify PATH and (via `create`) may have
 # installed a runtime, so the CLI should be able to fully reverse both, on
@@ -443,12 +711,34 @@ def remove(name, keep_data, remove_image, assume_yes):
                    "data (the safe default), without --remove-runtime the runtime is never "
                    "removed even if job-squire installed it, and without --keep-image every "
                    "instance's image is removed (the default for uninstall).")
-def uninstall(keep_data, remove_runtime, remove_image, assume_yes):
+@click.option("--skip-proxy-cleanup", "skip_proxy_cleanup", is_flag=True, default=False,
+              help="Don't offer to remove network-mode instances' reverse-proxy configuration (and, "
+                   "if it's the CLI-installed SWAG proxy and nothing else was using it, SWAG itself).")
+@click.option("--skip-tailscale-cleanup", "skip_tailscale_cleanup", is_flag=True, default=False,
+              help="Don't offer to turn off Tailscale Serve for local-mode instances that had it "
+                   "enabled, or to remove Tailscale itself if job-squire installed it.")
+def uninstall(keep_data, remove_runtime, remove_image, assume_yes, skip_proxy_cleanup, skip_tailscale_cleanup):
     instances = list_instances()
     if instances:
         click.echo("This removes every registered instance: " + ", ".join(i.name for i in instances))
     else:
         click.echo("No instances are registered.")
+
+    # Snapshotted *before* `uninstall_everything` runs, same reason `remove`
+    # reads it before `lifecycle.remove_instance`: with --delete-data each
+    # instance's data_dir (where tailscale.json lives) is gone by the time
+    # the cleanup offer at the bottom of this function would otherwise look.
+    tailscale_states: list[tuple[Instance, "tailscale_ops.TailscaleState"]] = []
+    if not skip_tailscale_cleanup:
+        for inst in instances:
+            if inst.mode != "local":
+                continue
+            try:
+                state = tailscale_ops.read_state(Path(inst.data_dir))
+            except tailscale_ops.TailscaleError:
+                continue
+            if state.enabled:
+                tailscale_states.append((inst, state))
 
     # This is the one prompt --yes can't skip past silently: it gates the
     # whole operation, not just a single instance's data. Defaults to "no"
@@ -526,9 +816,152 @@ def uninstall(keep_data, remove_runtime, remove_image, assume_yes):
             "    pip uninstall job-squire-cli"
         )
 
+    confirm = (lambda _msg: True) if assume_yes else click.confirm
+    if not skip_proxy_cleanup:
+        network_instances = [i for i in instances if i.mode == "network"]
+        _offer_proxy_cleanup_for_uninstall(network_instances, confirm=confirm)
+    if not skip_tailscale_cleanup:
+        _offer_tailscale_cleanup_for_uninstall(tailscale_states, confirm=confirm)
+
+
+def _offer_tailscale_cleanup_for_uninstall(
+    tailscale_states: "list[tuple[Instance, tailscale_ops.TailscaleState]]", *, confirm,
+) -> None:
+    """Tail of `uninstall`, mirroring `_offer_tailscale_removal` above but
+    for the whole batch: one combined prompt covering every local-mode
+    instance that had Tailscale Serve on, instead of asking once per
+    instance. `tailscale_states` is the snapshot `uninstall` took before
+    `uninstall_everything` ran (see the comment where it's built) --
+    reading it now would find nothing, since each instance's data_dir
+    (and `tailscale.json` with it) may already be gone.
+
+    Then, unconditionally (regardless of whether `tailscale_states` was
+    empty -- unlike `_offer_tailscale_removal`'s per-instance "last
+    instance" check, `uninstall` has already removed *every* registered
+    instance by the time this runs, so there's no "is anything else still
+    using it" question left to ask): if job-squire is the one that
+    installed the Tailscale client (`tailscale_ops.load_tailscale_choice`),
+    offer to remove it entirely.
+    """
+    if tailscale_states:
+        names = ", ".join(inst.name for inst, _ in tailscale_states)
+        if confirm(
+            f"\nTailscale Serve is still on for {len(tailscale_states)} just-uninstalled "
+            f"instance(s) ({names}) -- turn it off now?"
+        ):
+            for inst, state in tailscale_states:
+                try:
+                    if state.web_port is not None:
+                        tailscale_ops.disable_serve_port(state.web_port)
+                    if state.mcp_port is not None:
+                        tailscale_ops.disable_serve_port(state.mcp_port)
+                except tailscale_ops.TailscaleError as exc:
+                    click.echo(f"  Failed to turn off Tailscale Serve for {inst.name!r}: {exc}")
+                    continue
+                click.echo(
+                    f"  Turned off Tailscale Serve for {inst.name!r} (ports {state.web_port} "
+                    f"and {state.mcp_port})."
+                )
+        else:
+            click.echo(
+                "  Skipped. Turn it off later by hand with `tailscale serve --https=<port> off` "
+                "for each port it was using."
+            )
+
+    choice = tailscale_ops.load_tailscale_choice()
+    if not choice or choice.get("source") != "installed":
+        return
+
+    if not confirm("\njob-squire installed Tailscale on this machine -- remove it entirely too?"):
+        click.echo("  Skipped. Remove it later by hand if you change your mind.")
+        return
+
+    try:
+        tailscale_ops.remove_tailscale()
+    except tailscale_ops.TailscaleError as exc:
+        click.echo(f"  Failed to remove Tailscale: {exc}")
+        return
+    click.echo("  Removed Tailscale.")
+
+
+def _offer_proxy_cleanup_for_uninstall(network_instances: list[Instance], *, confirm) -> None:
+    """Tail of `uninstall`, mirroring `_offer_proxy_removal` above but for
+    a bulk teardown: covers every network-mode instance `uninstall` just
+    removed in one pass instead of asking once per instance -- `uninstall`
+    already asked one big up-front "uninstall everything?" confirmation,
+    so re-litigating that per instance here would just be noise. The same
+    three-condition SWAG-teardown gate `remove` uses still applies --
+    nothing else using it, this was the last instance, and it's the CLI's
+    own install -- and for uninstall "last instance" is trivially
+    satisfied once every registered instance really is gone, which by
+    this point in the function it is (`uninstall_everything` already ran).
+
+    `network_instances` is the list of network-mode `Instance` objects
+    *as registered before* `uninstall_everything` ran (the caller captures
+    it from the same `list_instances()` call `uninstall` already made for
+    its opening summary line) -- by the time this runs they're gone from
+    the registry, so this is the only record left of which ones were
+    network-mode and need their confs checked.
+    """
+    if not network_instances:
+        return  # nothing was network-mode -- no proxy concern at all
+
+    runtime = network_instances[0].runtime
+    try:
+        existing = proxy_ops.detect_existing_proxy(runtime)
+    except Exception as exc:  # pragma: no cover - detection is normally infallible; defensive only
+        click.echo(f"\n(Skipped reverse-proxy check: {exc})")
+        return
+    if existing is None:
+        return
+
+    confs_dir = existing.config_dir.joinpath(*proxy_ops.PROXY_CONFS_SUBPATH)
+    with_confs = [
+        inst for inst in network_instances
+        if any((confs_dir / n).exists() for n in proxy_ops.conf_filenames(inst.name))
+    ]
+    if with_confs:
+        names = ", ".join(inst.name for inst in with_confs)
+        if confirm(
+            f"\nRemove the just-uninstalled instance(s)' reverse-proxy configuration from the "
+            f"running {existing.kind} proxy now? ({names})"
+        ):
+            for inst in with_confs:
+                for path in proxy_ops.remove_confs(existing, instance_name=inst.name):
+                    click.echo(f"  Removed {path}")
+            try:
+                proxy_ops.reload_proxy(existing, runtime=runtime)
+                click.echo("  Proxy reloaded.")
+            except proxy_ops.ProxyError as exc:
+                click.echo(f"  Confs removed, but reloading the proxy failed: {exc}")
+        else:
+            click.echo(
+                f"  Skipped. Their confs are still at {confs_dir} -- remove them by hand later if you want."
+            )
+
+    if not proxy_ops.is_managed_swag(existing):
+        return
+    if any(confs_dir.glob("*job-squire-*.subdomain.conf")):
+        return  # something not covered by this uninstall still has confs in this SWAG
+
+    if not confirm(
+        "No instance is using the CLI-installed SWAG proxy anymore -- remove it entirely too? "
+        "This also deletes its DNS/TLS configuration (DuckDNS/Cloudflare credentials, the Let's "
+        "Encrypt certificate) -- there's no way back from this short of running `job-squire proxy` "
+        "and `job-squire dns` again from scratch for whatever instance needs a proxy next."
+    ):
+        click.echo(f"  Skipped. Remove it later by hand at {proxy_ops.swag_root()} if you change your mind.")
+        return
+
+    try:
+        proxy_ops.remove_managed_swag(runtime)
+    except proxy_ops.ProxyError as exc:
+        click.echo(f"  Failed to remove the SWAG proxy: {exc}")
+        return
+    click.echo("  Removed the CLI-installed SWAG proxy and its DNS/TLS configuration.")
+
 
 # ── configure (MCP authentication + query-group token-config plumbing) ────
-# Prompt C6: docs/PLAN-deployment-modes.md Section 5 ("MCP authentication").
 # OAuth 2.0/PKCE stays the default, untouched MCP flow in every mode --
 # nothing is generated for it here. This command manages the one sanctioned
 # alternative, the local `jsq_mcp_` static bearer token (loopback-only
@@ -588,7 +1021,7 @@ def _print_mcp_config(instance: Instance) -> None:
     click.echo(f"  Query config token:    {'set' if entry and entry.get('token') else '(not set)'}")
     click.echo(f"  Default for `job-squire query`: {'yes' if data.get('default') == instance.name else 'no'}")
     click.echo("  OAuth 2.0/PKCE is the default MCP auth flow in every mode; the static token above")
-    click.echo("  is the loopback-only escape hatch for headless clients (PLAN Section 5).")
+    click.echo("  is the loopback-only escape hatch for headless clients.")
 
 
 @click.command(help="Adjust an instance's settings, including MCP authentication.")
@@ -674,11 +1107,12 @@ def configure(name, mcp_token_action, ttl_hours, allow_network, manual_token, ma
             return
 
         effective_allow_network = allow_network if allow_network is not None else state.allow_network
-        # Instance.mode alone can't see Tailscale reachability -- Prompt C11
-        # deliberately keeps a Serve-fronted instance's mode at "local" (see
-        # ops/tailscale.py's module docstring), so its own state manifest is
-        # consulted too. Either way, the same explicit --allow-network opt-in
-        # from C6 is what's required; nothing here is allowed implicitly.
+        # Instance.mode alone can't see Tailscale reachability -- Tailscale
+        # Serve deliberately keeps a Serve-fronted instance's mode at "local"
+        # (see ops/tailscale.py's module docstring), so its own state
+        # manifest is consulted too. Either way, the same explicit
+        # --allow-network opt-in is what's required; nothing here is
+        # allowed implicitly.
         tailnet_reachable = instance.mode == "local" and tailscale_ops.is_tailnet_reachable(root)
         if not mcp_token.is_static_token_allowed(instance.mode, effective_allow_network) or (
             tailnet_reachable and not effective_allow_network
@@ -733,8 +1167,8 @@ def configure(name, mcp_token_action, ttl_hours, allow_network, manual_token, ma
         click.echo(f"Updated MCP config for {instance.name!r}: {', '.join(parts)}.")
 
 
-# ── backup / restore (Prompt C8) ─────────────────────────────────────────
-# docs/PLAN-deployment-modes.md Section 7 ("Backup and restore"). Every
+# ── backup / restore ──────────────────────────────────────────────────
+# Every
 # archive is mandatory-encrypted (ops/backup_crypto.py, Argon2id +
 # AES-256-GCM) -- this command layer only ever handles the passphrase as a
 # hidden-input prompt (or an explicit --passphrase for scripted use, which
@@ -850,12 +1284,18 @@ def restore_cmd(archive_path, rename_to, overwrite, passphrase, image, bring_up,
         click.echo(f"  Not brought up yet. Run `job-squire start {inst.name}` when you're ready.")
 
 
-# ── proxy (Prompt C9) ────────────────────────────────────────────────────
-# docs/PLAN-deployment-modes.md Section 5 ("Optional proxy provisioning").
+# ── proxy ──────────────────────────────────────────────────────────────
 # For a network-mode instance: generate its web/MCP nginx confs into an
 # existing SWAG/nginx proxy and reload it, or -- if none is running --
 # install a LinuxServer SWAG container first. Every actual decision lives
 # in ops/proxy.py; this is a thin adapter, same as every other command here.
+#
+# `create` now offers this same flow automatically right after a
+# network-mode instance comes up (see `_offer_proxy_setup` above) --
+# bootstrap.sh hands off straight into `create`, so that's the only place
+# an operator following the standard install path actually sees it happen.
+# This standalone command still exists for re-running it later (declined
+# the offer, `--skip-proxy-setup`, proxy topology changed, etc.).
 
 
 @click.command(name="proxy", help="Provision a reverse proxy (existing SWAG/nginx, or install SWAG) "
@@ -918,10 +1358,8 @@ def proxy_cmd(name, proxy_container, config_dir, network, no_install, swag_timez
     click.echo("  Proxy reloaded.")
 
 
-# ── dns (Prompt C10) ─────────────────────────────────────────────────────
-# docs/PLAN-deployment-modes.md Section 5 ("Free and low-cost domain and DNS
-# options for personal use") and Section 7's DNS and TLS provisioning
-# touchpoint. Both subcommands only ever configure the CLI's own SWAG
+# ── dns ────────────────────────────────────────────────────────────────
+# Both subcommands only ever configure the CLI's own SWAG
 # install from `job-squire proxy NAME` (ops/dns.py's `_managed_swag_target`
 # enforces this) -- everything else (Cloudflare Tunnel, other SWAG DNS
 # plugins) is documented in docs/job-squire-cli.md, never wired here.
@@ -1014,13 +1452,21 @@ def dns_cloudflare_cmd(name, domain, api_token, network, timezone, no_wait, time
     _print_dns_result(result, runtime=instance.runtime)
 
 
-# ── tailscale (Prompt C11) ───────────────────────────────────────────────
-# docs/PLAN-deployment-modes.md Section 5 ("Reaching a local instance from
-# your own devices (Tailscale)"). Serve, never Funnel, in front of a
+# ── tailscale ─────────────────────────────────────────────────────────
+# Serve, never Funnel, in front of a
 # *local*-mode instance's loopback ports -- see ops/tailscale.py's module
 # docstring for why Instance.mode stays "local" throughout and where the
 # on/off state actually lives (a per-instance tailscale.json manifest, not
 # the registry).
+#
+# `enable` now also gets the instance ready first (`ensure_tailscale_ready`):
+# install the Tailscale client with consent if it's missing, or walk
+# through `tailscale up` if it's present but this device isn't logged into
+# a tailnet -- mirroring how `create` gets a container runtime ready
+# before ever calling `lifecycle.create_instance`. `remove`/`uninstall`
+# below are the reverse: they offer to remove the client entirely once
+# nothing job-squire manages needs it anymore, same shape as the SWAG
+# proxy's own install/remove symmetry.
 
 
 @click.group(name="tailscale", help="Front a local instance with Tailscale Serve for private "
@@ -1038,12 +1484,21 @@ def tailscale_group():
 @click.option("--mcp-port", type=click.Choice([str(p) for p in tailscale_ops.ALLOWED_SERVE_PORTS]),
               default=str(tailscale_ops.DEFAULT_MCP_SERVE_PORT), show_default=True,
               help="Tailnet HTTPS port Serve publishes the MCP endpoint on.")
-def tailscale_enable_cmd(name, web_port, mcp_port):
+@click.option("--yes", "assume_yes", is_flag=True, default=False,
+              help="Don't ask before installing the Tailscale client or running `tailscale up`.")
+def tailscale_enable_cmd(name, web_port, mcp_port, assume_yes):
     instance = _require_instance(name)
     # Path(instance.data_dir), not paths.instance_root(instance.name): same
     # reason as _print_mcp_config above -- an adopted instance's data_dir
     # doesn't necessarily live under the default per-user data root.
     root = Path(instance.data_dir)
+
+    confirm = (lambda _msg: True) if assume_yes else click.confirm
+    try:
+        tailscale_ops.ensure_tailscale_ready(confirm=confirm)
+    except tailscale_ops.TailscaleError as exc:
+        _fail(str(exc))
+
     try:
         result = tailscale_ops.enable_tailscale_serve(
             instance, root=root, web_port=int(web_port), mcp_port=int(mcp_port),

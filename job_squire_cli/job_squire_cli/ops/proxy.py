@@ -10,11 +10,9 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-"""Reverse-proxy provisioning for network-mode instances (Prompt C9,
-docs/PLAN-deployment-modes.md Section 5 "Network mode: the proxy is the
-boundary" / "Optional proxy provisioning").
+"""Reverse-proxy provisioning for network-mode instances.
 
-Two cases, matching the plan exactly:
+Two cases:
 
   1. **An existing proxy.** `detect_existing_proxy` looks for a running
      SWAG or bare-nginx container and its host config directory; the
@@ -32,12 +30,12 @@ from inside its own network namespace -- the shared-network pattern the
 app repo's now-retired three-container `docker-compose.swag.yml` used to
 document, for this CLI's single container instead.
 
-The proxy stays a separate, independently maintained component (PLAN
-Section 5): nothing here is baked into the Job Squire image, TLS still
-terminates at the proxy, and DNS/certificate validation (DuckDNS,
-Cloudflare DNS-01, ...) is Prompt C10's job, not this one -- `install_swag`
-only brings up a plain SWAG container with whatever URL/validation the
-operator already has in hand (or empty placeholders C10 fills in later).
+The proxy stays a separate, independently maintained component: nothing
+here is baked into the Job Squire image, TLS still terminates at the
+proxy, and DNS/certificate validation (DuckDNS, Cloudflare DNS-01, ...) is
+the `dns` commands' job, not this one -- `install_swag` only brings up a
+plain SWAG container with whatever URL/validation the operator already
+has in hand (or empty placeholders the `dns` commands fill in later).
 
 **Why the nginx conf text is a hand-rolled template here rather than read
 from examples/nginx/ at runtime**: exactly the reason compose.py's own
@@ -58,6 +56,7 @@ than one CLI-managed instance can share a proxy.
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import time
 from dataclasses import dataclass
@@ -308,6 +307,73 @@ def install_confs(
     return web_path, mcp_path
 
 
+def remove_confs(proxy: ProxyTarget, *, instance_name: str) -> list[Path]:
+    """The reverse of `install_confs`: delete `instance_name`'s web/MCP
+    confs from `proxy`'s proxy-confs directory, if present. Returns the
+    paths actually removed -- empty if neither existed (e.g. `job-squire
+    proxy`/`create`'s own proxy offer was never run for this instance, or
+    they were already cleaned up). Does not reload the proxy; the caller
+    (`remove` in ops/commands.py) does that once, after this and whatever
+    else it's doing to the proxy for this instance."""
+    confs_dir = proxy.config_dir.joinpath(*PROXY_CONFS_SUBPATH)
+    web_name, mcp_name = conf_filenames(instance_name)
+    removed: list[Path] = []
+    for filename in (web_name, mcp_name):
+        path = confs_dir / filename
+        if path.exists():
+            path.unlink()
+            removed.append(path)
+    return removed
+
+
+def is_managed_swag(proxy: ProxyTarget, *, data_root: Path | None = None) -> bool:
+    """True only if `proxy` is the SWAG container `job-squire proxy`
+    itself installs at `swag_root` -- as opposed to a third-party SWAG (or
+    bare nginx) the operator already had running that `detect_existing_proxy`
+    merely found and reused. Mirrors `ops/dns.py`'s own `_managed_swag_target`
+    scope guard: only a CLI-managed SWAG is ever a candidate for
+    `remove_managed_swag` below. Matching on both the container name and
+    the actual resolved config directory (not just `kind == "swag"`) is
+    deliberate -- an operator could plausibly run their own SWAG under the
+    same container name, and confusing that for the CLI's own install
+    would make `remove` delete someone else's proxy and DNS/TLS setup."""
+    if proxy.kind != "swag" or proxy.container_name != SWAG_CONTAINER_NAME:
+        return False
+    try:
+        return proxy.config_dir.resolve() == (swag_root(data_root) / "config").resolve()
+    except OSError:
+        return False
+
+
+def remove_managed_swag(runtime: str, *, data_root: Path | None = None, run: Runner = subprocess.run) -> None:
+    """Stop and remove the CLI's own SWAG container (`compose down`) and
+    delete its entire config directory -- including whatever DNS/TLS state
+    `job-squire dns duckdns`/`cloudflare` wrote into it: the
+    DUCKDNSTOKEN/DNSPLUGIN compose environment variables, `dns-conf/
+    cloudflare.ini`, and the Let's Encrypt certificate SWAG itself
+    obtained. There is no separate "per-instance DNS config" to remove --
+    `ops/dns.py` configures this one shared SWAG install for every
+    network-mode instance behind it, so this is only ever called once no
+    other registered instance still has confs sitting in it (see
+    `_offer_proxy_removal` in ops/commands.py). Only ever call this against
+    a `ProxyTarget` `is_managed_swag` has already confirmed -- there is no
+    internal check here against accidentally pointing `runtime`/`data_root`
+    at a third-party install.
+    """
+    root = swag_root(data_root)
+    compose_path = root / "docker-compose.yml"
+    if compose_path.exists():
+        argv = [*compose.compose_binary(runtime), "--project-directory", str(root),
+                "-f", str(compose_path), "-p", "job-squire-proxy", "down"]
+        try:
+            result = run(argv, cwd=str(root), capture_output=True, text=True, timeout=60)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise ProxyError(f"Failed to stop the SWAG proxy: {exc}") from exc
+        if result.returncode != 0:
+            raise ProxyError(f"Failed to stop the SWAG proxy: {(result.stderr or result.stdout).strip()}")
+    shutil.rmtree(root, ignore_errors=True)
+
+
 # ── Detecting an existing proxy ──────────────────────────────────────────
 
 
@@ -377,9 +443,9 @@ def detect_existing_proxy(
 ) -> ProxyTarget | None:
     """Best-effort: find a running SWAG or bare-nginx container and its
     host config directory, so `provision_instance_proxy` can drop the
-    generated confs in and reload it without installing a second proxy
-    (PLAN Section 5 "if the machine already runs SWAG or another
-    nginx-based proxy ... do not install a second proxy").
+    generated confs in and reload it without installing a second proxy --
+    if the machine already runs SWAG or another nginx-based proxy, no
+    second proxy is ever installed.
 
     SWAG is checked first (more specific: its `/config` bind mount is
     where `nginx/proxy-confs/` lives). Bare nginx is checked second, using
@@ -500,11 +566,11 @@ def render_swag_compose(
     here, because SWAG's `init-require-url` service hangs forever
     (`sleep infinity`) rather than finishing boot without one, which would
     leave nginx's real config never generated from its `.sample`
-    templates. Prompt C10's `ops/dns.py` (`_rewrite_and_recreate`) calls
+    templates. `ops/dns.py`'s `_rewrite_and_recreate` calls
     this again with the real DuckDNS or Cloudflare values once the
     operator supplies them, then recreates the container so SWAG picks up
     the change. Network mode is still not considered configured without a
-    working proxy *and* a real certificate in front (PLAN Section 5), and
+    working proxy *and* a real certificate in front, and
     a bare SWAG container with a placeholder domain is exactly that --
     present and serving, but not yet finished.
     """
@@ -517,10 +583,10 @@ def render_swag_compose(
 # Generated by `job-squire proxy` -- a standalone LinuxServer SWAG
 # container (nginx + certbot + fail2ban), used when no reverse proxy was
 # already running on this machine. Not a Job Squire instance; do not
-# `job-squire remove` it. See docs/PLAN-deployment-modes.md Section 5.
+# `job-squire remove` it.
 #
 # May contain a DNS provider token in plain text (DUCKDNSTOKEN/DNSPLUGIN
-# credentials) once `job-squire dns duckdns`/`dns cloudflare` (Prompt C10)
+# credentials) once `job-squire dns duckdns`/`dns cloudflare`
 # has run -- SWAG's own entrypoint scripts read these directly from the
 # environment, the same way this repo's own data/.env carries SECRET_KEY
 # in plain text. Kept out of the instance registry (never a secret store)
@@ -567,8 +633,8 @@ def _await_swag_ready(
     `/config`) takes a few seconds on a fresh install, and calling
     `install_confs`/`reload_proxy` before it's done fails with `nginx:
     [emerg] open() ".../proxy.conf" failed (2: No such file or
-    directory)` -- caught during Prompt C12's own end-to-end network-mode
-    dry run (docs/PROMPTS-deployment-cli.md). Attempt-counted rather than
+    directory)` -- caught during this module's own end-to-end network-mode
+    dry run. Attempt-counted rather than
     wall-clock-timed so this is deterministic and fast under test with an
     injected `sleep` that doesn't actually sleep, matching ops/dns.py's
     `_await_certificate`. Returns whether the marker file was found; never
@@ -651,7 +717,7 @@ def provision_instance_proxy(
     if instance.mode != "network":
         raise ProxyError(
             f"Instance {instance.name!r} is in {instance.mode!r} mode -- reverse-proxy provisioning "
-            f"only applies to network-mode instances (PLAN Section 5: local modes use loopback only)."
+            f"only applies to network-mode instances (local modes use loopback only)."
         )
 
     container_name = derive_compose_project(instance.name)
@@ -679,10 +745,10 @@ def provision_instance_proxy(
         # booting on a truly empty URL, so nginx's real config is never
         # generated from its .sample templates and every later reload
         # fails forever, not just until DNS/TLS is configured (caught by
-        # Prompt C12's own end-to-end network-mode dry run). The
+        # this module's own end-to-end network-mode dry run). The
         # instance's own hostname is already known at this point and is
         # the right value regardless -- `job-squire dns duckdns`/
-        # `cloudflare` (Prompt C10) still owns getting a real certificate
+        # `cloudflare` still owns getting a real certificate
         # for it; this only unblocks SWAG's init so there's an nginx to
         # reload in the meantime.
         resolved_swag_url = swag_url or (urlparse(instance.public_url).hostname or instance.name)

@@ -5,9 +5,8 @@ the CLI; every step after that — creating an instance, starting or stopping it
 putting a reverse proxy and TLS in front of it, backing it up — is a `job-squire` subcommand. See
 [`Setup-Guide.md`](Setup-Guide.md) for the guided, narrative walkthrough aimed at a first-time,
 non-technical operator. This doc is the operator's reference runbook: every lifecycle command,
-what it does, and the network-mode/proxy mechanics behind it. The full design rationale lives in
-[`PLAN-deployment-modes.md`](PLAN-deployment-modes.md); the exact command grammar and internals are
-in [`job-squire-cli.md`](job-squire-cli.md).
+what it does, and the network-mode/proxy mechanics behind it. The exact command grammar and
+internals are in [`job-squire-cli.md`](job-squire-cli.md).
 
 ---
 
@@ -106,6 +105,11 @@ rollback swaps current and previous again, so rolling back twice returns to wher
 Network mode always sits behind an external TLS-terminating reverse proxy; the app itself never
 terminates TLS. The CLI can provision one for you.
 
+`job-squire create --mode network` now offers this automatically right after the instance comes
+up — detecting an existing proxy and asking to configure it, or offering to install SWAG if
+nothing was found. Decline the prompt (or pass `--skip-proxy-setup` to `create`) and it's a normal
+follow-up step, run any time with the standalone command:
+
 ```bash
 job-squire proxy NAME                       # detect an existing proxy, or offer to install SWAG
 job-squire proxy NAME --no-install          # fail instead of installing SWAG if none is detected
@@ -118,6 +122,14 @@ instance to the proxy's Docker network, and reloads it — no second proxy is ev
 nothing is running, it installs and brings up a LinuxServer SWAG container (bundling nginx, certbot,
 and fail2ban) and configures it the same way. Either way the proxy stays a separate, independently
 maintained component — nothing here is baked into the Job Squire image.
+
+`job-squire remove` mirrors this on the way out: for a network-mode instance it offers to delete
+that instance's own confs from whatever proxy is running and reload it. If that proxy turns out to
+be the CLI's own installed SWAG (never a third-party proxy you already had running) and no other
+instance is using it anymore, it offers a second step — removing SWAG entirely, DNS/TLS
+configuration included, since that's where it actually lives (see below). `--skip-proxy-cleanup`
+skips both offers. `job-squire uninstall` offers the same thing once for the whole batch of
+network-mode instances it's removing, rather than asking per instance.
 
 ### DNS and TLS
 
@@ -163,9 +175,17 @@ job-squire tailscale disable NAME    # back to loopback-only
 ```
 
 This is Serve, never Funnel — the app stays bound to loopback and nothing is published to the
-public internet. See [`PLAN-deployment-modes.md`](PLAN-deployment-modes.md) Section 5 for why this
-is safe and what it changes under the hood (briefly: it's local mode with a private front door, not
-a separate mode).
+public internet; Serve just adds a private, TLS-terminating front door in front of it, reachable
+only from devices on the operator's own tailnet. Under the hood it's local mode with that private
+front door, not a separate mode: enabling it flips secure cookies and proxy trust on for the
+Serve-fronted session, the same way a network-mode instance would have them, without ever
+publishing anything beyond the tailnet.
+
+`enable` handles the Tailscale client itself, too: if it's not installed on this machine, it'll ask
+before installing it; if it's installed but this device isn't logged into a tailnet, it'll ask
+before running `tailscale up`. `remove`/`uninstall` mirror that on the way out — if job-squire is
+the one who installed the client and nothing else on the machine still needs it, they'll ask before
+removing it entirely, alongside turning off Serve for the instance being removed.
 
 ---
 
@@ -183,7 +203,7 @@ job-squire configure NAME --show
 ```
 
 The token is refused for a network-reachable instance unless `--allow-network` is passed
-explicitly — it's never enabled implicitly. See [`job-squire-cli.md`](job-squire-cli.md#mcp-authentication-prompt-c6)
+explicitly — it's never enabled implicitly. See [`job-squire-cli.md`](job-squire-cli.md#mcp-authentication)
 for the full mechanics.
 
 ---

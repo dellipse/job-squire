@@ -127,13 +127,16 @@ instance on a server behind a domain name and HTTPS instead:
 
 ```bash
 job-squire create --mode network --hostname squire.yourdomain.com
-job-squire proxy squire                # detects an existing proxy, or installs SWAG
 job-squire dns duckdns squire --subdomain squire --token <your-duckdns-token>
 ```
 
-SWAG (bundled nginx + certbot + fail2ban) terminates TLS and issues Let's Encrypt certificates
-automatically. See [`docs/deployment.md`](docs/deployment.md#network-mode-the-reverse-proxy) for
-the complete runbook, including using a domain you already have on Cloudflare instead of DuckDNS.
+`create` asks right after the instance comes up whether to configure a reverse proxy — detecting
+one you already run, or offering to install SWAG (bundled nginx + certbot + fail2ban) if you don't
+have one. Say yes and that step is done; if you say no (or pass `--skip-proxy-setup`), run it later
+with `job-squire proxy squire`. Either way, `dns duckdns` above still issues the real Let's Encrypt
+certificate once you have a domain pointed here. See
+[`docs/deployment.md`](docs/deployment.md#network-mode-the-reverse-proxy) for the complete runbook,
+including using a domain you already have on Cloudflare instead of DuckDNS.
 
 To run more than one instance on the same host (e.g. one per job seeker), see [`docs/multi-instance.md`](docs/multi-instance.md).
 
