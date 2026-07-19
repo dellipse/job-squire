@@ -8,6 +8,32 @@ footer as `<VERSION>-<build-sha>`.
 
 ## [Unreleased]
 
+## [0.7.24] - 2026-07-19
+
+### Added
+
+- The Getting Started walkthrough now ends with an "Email notifications" step: a low-friction path
+  to configure the search digests, follow-up reminders, and weekly review emails that used to
+  require finding Settings → Email unassisted. It recommends SMTP2GO (free forever, no credit
+  card, single-sender email verification with no DNS records needed, and the best deliverability
+  of any free tier we evaluated) as the primary path, with a Gmail app-password fallback for
+  anyone who'd rather not sign up elsewhere. Both link straight to the provider's setup page; the
+  actual host/port/username/password fields are the same ones already in Settings → Email, saved
+  through the same `settings_smtp` route (no new storage, no new integration). A "Continue without
+  email notifications" option marks the step done without configuring anything, mirroring the AI
+  step's "Continue without AI" -- an explicit opt-out that stops the checklist nagging, distinct
+  from the generic "Skip for now" that leaves it flagged as still needing attention.
+
+### Fixed
+
+- `POST /settings/smtp` and `POST /settings/test-email` now honor a relative `next` form field via
+  the same `_safe_next()` guard `/settings/search` already uses, instead of always bouncing back
+  to the standalone Settings page -- what let the new Getting Started step reuse both routes
+  directly and land back on itself, rather than needing its own copies of the save/test logic.
+- Settings → Email's copy no longer recommends SendGrid, which ended its free tier in July 2025;
+  it now leads with SMTP2GO and links to the new Getting Started walkthrough for anyone who wants
+  a guided setup.
+
 ## [0.7.23] - 2026-07-19
 
 ### Added
