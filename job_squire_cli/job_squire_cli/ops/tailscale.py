@@ -111,13 +111,42 @@ class TailscaleError(RuntimeError):
 # ── State manifest ───────────────────────────────────────────────────────
 
 
+# Progress stages for `enable_tailscale_serve`, persisted incrementally so a
+# failure partway through leaves a record of exactly how far it got, instead
+# of the operator having to guess at host state after a failed run -- the
+# 2026-07-19 incident that prompted this (a flapping Tailscale daemon right
+# after a fresh install left `enable` failing at different points on
+# successive retries, with `disable` refusing to touch anything because
+# `enabled` was never set to True). `disable_tailscale_serve` unwinds from
+# any stage other than STAGE_NONE, not just STAGE_DONE, and re-running
+# `enable` resumes rather than starting over blind -- every step it takes is
+# naturally idempotent (`tailscale serve` re-issuing the same mapping,
+# `dotenv.set_line` overwriting the same key, `--force-recreate` on a
+# container already running the right env), so "resume" is just calling the
+# same function again.
+STAGE_NONE = "none"
+STAGE_PORTS_ON = "ports_on"
+STAGE_ENV_SET = "env_set"
+STAGE_RECREATED = "recreated"
+STAGE_DONE = "done"
+
+STAGE_DESCRIPTIONS = {
+    STAGE_PORTS_ON: "Tailscale Serve ports are on, but the instance's env vars haven't been updated yet.",
+    STAGE_ENV_SET: "Env vars are set for Tailscale, but the container hasn't been recreated yet.",
+    STAGE_RECREATED: "The container was recreated, but the registry/state weren't finalized.",
+}
+
+
 @dataclass(frozen=True)
 class TailscaleState:
     enabled: bool
+    stage: str = STAGE_NONE
     hostname: str | None = None
     web_port: int | None = None
     mcp_port: int | None = None
     enabled_at: str | None = None
+    last_error: str | None = None
+    last_attempt_at: str | None = None
 
 
 def state_path(root: Path) -> Path:
@@ -132,22 +161,35 @@ def read_state(root: Path) -> TailscaleState:
         data = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError) as exc:
         raise TailscaleError(f"Cannot read {path}: {exc}") from exc
+    enabled = bool(data.get("enabled"))
+    # Older tailscale.json files (written before `stage` existed) only ever
+    # recorded the all-or-nothing `enabled` flag -- derive the equivalent
+    # endpoint of the new stage sequence from it, so status/disable logic
+    # written against `stage` still behaves correctly for a state file
+    # written by an older job-squire-cli version.
+    stage = data.get("stage") or (STAGE_DONE if enabled else STAGE_NONE)
     return TailscaleState(
-        enabled=bool(data.get("enabled")),
+        enabled=enabled,
+        stage=stage,
         hostname=data.get("hostname"),
         web_port=data.get("web_port"),
         mcp_port=data.get("mcp_port"),
         enabled_at=data.get("enabled_at"),
+        last_error=data.get("last_error"),
+        last_attempt_at=data.get("last_attempt_at"),
     )
 
 
 def _write_state(root: Path, state: TailscaleState) -> None:
     state_path(root).write_text(json.dumps({
         "enabled": state.enabled,
+        "stage": state.stage,
         "hostname": state.hostname,
         "web_port": state.web_port,
         "mcp_port": state.mcp_port,
         "enabled_at": state.enabled_at,
+        "last_error": state.last_error,
+        "last_attempt_at": state.last_attempt_at,
     }, indent=2) + "\n")
 
 
@@ -193,6 +235,141 @@ def device_dns_name(*, run: Runner = subprocess.run) -> str:
             "your tailnet (in the Tailscale admin console, under DNS) and this device is logged in."
         )
     return dns_name
+
+
+@dataclass(frozen=True)
+class ClientHealth:
+    """Point-in-time read of every layer `enable_serve_port` actually
+    depends on, gathered independently of any one instance's own
+    `tailscale.json` -- that file only ever records whether *job-squire*
+    last turned Serve on for one instance; it says nothing about whether
+    the client itself is installed, logged in, stable, or even capable of
+    issuing a certificate. Exists because of a `tailscale enable` failure
+    sequence (2026-07-19) where each retry only offered the last CLI
+    error, with real host state (daemon flapping post-install, a pending
+    macOS system-extension approval) invisible short of opening
+    Tailscale.app and guessing. `job-squire tailscale status` (no NAME)
+    surfaces this directly."""
+    installed: bool
+    daemon_reachable: bool
+    backend_state: str | None
+    self_online: bool | None
+    dns_name: str | None
+    magicdns_enabled: bool | None
+    https_certs_enabled: bool | None
+    operator_ok: bool | None
+    detail: str | None
+    checked_at: str
+
+
+_EXTENSION_HINT = (
+    "On macOS: confirm Tailscale.app shows Connected in its menu bar, and check System Settings -> "
+    "Privacy & Security for a pending system-extension approval for Tailscale (a fresh install often "
+    "needs a reboot after that's approved before the daemon stays up reliably)."
+)
+
+
+def check_client_health(*, run: Runner = subprocess.run, which: Which = shutil.which) -> ClientHealth:
+    checked_at = _utc_stamp()
+    if not is_tailscale_installed(which=which):
+        return ClientHealth(
+            installed=False, daemon_reachable=False, backend_state=None, self_online=None,
+            dns_name=None, magicdns_enabled=None, https_certs_enabled=None, operator_ok=None,
+            detail="Tailscale is not installed. Run `job-squire tailscale enable <name>` to install it.",
+            checked_at=checked_at,
+        )
+
+    argv = [TAILSCALE_BINARY, "status", "--json"]
+    try:
+        result = run(argv, capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return ClientHealth(
+            installed=True, daemon_reachable=False, backend_state=None, self_online=None,
+            dns_name=None, magicdns_enabled=None, https_certs_enabled=None, operator_ok=None,
+            detail=f"Could not reach the Tailscale daemon ({exc}). {_EXTENSION_HINT}",
+            checked_at=checked_at,
+        )
+
+    if result.returncode != 0:
+        stderr = (result.stderr or result.stdout).strip()
+        return ClientHealth(
+            installed=True, daemon_reachable=False, backend_state=None, self_online=None,
+            dns_name=None, magicdns_enabled=None, https_certs_enabled=None, operator_ok=None,
+            detail=f"`tailscale status` failed: {stderr}. {_EXTENSION_HINT}",
+            checked_at=checked_at,
+        )
+
+    try:
+        data = json.loads(result.stdout)
+    except (json.JSONDecodeError, TypeError) as exc:
+        return ClientHealth(
+            installed=True, daemon_reachable=False, backend_state=None, self_online=None,
+            dns_name=None, magicdns_enabled=None, https_certs_enabled=None, operator_ok=None,
+            detail=f"Could not parse `tailscale status --json` output: {exc}",
+            checked_at=checked_at,
+        )
+
+    backend_state = data.get("BackendState")
+    self_info = data.get("Self") or {}
+    self_online = self_info.get("Online")
+    dns_name = (self_info.get("DNSName") or "").rstrip(".") or None
+    tailnet = data.get("CurrentTailnet") or {}
+    magicdns_enabled = tailnet.get("MagicDNSEnabled")
+    # `CertDomains` is Tailscale's own signal for whether HTTPS Certificates
+    # is turned on for this tailnet -- an empty/absent list (on a client new
+    # enough to report the key at all) means `tailscale serve --https` has
+    # no certificate to issue and will not work until it's enabled in the
+    # admin console, regardless of how healthy everything else here is.
+    cert_domains = data.get("CertDomains")
+    https_certs_enabled = bool(cert_domains) if cert_domains is not None else None
+
+    operator_ok, operator_detail = _probe_serve_operator(run=run)
+
+    detail = None
+    if backend_state != "Running":
+        detail = (
+            f"Tailscale backend state is {backend_state!r}, not 'Running' -- `tailscale serve` will "
+            f"fail or hang until this device is logged in and connected (`tailscale up`)."
+        )
+    elif not dns_name:
+        detail = "No DNSName reported -- enable MagicDNS for your tailnet (admin console, under DNS)."
+    elif https_certs_enabled is False:
+        detail = (
+            "HTTPS Certificates are not enabled for your tailnet -- `tailscale serve --https` cannot "
+            "issue a certificate until this is turned on in the admin console "
+            "(https://login.tailscale.com/admin/dns, \"HTTPS Certificates\")."
+        )
+    elif operator_ok is False:
+        detail = operator_detail
+
+    return ClientHealth(
+        installed=True, daemon_reachable=True, backend_state=backend_state, self_online=self_online,
+        dns_name=dns_name, magicdns_enabled=magicdns_enabled, https_certs_enabled=https_certs_enabled,
+        operator_ok=operator_ok, detail=detail, checked_at=checked_at,
+    )
+
+
+def _probe_serve_operator(*, run: Runner = subprocess.run) -> tuple[bool | None, str | None]:
+    """Best-effort, read-only check of whether the current user can drive
+    `tailscale serve` without sudo. `tailscale serve status` only reports
+    current state -- it never turns anything on or off -- so it's safe to
+    run as part of a health check, unlike probing with
+    `enable_serve_port`/`disable_serve_port` just to test permissions."""
+    argv = [TAILSCALE_BINARY, "serve", "status"]
+    try:
+        result = run(argv, capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return None, None  # inconclusive -- don't block or mislabel on a probe timeout
+    if result.returncode == 0:
+        return True, None
+    stderr_low = (result.stderr or result.stdout or "").lower()
+    if "operator" in stderr_low or "permission" in stderr_low or "access denied" in stderr_low:
+        username = os.environ.get("USER", "<you>")
+        return False, (
+            f"This user isn't set as Tailscale operator, so `serve` needs sudo. Run: "
+            f"`sudo tailscale set --operator={username}`."
+        )
+    return None, None  # some other, non-permission error -- inconclusive, not worth guessing at
 
 
 # ── Installation, login, and uninstall ───────────────────────────────────
@@ -487,6 +664,60 @@ def ensure_tailscale_ready(
 # ── Driving `tailscale serve` ────────────────────────────────────────────
 
 
+def wait_for_stable_backend(
+    *, run: Runner = subprocess.run, which: Which = shutil.which, sleep: Sleep = time.sleep,
+    attempts: int = 3, interval: float = 2.0,
+) -> ClientHealth:
+    """Poll `check_client_health` `attempts` times before `enable_tailscale_
+    serve` ever touches `serve` itself, rather than trusting one earlier
+    successful `device_dns_name`/`tailscale up` call (possibly several CLI
+    invocations ago, per `ensure_tailscale_ready`) to still hold. Exists
+    because of an observed failure mode (2026-07-19): right after a fresh
+    install, or right after `tailscale up` completes, the daemon can report
+    itself healthy once and then drop the connection mid-request while it's
+    still settling -- exactly the gap that turned into a bare 30s timeout
+    with no actionable message. Requiring 'Running' on every one of
+    `attempts` tries, not just the last, is what catches "up but still
+    flapping" instead of "actually ready." Also fails fast here on HTTPS
+    Certificates being off or operator permission missing, rather than
+    letting `tailscale serve` hang or fail with a less legible error later.
+    """
+    last: ClientHealth | None = None
+    # The *first* unhealthy snapshot is what should drive the error message
+    # if stability fails -- not just whichever snapshot happens to be last.
+    # A daemon that's unreachable on attempt 2 but reports healthy again by
+    # attempt 3 (restarting mid-poll, exactly the 2026-07-19 shape) would
+    # otherwise have its real failure detail silently overwritten by the
+    # final, healthy-looking read.
+    first_failure: ClientHealth | None = None
+    all_ready = True
+    for attempt in range(attempts):
+        last = check_client_health(run=run, which=which)
+        if not (last.daemon_reachable and last.backend_state == "Running"):
+            all_ready = False
+            if first_failure is None:
+                first_failure = last
+        if attempt < attempts - 1:
+            sleep(interval)
+    assert last is not None
+
+    if not all_ready:
+        failure = first_failure or last
+        raise TailscaleError(
+            (failure.detail or f"Tailscale isn't in a stable, ready state (backend state: "
+                                f"{failure.backend_state!r}).") + " " + _EXTENSION_HINT
+        )
+    if last.https_certs_enabled is False:
+        raise TailscaleError(
+            "HTTPS Certificates are not enabled for your tailnet -- `tailscale serve --https` cannot "
+            "issue a certificate until this is turned on in the admin console "
+            "(https://login.tailscale.com/admin/dns, \"HTTPS Certificates\")."
+        )
+    if last.operator_ok is False:
+        raise TailscaleError(last.detail or "This user isn't set as Tailscale operator; `serve` needs sudo.")
+    return last
+
+
 def _check_port(port: int) -> None:
     if port not in ALLOWED_SERVE_PORTS:
         raise TailscaleError(
@@ -555,6 +786,17 @@ def enable_tailscale_serve(
     see the module docstring), recreate the container so the new env takes
     effect, update the registry's `public_url` so `status`/`list` reflect
     the tailnet address while enabled, and record the on state.
+
+    **Resumable, not all-or-nothing.** Every successful step writes its own
+    stage to `tailscale.json` (`STAGE_PORTS_ON` -> `STAGE_ENV_SET` ->
+    `STAGE_RECREATED` -> `STAGE_DONE`) before moving to the next; a failure
+    records `last_error`/`last_attempt_at` at whatever stage was reached and
+    re-raises with that stage, the underlying error, and what re-running
+    `enable` or `disable` will do from here -- rather than leaving the
+    operator to guess at host state after a failed run (the gap exposed by
+    the 2026-07-19 Tailscale-daemon-flapping incident). Every step here is
+    naturally idempotent, so "resume" is just calling this function again;
+    no separate resume code path exists.
     """
     if instance.mode != "local":
         raise TailscaleError(
@@ -569,45 +811,86 @@ def enable_tailscale_serve(
     _check_port(web_port)
     _check_port(mcp_port)
 
-    hostname = device_dns_name(run=run)
+    def _record(stage: str, hostname: str | None, *, enabled: bool = False,
+                enabled_at: str | None = None, error: BaseException | None = None) -> None:
+        _write_state(root, TailscaleState(
+            enabled=enabled, stage=stage, hostname=hostname, web_port=web_port, mcp_port=mcp_port,
+            enabled_at=enabled_at, last_error=(str(error) if error else None),
+            last_attempt_at=_utc_stamp(),
+        ))
+
+    health = wait_for_stable_backend(run=run, sleep=sleep)
+    hostname = health.dns_name
+    if not hostname:
+        exc = TailscaleError(
+            "Tailscale reported no DNSName for this device -- make sure MagicDNS is enabled for "
+            "your tailnet (in the Tailscale admin console, under DNS) and this device is logged in."
+        )
+        _record(STAGE_NONE, None, error=exc)
+        raise exc
+
     public_url = f"https://{hostname}" if web_port == 443 else f"https://{hostname}:{web_port}"
     public_mcp_host = hostname if mcp_port == 443 else f"{hostname}:{mcp_port}"
     public_mcp_url = f"https://{public_mcp_host}"
 
-    enable_serve_port(web_port, instance.app_port, run=run)
     try:
+        enable_serve_port(web_port, instance.app_port, run=run)
         enable_serve_port(mcp_port, instance.mcp_port, run=run)
-    except TailscaleError:
-        disable_serve_port(web_port, run=run)
-        raise
+    except TailscaleError as exc:
+        disable_serve_port(web_port, run=run)  # best-effort undo of whichever port did land
+        _record(STAGE_NONE, hostname, error=exc)
+        raise TailscaleError(
+            f"{exc} -- no Tailscale Serve ports were left on for {instance.name!r} (rolled back). "
+            f"Re-run `job-squire tailscale enable {instance.name}` once that's resolved."
+        ) from exc
+
+    _record(STAGE_PORTS_ON, hostname)
 
     env_path = paths.data_env_path(root)
-    dotenv.set_line(env_path, "TRUST_PROXY", "true")
-    dotenv.set_line(env_path, "SESSION_COOKIE_SECURE", "true")
-    dotenv.set_line(env_path, "PUBLIC_URL", public_url)
-    dotenv.set_line(env_path, "PUBLIC_MCP_URL", public_mcp_url)
-    dotenv.set_line(env_path, "PUBLIC_MCP_HOST", public_mcp_host)
+    try:
+        dotenv.set_line(env_path, "TRUST_PROXY", "true")
+        dotenv.set_line(env_path, "SESSION_COOKIE_SECURE", "true")
+        dotenv.set_line(env_path, "PUBLIC_URL", public_url)
+        dotenv.set_line(env_path, "PUBLIC_MCP_URL", public_mcp_url)
+        dotenv.set_line(env_path, "PUBLIC_MCP_HOST", public_mcp_host)
+    except OSError as exc:
+        _record(STAGE_PORTS_ON, hostname, error=exc)
+        raise TailscaleError(
+            f"Tailscale Serve ports ({web_port}/{mcp_port}) are on, but writing {instance.name!r}'s "
+            f"env vars failed: {exc}. Re-run `job-squire tailscale enable {instance.name}` to retry, "
+            f"or `job-squire tailscale disable {instance.name}` to undo the ports and go back to "
+            f"loopback-only."
+        ) from exc
+
+    _record(STAGE_ENV_SET, hostname)
 
     container_name = derive_compose_project(instance.name)
     up_result = compose.compose_up(
         instance.runtime, root, container_name, run=run, extra_args=["--force-recreate"],
     )
     if up_result.returncode != 0:
-        raise TailscaleError(
-            f"Tailscale Serve is on, but recreating {instance.name!r} to pick up the new PUBLIC_URL/"
-            f"TRUST_PROXY failed: {(up_result.stderr or up_result.stdout).strip()}"
+        exc = TailscaleError(
+            f"Tailscale Serve is on ({web_port}/{mcp_port}) and {instance.name!r}'s env vars are set, "
+            f"but recreating the container to pick up PUBLIC_URL/TRUST_PROXY failed: "
+            f"{(up_result.stderr or up_result.stdout).strip()}"
         )
-    health = lifecycle.wait_for_state(instance.runtime, container_name, run=run, sleep=sleep)
+        _record(STAGE_ENV_SET, hostname, error=exc)
+        raise TailscaleError(
+            f"{exc} Re-run `job-squire tailscale enable {instance.name}` to retry just the recreate "
+            f"step, or `job-squire tailscale disable {instance.name}` to undo everything and go back "
+            f"to loopback-only."
+        ) from exc
+
+    _record(STAGE_RECREATED, hostname)
+
+    health_result = lifecycle.wait_for_state(instance.runtime, container_name, run=run, sleep=sleep)
 
     update_instance(instance.name, public_url=public_url)
-    _write_state(root, TailscaleState(
-        enabled=True, hostname=hostname, web_port=web_port, mcp_port=mcp_port,
-        enabled_at=_utc_stamp(),
-    ))
+    _record(STAGE_DONE, hostname, enabled=True, enabled_at=_utc_stamp())
 
     return TailscaleEnableResult(
         hostname=hostname, web_port=web_port, mcp_port=mcp_port,
-        public_url=public_url, public_mcp_url=public_mcp_url, health=health,
+        public_url=public_url, public_mcp_url=public_mcp_url, health=health_result,
         expected_warning=(
             "The app's own startup guard will show a WARNING banner about PUBLIC_URL not being a "
             "loopback address while DEPLOY_MODE stays 'local' -- expected here (Tailscale Serve is "
@@ -631,9 +914,18 @@ def disable_tailscale_serve(
     written (loopback PUBLIC_URL/PUBLIC_MCP_URL/PUBLIC_MCP_HOST, TRUST_
     PROXY/SESSION_COOKIE_SECURE off), recreate the container, restore the
     registry's `public_url`, and clear the state manifest.
+
+    Works from any partial stage `enable_tailscale_serve` may have left
+    behind (`STAGE_PORTS_ON`/`STAGE_ENV_SET`/`STAGE_RECREATED`), not just a
+    fully completed `STAGE_DONE` -- a failed `enable` used to leave
+    `enabled=False` with no way for `disable` to reach in and turn off
+    whatever *did* land. Every step below is unconditional and idempotent
+    regardless of which stage was reached: turning off a port that was
+    never on, or recreating a container whose env vars were never changed,
+    are both harmless no-ops.
     """
     state = read_state(root)
-    if not state.enabled:
+    if state.stage == STAGE_NONE:
         raise TailscaleError(f"Instance {instance.name!r} does not have Tailscale Serve enabled.")
 
     if state.web_port is not None:

@@ -461,8 +461,8 @@ def test_remove_yes_flag_answers_both_proxy_prompts_without_stdin(runner, monkey
 
 def _enabled_tailscale_state(web_port=443, mcp_port=8443):
     return tailscale_ops.TailscaleState(
-        enabled=True, hostname="my-device.tailnet.ts.net", web_port=web_port, mcp_port=mcp_port,
-        enabled_at="2026-07-17T00:00:00Z",
+        enabled=True, stage=tailscale_ops.STAGE_DONE, hostname="my-device.tailnet.ts.net",
+        web_port=web_port, mcp_port=mcp_port, enabled_at="2026-07-17T00:00:00Z",
     )
 
 
@@ -2362,8 +2362,55 @@ def test_tailscale_disable_yes_flag_skips_confirmation_prompt(runner, monkeypatc
     assert removed == [True]
 
 
-def test_tailscale_status_not_enabled(runner, tmp_path):
+def _fake_client_health(**overrides):
+    """`tailscale status` (the CLI command) always calls
+    `check_client_health()` with no injection point, unlike every other
+    ops/tailscale.py entry point these tests exercise -- pinning it here
+    keeps these tests from making a real `tailscale` subprocess call if the
+    machine running them happens to have the client installed."""
+    defaults = dict(
+        installed=False, daemon_reachable=False, backend_state=None, self_online=None,
+        dns_name=None, magicdns_enabled=None, https_certs_enabled=None, operator_ok=None,
+        detail=None, checked_at="2026-07-19T00:00:00Z",
+    )
+    defaults.update(overrides)
+    return tailscale_ops.ClientHealth(**defaults)
+
+
+def test_tailscale_status_no_name_prints_client_health_only(runner, monkeypatch):
+    monkeypatch.setattr(
+        tailscale_ops, "check_client_health",
+        lambda: _fake_client_health(
+            installed=True, daemon_reachable=True, backend_state="Running", self_online=True,
+            dns_name="macminim4.tailnet.ts.net", magicdns_enabled=True, https_certs_enabled=True,
+            operator_ok=True,
+        ),
+    )
+    result = runner.invoke(main, ["tailscale", "status"])
+    assert result.exit_code == 0, result.output
+    assert "Backend state: Running" in result.output
+    assert "HTTPS Certificates enabled: True" in result.output
+    # No instance NAME given -- nothing per-instance should print.
+    assert "enabled for" not in result.output
+
+
+def test_tailscale_status_client_unhealthy_shows_note(runner, monkeypatch):
+    monkeypatch.setattr(
+        tailscale_ops, "check_client_health",
+        lambda: _fake_client_health(
+            installed=True, daemon_reachable=False,
+            detail="Could not reach the Tailscale daemon (lost connection to tailscaled: unexpected EOF).",
+        ),
+    )
+    result = runner.invoke(main, ["tailscale", "status"])
+    assert result.exit_code == 0
+    assert "Daemon reachable: no" in result.output
+    assert "lost connection to tailscaled" in result.output
+
+
+def test_tailscale_status_not_enabled(runner, monkeypatch, tmp_path):
     _register_local_instance(tmp_path)
+    monkeypatch.setattr(tailscale_ops, "check_client_health", lambda: _fake_client_health())
     result = runner.invoke(main, ["tailscale", "status", "castelo"])
     assert result.exit_code == 0
     assert "is not enabled" in result.output
@@ -2371,14 +2418,64 @@ def test_tailscale_status_not_enabled(runner, tmp_path):
 
 def test_tailscale_status_enabled(runner, monkeypatch, tmp_path):
     _register_local_instance(tmp_path)
+    monkeypatch.setattr(tailscale_ops, "check_client_health", lambda: _fake_client_health())
     monkeypatch.setattr(
         tailscale_ops, "read_state",
         lambda root: tailscale_ops.TailscaleState(
-            enabled=True, hostname="castelo.tail1234.ts.net", web_port=443, mcp_port=8443,
-            enabled_at="2026-07-11T12:00:00Z",
+            enabled=True, stage=tailscale_ops.STAGE_DONE, hostname="castelo.tail1234.ts.net",
+            web_port=443, mcp_port=8443, enabled_at="2026-07-11T12:00:00Z",
         ),
     )
     result = runner.invoke(main, ["tailscale", "status", "castelo"])
     assert result.exit_code == 0
     assert "enabled for 'castelo'" in result.output
     assert "castelo.tail1234.ts.net" in result.output
+
+
+def test_tailscale_status_incomplete_stage_shows_resume_guidance(runner, monkeypatch, tmp_path):
+    _register_local_instance(tmp_path)
+    monkeypatch.setattr(tailscale_ops, "check_client_health", lambda: _fake_client_health())
+    monkeypatch.setattr(
+        tailscale_ops, "read_state",
+        lambda root: tailscale_ops.TailscaleState(
+            enabled=False, stage=tailscale_ops.STAGE_ENV_SET, hostname="castelo.tail1234.ts.net",
+            web_port=443, mcp_port=8443, last_error="compose up failed: boom",
+            last_attempt_at="2026-07-19T15:10:00Z",
+        ),
+    )
+    result = runner.invoke(main, ["tailscale", "status", "castelo"])
+    assert result.exit_code == 0
+    assert "INCOMPLETE (stage: env_set)" in result.output
+    assert "compose up failed: boom" in result.output
+    assert "job-squire tailscale enable castelo" in result.output
+    assert "job-squire tailscale disable castelo" in result.output
+
+
+def test_tailscale_enable_resuming_incomplete_setup_prints_notice(runner, monkeypatch, tmp_path):
+    _register_local_instance(tmp_path)
+    monkeypatch.setattr(
+        tailscale_ops, "read_state",
+        lambda root: tailscale_ops.TailscaleState(
+            enabled=False, stage=tailscale_ops.STAGE_PORTS_ON, hostname="castelo.tail1234.ts.net",
+            web_port=443, mcp_port=8443, last_error="daemon lost connection",
+            last_attempt_at="2026-07-19T15:07:47Z",
+        ),
+    )
+    monkeypatch.setattr(
+        tailscale_ops, "ensure_tailscale_ready",
+        lambda **kwargs: tailscale_ops.TailscaleReadiness(installed_by_cli=False, hostname="castelo.tail1234.ts.net"),
+    )
+
+    def fake_enable(instance, *, root, web_port, mcp_port):
+        return tailscale_ops.TailscaleEnableResult(
+            hostname="castelo.tail1234.ts.net", web_port=web_port, mcp_port=mcp_port,
+            public_url="https://castelo.tail1234.ts.net", public_mcp_url="https://castelo.tail1234.ts.net:8443",
+            health=None, expected_warning="",
+        )
+    monkeypatch.setattr(tailscale_ops, "enable_tailscale_serve", fake_enable)
+
+    result = runner.invoke(main, ["tailscale", "enable", "castelo"])
+    assert result.exit_code == 0, result.output
+    assert "Resuming a previously incomplete Tailscale Serve setup" in result.output
+    assert "stage: ports_on" in result.output
+    assert "daemon lost connection" in result.output

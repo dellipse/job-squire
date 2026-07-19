@@ -280,3 +280,156 @@ def test_ensure_tailscale_ready_declines_login_raises(tmp_config_dir):
 
     with pytest.raises(ts.TailscaleError, match="logged into a tailnet"):
         ts.ensure_tailscale_ready(confirm=lambda _: False, run=run, which=which)
+
+
+# ── check_client_health ──────────────────────────────────────────────────
+# Exists to give an operator (via `job-squire tailscale status`, no NAME
+# required) a direct read of every layer `enable_serve_port` depends on --
+# see ops/tailscale.py's own docstring on the 2026-07-19 incident that
+# prompted it: a failed `enable` offered only the last CLI error, with no
+# way to see whether the daemon itself was even reachable.
+
+
+def _full_status_json(*, backend_state="Running", online=True, dns_name="castelo.tail1234.ts.net.",
+                       magicdns=True, cert_domains=("castelo.tail1234.ts.net",)):
+    return json.dumps({
+        "BackendState": backend_state,
+        "Self": {"Online": online, "DNSName": dns_name},
+        "CurrentTailnet": {"MagicDNSEnabled": magicdns},
+        "CertDomains": list(cert_domains) if cert_domains is not None else None,
+    })
+
+
+def test_check_client_health_not_installed():
+    health = ts.check_client_health(which=which_map({}))
+    assert health.installed is False
+    assert health.daemon_reachable is False
+    assert "not installed" in health.detail
+
+
+def test_check_client_health_daemon_unreachable_reports_detail_and_hint():
+    def boom(*args, **kwargs):
+        raise OSError("lost connection to tailscaled: unexpected EOF")
+
+    health = ts.check_client_health(run=boom, which=which_map({"tailscale": "/usr/bin/tailscale"}))
+    assert health.installed is True
+    assert health.daemon_reachable is False
+    assert "lost connection to tailscaled" in health.detail
+    assert "System Settings" in health.detail
+
+
+def test_check_client_health_happy_path_reports_every_field():
+    run = (
+        FakeRun()
+        .on(("tailscale", "status", "--json"), stdout=_full_status_json())
+        .on(("tailscale", "serve", "status"), returncode=0)
+    )
+    health = ts.check_client_health(run=run, which=which_map({"tailscale": "/usr/bin/tailscale"}))
+    assert health.installed is True
+    assert health.daemon_reachable is True
+    assert health.backend_state == "Running"
+    assert health.self_online is True
+    assert health.dns_name == "castelo.tail1234.ts.net"
+    assert health.magicdns_enabled is True
+    assert health.https_certs_enabled is True
+    assert health.operator_ok is True
+    assert health.detail is None
+
+
+def test_check_client_health_flags_https_certs_disabled():
+    run = (
+        FakeRun()
+        .on(("tailscale", "status", "--json"), stdout=_full_status_json(cert_domains=()))
+        .on(("tailscale", "serve", "status"), returncode=0)
+    )
+    health = ts.check_client_health(run=run, which=which_map({"tailscale": "/usr/bin/tailscale"}))
+    assert health.https_certs_enabled is False
+    assert "HTTPS Certificates are not enabled" in health.detail
+
+
+def test_check_client_health_flags_operator_permission_missing():
+    run = (
+        FakeRun()
+        .on(("tailscale", "status", "--json"), stdout=_full_status_json())
+        .on(("tailscale", "serve", "status"), returncode=1, stderr="access denied: not an operator")
+    )
+    health = ts.check_client_health(run=run, which=which_map({"tailscale": "/usr/bin/tailscale"}))
+    assert health.operator_ok is False
+    assert "operator" in health.detail.lower()
+
+
+def test_check_client_health_not_running_reports_backend_state_in_detail():
+    run = (
+        FakeRun()
+        .on(("tailscale", "status", "--json"), stdout=_full_status_json(backend_state="Stopped"))
+        .on(("tailscale", "serve", "status"), returncode=0)
+    )
+    health = ts.check_client_health(run=run, which=which_map({"tailscale": "/usr/bin/tailscale"}))
+    assert health.backend_state == "Stopped"
+    assert "'Stopped'" in health.detail
+
+
+# ── wait_for_stable_backend ───────────────────────────────────────────────
+
+
+def test_wait_for_stable_backend_returns_health_when_stable_and_ready():
+    run = (
+        FakeRun()
+        .on(("tailscale", "status", "--json"), stdout=_full_status_json())
+        .on(("tailscale", "serve", "status"), returncode=0)
+    )
+    sleeps = []
+    health = ts.wait_for_stable_backend(
+        run=run, which=which_map({"tailscale": "/usr/bin/tailscale"}), sleep=sleeps.append,
+        attempts=3, interval=1.0,
+    )
+    assert health.backend_state == "Running"
+    assert sleeps == [1.0, 1.0]  # slept between attempts, not after the last
+
+
+def test_wait_for_stable_backend_raises_when_backend_flaps():
+    """The exact 2026-07-19 shape: reachable and 'Running' on some polls,
+    unreachable on others -- requiring every one of `attempts` tries to be
+    healthy is what catches this instead of just the last one."""
+    calls = {"n": 0}
+
+    def dispatch(args, **kwargs):
+        args = tuple(args)
+        if args == ("tailscale", "status", "--json"):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise OSError("lost connection to tailscaled: unexpected EOF")
+            return SimpleNamespace(returncode=0, stdout=_full_status_json(), stderr="")
+        if args == ("tailscale", "serve", "status"):
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        raise AssertionError(f"unexpected call: {args}")
+
+    with pytest.raises(ts.TailscaleError, match="lost connection to tailscaled"):
+        ts.wait_for_stable_backend(
+            run=dispatch, sleep=lambda _s: None,
+            which=which_map({"tailscale": "/usr/bin/tailscale"}),
+        )
+
+
+def test_wait_for_stable_backend_raises_when_https_certs_disabled():
+    run = (
+        FakeRun()
+        .on(("tailscale", "status", "--json"), stdout=_full_status_json(cert_domains=()))
+        .on(("tailscale", "serve", "status"), returncode=0)
+    )
+    with pytest.raises(ts.TailscaleError, match="HTTPS Certificates are not enabled"):
+        ts.wait_for_stable_backend(
+            run=run, which=which_map({"tailscale": "/usr/bin/tailscale"}), sleep=lambda _s: None,
+        )
+
+
+def test_wait_for_stable_backend_raises_when_operator_permission_missing():
+    run = (
+        FakeRun()
+        .on(("tailscale", "status", "--json"), stdout=_full_status_json())
+        .on(("tailscale", "serve", "status"), returncode=1, stderr="access denied: not an operator")
+    )
+    with pytest.raises(ts.TailscaleError, match="operator"):
+        ts.wait_for_stable_backend(
+            run=run, which=which_map({"tailscale": "/usr/bin/tailscale"}), sleep=lambda _s: None,
+        )

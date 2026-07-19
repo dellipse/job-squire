@@ -501,7 +501,8 @@ def remove(name, keep_data, remove_image, skip_proxy_cleanup, skip_tailscale_cle
     confirm = (lambda _msg: True) if assume_yes else click.confirm
     if instance.mode == "network" and not skip_proxy_cleanup:
         _offer_proxy_removal(instance, confirm=confirm)
-    if instance.mode == "local" and not skip_tailscale_cleanup and tailscale_state is not None and tailscale_state.enabled:
+    if (instance.mode == "local" and not skip_tailscale_cleanup and tailscale_state is not None
+            and tailscale_state.stage != tailscale_ops.STAGE_NONE):
         _offer_tailscale_removal(instance, tailscale_state, confirm=confirm)
 
 
@@ -598,7 +599,7 @@ def _any_other_instance_has_tailscale_enabled() -> bool:
     function's docstring for why."""
     for inst in list_instances():
         try:
-            if tailscale_ops.read_state(Path(inst.data_dir)).enabled:
+            if tailscale_ops.read_state(Path(inst.data_dir)).stage != tailscale_ops.STAGE_NONE:
                 return True
         except tailscale_ops.TailscaleError:
             continue
@@ -757,7 +758,7 @@ def uninstall(keep_data, remove_runtime, remove_image, assume_yes, skip_proxy_cl
                 state = tailscale_ops.read_state(Path(inst.data_dir))
             except tailscale_ops.TailscaleError:
                 continue
-            if state.enabled:
+            if state.stage != tailscale_ops.STAGE_NONE:
                 tailscale_states.append((inst, state))
 
     # This is the one prompt --yes can't skip past silently: it gates the
@@ -1521,6 +1522,24 @@ def tailscale_enable_cmd(name, web_port, mcp_port, assume_yes):
             f"install, not a substitute for network mode's own reverse proxy)."
         )
 
+    # A previous `enable` may have failed partway through -- tell the
+    # operator up front that this is a resume, not a fresh run, rather than
+    # letting it look like nothing happened until the final result line.
+    try:
+        existing_state = tailscale_ops.read_state(root)
+    except tailscale_ops.TailscaleError:
+        existing_state = None
+    if existing_state is not None and existing_state.stage not in (
+        tailscale_ops.STAGE_NONE, tailscale_ops.STAGE_DONE,
+    ):
+        click.echo(
+            f"Resuming a previously incomplete Tailscale Serve setup for {instance.name!r} "
+            f"(stage: {existing_state.stage} -- "
+            f"{tailscale_ops.STAGE_DESCRIPTIONS.get(existing_state.stage, '')})"
+        )
+        if existing_state.last_error:
+            click.echo(f"  Last failure ({existing_state.last_attempt_at}): {existing_state.last_error}")
+
     confirm = (lambda _msg: True) if assume_yes else click.confirm
     try:
         tailscale_ops.ensure_tailscale_ready(confirm=confirm)
@@ -1579,9 +1598,33 @@ def tailscale_disable_cmd(name, skip_client_cleanup, assume_yes):
         _offer_tailscale_client_removal_if_unused(confirm=confirm)
 
 
-@tailscale_group.command(name="status", help="Show whether Tailscale Serve is enabled for an instance.")
-@click.argument("name")
+def _print_client_health(health: tailscale_ops.ClientHealth) -> None:
+    click.echo("Tailscale client:")
+    click.echo(f"  Installed: {'yes' if health.installed else 'no'}")
+    if health.installed:
+        click.echo(f"  Daemon reachable: {'yes' if health.daemon_reachable else 'no'}")
+        if health.daemon_reachable:
+            click.echo(f"  Backend state: {health.backend_state}")
+            click.echo(f"  Online: {health.self_online}")
+            click.echo(f"  DNS name: {health.dns_name or '(none)'}")
+            click.echo(f"  MagicDNS enabled: {health.magicdns_enabled}")
+            certs = health.https_certs_enabled
+            click.echo(f"  HTTPS Certificates enabled: {certs if certs is not None else 'unknown (older tailscale client?)'}")
+            op = health.operator_ok
+            click.echo(f"  Operator permission ok: {op if op is not None else 'unknown'}")
+    if health.detail:
+        click.echo(f"  Note: {health.detail}")
+
+
+@tailscale_group.command(name="status", help="Show Tailscale client health, and Serve status/progress "
+                                              "for an instance if NAME is given.")
+@click.argument("name", required=False)
 def tailscale_status_cmd(name):
+    _print_client_health(tailscale_ops.check_client_health())
+
+    if not name:
+        return
+
     instance = _require_instance(name)
     root = Path(instance.data_dir)
     try:
@@ -1589,9 +1632,28 @@ def tailscale_status_cmd(name):
     except tailscale_ops.TailscaleError as exc:
         _fail(str(exc))
 
-    if not state.enabled:
+    click.echo()
+    if state.stage == tailscale_ops.STAGE_NONE:
         click.echo(f"Tailscale Serve is not enabled for {instance.name!r}.")
         return
+
+    if state.stage != tailscale_ops.STAGE_DONE:
+        click.echo(f"Tailscale Serve setup for {instance.name!r} is INCOMPLETE (stage: {state.stage}).")
+        click.echo(f"  {tailscale_ops.STAGE_DESCRIPTIONS.get(state.stage, '')}")
+        if state.last_error:
+            click.echo(f"  Last failure ({state.last_attempt_at}): {state.last_error}")
+        click.echo(
+            f"  Re-run `job-squire tailscale enable {instance.name}` to continue, or "
+            f"`job-squire tailscale disable {instance.name}` to undo it and go back to loopback-only."
+        )
+        if state.hostname:
+            click.echo(f"  Hostname: {state.hostname}")
+        if state.web_port:
+            click.echo(f"  Web port: {state.web_port}")
+        if state.mcp_port:
+            click.echo(f"  MCP port: {state.mcp_port}")
+        return
+
     click.echo(f"Tailscale Serve is enabled for {instance.name!r} (since {state.enabled_at}).")
     click.echo(f"  Hostname: {state.hostname}")
     click.echo(f"  Web port: {state.web_port}")
