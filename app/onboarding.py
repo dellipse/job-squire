@@ -44,7 +44,11 @@ onboarding_bp = Blueprint("onboarding", __name__)
 
 # Ordered walkthrough steps. AI setup deliberately precedes the profile step:
 # the Phase 2 resume interview needs an AI provider (or the manual-mode
-# prompt), so users decide their AI posture first.
+# prompt), so users decide their AI posture first. Email notifications sits
+# right after AI setup, before profile/search/boards -- both are "how much
+# does this instance talk to the outside world" decisions, and grouping them
+# means the rest of the walkthrough (profile, search targets, job boards)
+# runs uninterrupted once they're settled.
 STEPS = [
     {"key": "persona",      "title": "Welcome",
      "blurb": "Tell Job Squire who this install is for."},
@@ -52,6 +56,8 @@ STEPS = [
      "blurb": "Optionally add a second sign-in."},
     {"key": "ai",           "title": "AI setup",
      "blurb": "Local, cloud, Claude — or no AI at all."},
+    {"key": "notifications", "title": "Email notifications",
+     "blurb": "Digests, follow-up reminders, and weekly reviews in your inbox."},
     {"key": "profile",      "title": "Resume & documents",
      "blurb": "Upload your resume, certifications, and letters."},
     {"key": "search",       "title": "Search targets",
@@ -60,8 +66,6 @@ STEPS = [
      "blurb": "Connect the boards that feed your searches."},
     {"key": "first_search", "title": "First search",
      "blurb": "Run it and see real results."},
-    {"key": "notifications", "title": "Email notifications",
-     "blurb": "Digests, follow-up reminders, and weekly reviews in your inbox."},
 ]
 STEP_KEYS = [s["key"] for s in STEPS]
 
@@ -589,19 +593,21 @@ def save_ai():
     else:
         state.set_step("ai", "answered")
         commit()
-    return redirect(url_for("onboarding.step", step="profile"))
+    return redirect(url_for("onboarding.step", step="notifications"))
 
 
 @onboarding_bp.route("/getting-started/notifications", methods=["POST"])
 @login_required
 @_admin_required
 def save_notifications():
-    """Explicit "no email" bypass for the last step, mirroring save_ai's
-    "no_ai" — a deliberate opt-out marks the step done and stops the
-    checklist nagging, unlike the generic Skip button which leaves it
-    flagged as still needing attention. The actual SMTP fields themselves
-    are saved by main.settings_smtp (posted to directly from the step
-    template with next= this page), not here."""
+    """Explicit "no email" bypass, mirroring save_ai's "no_ai" — a
+    deliberate opt-out marks the step done and stops the checklist
+    nagging, unlike the generic Skip button which leaves it flagged as
+    still needing attention. The actual SMTP fields themselves are saved
+    by main.settings_smtp (posted to directly from the step template with
+    next= this page), not here. Sits right after AI setup so the two
+    "how much does this instance talk to the outside world" decisions are
+    made back to back, before the profile/search/boards steps."""
     state = get_state()
     action = request.form.get("action", "")
     if action == "no_email":
@@ -613,7 +619,7 @@ def save_notifications():
     else:
         state.set_step("notifications", "answered")
         commit()
-    return redirect(url_for("onboarding.overview"))
+    return redirect(url_for("onboarding.step", step="profile"))
 
 
 @onboarding_bp.route("/getting-started/profile-links", methods=["POST"])
