@@ -291,9 +291,19 @@ ok "Pinned to commit ${sha}"
 # "externally managed environment" failures on distros that lock down the
 # system Python, and keeps the CLI's dependencies from ever colliding with
 # anything else on the machine. Safe to re-run: reuses the venv if present.
-if [ ! -x "$BIN_DIR/python" ]; then
+#
+# Checking only bin/python here isn't enough: `python3 -m venv` creates the
+# interpreter symlink before it bootstraps pip via ensurepip, so a run that
+# fails partway through the ensurepip step (e.g. ensurepip missing -- see
+# ensure_venv_module above) leaves a venv with a working python but no pip.
+# A later run would then see bin/python, skip both ensure_venv_module and
+# recreation, and fail on the "$BIN_DIR/pip" line below instead. Checking
+# for pip too, and wiping the directory before recreating, makes a botched
+# prior attempt self-heal on the next run rather than getting stuck.
+if [ ! -x "$BIN_DIR/python" ] || [ ! -x "$BIN_DIR/pip" ]; then
   ensure_venv_module
   info "Creating an isolated environment at ${VENV_DIR} ..."
+  rm -rf "$VENV_DIR"
   python3 -m venv "$VENV_DIR"
 fi
 "$BIN_DIR/pip" install --quiet --upgrade pip
