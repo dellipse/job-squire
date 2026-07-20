@@ -8,6 +8,25 @@ footer as `<VERSION>-<build-sha>`.
 
 ## [Unreleased]
 
+## [0.7.27] - 2026-07-19
+
+### Fixed
+
+- `enable_tailscale_serve`'s readiness check (added in 0.7.26) inferred whether a tailnet had HTTPS
+  Certificates turned on from whether `CertDomains` appeared in `tailscale status --json` --
+  confirmed against a real account today that this misses the case where HTTPS Certificates was
+  never enabled at all: `CertDomains` was simply absent from the JSON rather than an empty list,
+  which the check read as "unknown, proceed" instead of catching it, letting `enable` spend its
+  full `enable_serve_port` timeout only to fail with a bare, unexplained subprocess timeout.
+  `enable_tailscale_serve` now calls a new `provision_cert()` (a direct `tailscale cert <hostname>`
+  probe, on its own generous 90s timeout) before ever touching `serve`, surfacing Tailscale's own
+  real error text -- including the exact "your Tailscale account does not support getting TLS
+  certs" case -- with the fix spelled out (enable HTTPS Certificates at
+  https://login.tailscale.com/admin/dns) instead of an inferred guess. This also pre-warms the
+  certificate, since Tailscale provisions it lazily on first request and that can be slow; the
+  later `enable_serve_port` call now finds it already cached rather than racing a cold first
+  request inside its own tighter window.
+
 ## [0.7.26] - 2026-07-19
 
 ### Added
