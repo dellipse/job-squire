@@ -707,6 +707,15 @@ def wait_for_stable_backend(
             (failure.detail or f"Tailscale isn't in a stable, ready state (backend state: "
                                 f"{failure.backend_state!r}).") + " " + _EXTENSION_HINT
         )
+    # Best-effort fast path only -- `CertDomains` being explicitly empty is a
+    # real signal worth failing fast on, but its *absence* from the JSON
+    # (rather than an empty list) was observed in practice to mean the same
+    # thing without tripping this check (2026-07-19: a real account with
+    # HTTPS Certificates off reported no CertDomains key at all, so this
+    # stayed on the `None` branch below and let a doomed `enable` through).
+    # `provision_cert` (called from `enable_tailscale_serve` right after
+    # this) is the authoritative check that actually catches that case, by
+    # asking Tailscale directly instead of inferring from this field.
     if last.https_certs_enabled is False:
         raise TailscaleError(
             "HTTPS Certificates are not enabled for your tailnet -- `tailscale serve --https` cannot "
@@ -716,6 +725,52 @@ def wait_for_stable_backend(
     if last.operator_ok is False:
         raise TailscaleError(last.detail or "This user isn't set as Tailscale operator; `serve` needs sudo.")
     return last
+
+
+def provision_cert(hostname: str, *, run: Runner = subprocess.run, timeout: float = 90.0) -> None:
+    """Pre-provision this device's TLS certificate for `hostname` via a
+    direct `tailscale cert` call, before `enable_tailscale_serve` ever
+    calls `enable_serve_port`.
+
+    Replaces an earlier approach (`check_client_health`'s `https_certs_
+    enabled`, inferred from whether `CertDomains` appeared in `tailscale
+    status --json`) that proved unreliable in practice: on a real account
+    with HTTPS Certificates never turned on, `CertDomains` was simply
+    absent from the JSON rather than an empty list, which that inference
+    read as "unknown, proceed" instead of catching the problem -- `tailscale
+    cert` itself then failed with Tailscale's own `500 Internal Server
+    Error: your Tailscale account does not support getting TLS certs`
+    once `enable`'s 30s `enable_serve_port` timeout was already spent
+    getting there (2026-07-19). A direct probe here is the actual ground
+    truth `serve` depends on, gives back Tailscale's own real error text
+    instead of an inferred guess, and -- since certificates are
+    provisioned lazily on first request and provisioning takes real wall-
+    clock time (Tailscale's own docs/issue tracker) -- pre-warms the cert
+    on its own generous timeout so the later `enable_serve_port` call
+    finds it already cached instead of racing a cold first request inside
+    a tighter window.
+    """
+    argv = [TAILSCALE_BINARY, "cert", hostname]
+    try:
+        result = run(argv, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise TailscaleError(
+            f"Provisioning a TLS certificate for {hostname!r} did not finish within {timeout:.0f}s "
+            f"({exc}). First-time certificate issuance can be slow -- if this keeps happening, "
+            f"check that nothing on your network blocks outbound HTTPS to Let's Encrypt, and that "
+            f"you haven't hit a Let's Encrypt rate limit."
+        ) from exc
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()
+        raise TailscaleError(
+            f"`tailscale cert {hostname}` failed: {detail} -- if this says your account doesn't "
+            f"support getting TLS certs, HTTPS Certificates isn't turned on for your tailnet yet: "
+            f"open https://login.tailscale.com/admin/dns, enable MagicDNS if it isn't already on, "
+            f"then under \"HTTPS Certificates\" click Enable HTTPS and acknowledge the disclosure "
+            f"(your device names and tailnet DNS name become visible on a public Certificate "
+            f"Transparency ledger -- normal for any TLS cert, not Tailscale-specific). Then re-run "
+            f"`job-squire tailscale enable`."
+        )
 
 
 def _check_port(port: int) -> None:
@@ -832,6 +887,16 @@ def enable_tailscale_serve(
     public_url = f"https://{hostname}" if web_port == 443 else f"https://{hostname}:{web_port}"
     public_mcp_host = hostname if mcp_port == 443 else f"{hostname}:{mcp_port}"
     public_mcp_url = f"https://{public_mcp_host}"
+
+    # Pre-provision the TLS cert on its own generous timeout, before ever
+    # touching `serve` -- see provision_cert's own docstring for why this
+    # replaced an earlier CertDomains-based inference that missed a real
+    # "account doesn't support TLS certs" case (2026-07-19).
+    try:
+        provision_cert(hostname, run=run)
+    except TailscaleError as exc:
+        _record(STAGE_NONE, hostname, error=exc)
+        raise
 
     try:
         enable_serve_port(web_port, instance.app_port, run=run)

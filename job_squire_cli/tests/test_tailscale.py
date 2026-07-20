@@ -423,6 +423,41 @@ def test_wait_for_stable_backend_raises_when_https_certs_disabled():
         )
 
 
+# ── provision_cert ────────────────────────────────────────────────────────
+# Replaced an earlier CertDomains-presence heuristic that missed a real
+# 2026-07-19 case: an account with HTTPS Certificates never enabled, where
+# `tailscale status --json` simply omitted the CertDomains key rather than
+# returning an empty list, so the heuristic read it as "unknown, proceed."
+# `tailscale cert <hostname>` is the direct, authoritative probe instead.
+
+
+def test_provision_cert_succeeds_silently():
+    run = FakeRun().on(("tailscale", "cert", "castelo.tail1234.ts.net"), returncode=0)
+    ts.provision_cert("castelo.tail1234.ts.net", run=run)  # no raise
+
+
+def test_provision_cert_raises_with_actionable_message_when_account_lacks_https_certs():
+    run = FakeRun().on(
+        ("tailscale", "cert", "castelo.tail1234.ts.net"), returncode=1,
+        stderr="500 Internal Server Error: your Tailscale account does not support getting TLS certs",
+    )
+    with pytest.raises(ts.TailscaleError, match="does not support getting TLS certs"):
+        ts.provision_cert("castelo.tail1234.ts.net", run=run)
+    # The remediation (admin console URL) is included, not just the raw error.
+    try:
+        ts.provision_cert("castelo.tail1234.ts.net", run=run)
+    except ts.TailscaleError as exc:
+        assert "login.tailscale.com/admin/dns" in str(exc)
+
+
+def test_provision_cert_raises_on_timeout():
+    def boom(*args, **kwargs):
+        raise ts.subprocess.TimeoutExpired(cmd="tailscale cert", timeout=90.0)
+
+    with pytest.raises(ts.TailscaleError, match="did not finish within"):
+        ts.provision_cert("castelo.tail1234.ts.net", run=boom)
+
+
 def test_wait_for_stable_backend_raises_when_operator_permission_missing():
     run = (
         FakeRun()
