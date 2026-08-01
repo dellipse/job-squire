@@ -10,16 +10,16 @@ requests==2.34.2
 APScheduler==3.11.3
 cryptography==49.0.0
 Markdown==3.10.2
-mcp==1.28.1
+mcp==2.0.0
 # Pinned (transitive via mcp) so musl wheel resolution stays deterministic.
 # pydantic-core held at 2.46.4: pydantic 2.13.4 (current latest) hard-pins
-# pydantic-core==2.46.4, so 2.47.0 breaks `pip install` outright. Bump this
+# pydantic-core==2.47.0, so 2.47.0 breaks `pip install` outright. Bump this
 # together with the next compatible pydantic release, not alone. Dependabot
 # proposed bumping pydantic-core alone to 2.47.0 again on 2026-07-18 (PR #8);
 # held back here for the same reason as PR #6 on 2026-07-12.
 pydantic==2.13.4
-pydantic-core==2.46.4
-uvicorn==0.51.0
+pydantic-core==2.47.0
+uvicorn==0.52.0
 python-docx==1.2.0
 beautifulsoup4==4.15.0
 pypdf==6.14.2
