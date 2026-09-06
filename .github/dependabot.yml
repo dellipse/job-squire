@@ -12,6 +12,15 @@ updates:
       python-dependencies:
         patterns:
           - "*"
+    ignore:
+      # pydantic hard-pins pydantic-core to an exact version, so a lone
+      # pydantic-core bump makes `pip install` unresolvable. Because every pip
+      # update lands in one group above, that single bad pin also blocks every
+      # other update riding along with it — see PRs #6, #8 and #19, each of
+      # which had to be held back for this. Bump pydantic and pydantic-core
+      # together, by hand, when a new pydantic release lands.
+      # Context: the note above these pins in requirements.txt.
+      - dependency-name: "pydantic-core"
     commit-message:
       prefix: "CHORE"
 
