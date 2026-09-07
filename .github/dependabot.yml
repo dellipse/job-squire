@@ -13,13 +13,19 @@ updates:
         patterns:
           - "*"
     ignore:
-      # pydantic hard-pins pydantic-core to an exact version, so a lone
-      # pydantic-core bump makes `pip install` unresolvable. Because every pip
-      # update lands in one group above, that single bad pin also blocks every
-      # other update riding along with it — see PRs #6, #8 and #19, each of
-      # which had to be held back for this. Bump pydantic and pydantic-core
-      # together, by hand, when a new pydantic release lands.
+      # pydantic and pydantic-core ship as a matched pair: every pydantic
+      # release hard-pins one exact pydantic-core version (2.13.4 -> 2.46.4,
+      # 2.13.5 -> 2.46.5). Dependabot versions them independently, so pinning
+      # only one half makes `pip install` unresolvable in EITHER direction:
+      #   - core bumped alone            -> PRs #6, #8, #19
+      #   - pydantic bumped, core frozen -> PR #21 (ignoring core alone was
+      #     not enough; that is why both are listed here)
+      # Because every pip update lands in the single group above, one bad pin
+      # also blocks every unrelated update riding along with it — #19 took
+      # eight healthy bumps down with it.
+      # Move the pair together, by hand, when a new pydantic release lands.
       # Context: the note above these pins in requirements.txt.
+      - dependency-name: "pydantic"
       - dependency-name: "pydantic-core"
     commit-message:
       prefix: "CHORE"

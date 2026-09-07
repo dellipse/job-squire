@@ -17,6 +17,11 @@ mcp==1.28.1
 # together with the next compatible pydantic release, not alone. Dependabot
 # proposed bumping pydantic-core alone to 2.47.0 again on 2026-07-18 (PR #8);
 # held back here for the same reason as PR #6 on 2026-07-12.
+# Both pydantic and pydantic-core are now in the `ignore` list in
+# .github/dependabot.yml, so neither half gets proposed on its own any more.
+# Upgrading the pair is a manual step: move both pins in one commit
+# (e.g. pydantic 2.13.5 requires pydantic-core 2.46.5 -- not 2.48.0, which
+# is what Dependabot proposed in PR #19).
 pydantic==2.13.4
 pydantic-core==2.46.4
 uvicorn==0.51.0
