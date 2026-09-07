@@ -19,29 +19,31 @@ the bearer token in the Authorization header exactly as the server expects
 OAuth access token -- either way it's just a bearer string to this client).
 
 Result decoding is deliberately defensive rather than assuming one shape,
-because FastMCP's actual wrapping of a tool's return value into
-CallToolResult.content / .structuredContent differs by return-type
-annotation (verified empirically against mcp==1.28.1 with an in-memory
-FastMCP server -- see tests/test_mcp_client.py for the fixtures that pin
-this down):
+because MCPServer's actual wrapping of a tool's return value into
+CallToolResult.content / .structured_content differs by return-type
+annotation (verified empirically against mcp==2.2.0 with an in-memory
+MCPServer server -- see tests/test_mcp_client.py for the fixtures that pin
+this down; the wrapping rules themselves are unchanged from v1's FastMCP,
+per the mcp 2.x migration guide -- only the field names moved from
+camelCase to snake_case, see below):
 
-  - `-> dict`  tools (get_pipeline, get_job, ...): structuredContent is
+  - `-> dict`  tools (get_pipeline, get_job, ...): structured_content is
     None; content is exactly one TextContent block holding the JSON-encoded
     dict.
-  - `-> list`  tools (list_jobs, list_contacts, ...): structuredContent is
-    None; content is *one TextContent block per list item* (FastMCP's
+  - `-> list`  tools (list_jobs, list_contacts, ...): structured_content is
+    None; content is *one TextContent block per list item* (MCPServer's
     backwards-compatible ad hoc conversion recurses into the list), so the
     list has to be reassembled from all of them.
   - `-> str`   tools (get_candidate_profile, get_kit_instructions):
-    structuredContent is `{"result": "<the string>"}`; content is a single
+    structured_content is `{"result": "<the string>"}`; content is a single
     TextContent holding the raw (unencoded) string.
   - An empty list return produces zero content blocks.
-  - A tool that raises produces `isError=True` with the error message as
+  - A tool that raises produces `is_error=True` with the error message as
     the single content block's text.
 
 One shape is genuinely ambiguous from content alone: a `-> list` tool
 returning exactly one item produces the same single-TextContent-block
-shape as a `-> dict` tool, since FastMCP serializes each list item as its
+shape as a `-> dict` tool, since MCPServer serializes each list item as its
 own block with no wrapping array marker. There's no way to tell those
 apart from the wire format, so LIST_RETURNING_TOOLS below names the tools
 we know return a list (from their app/mcp_server.py annotations) and
@@ -55,7 +57,7 @@ from typing import Any
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-import httpx
+import httpx2
 from mcp import ClientSession
 from mcp.client.streamable_http import create_mcp_http_client, streamable_http_client
 from mcp.types import CallToolResult, TextContent
@@ -113,13 +115,12 @@ async def _call_tool_async(
 ) -> Any:
     url = endpoint.rstrip("/") + MCP_PATH
     headers = {"Authorization": f"Bearer {token}"} if token else None
-    http_client = create_mcp_http_client(headers=headers, timeout=httpx.Timeout(timeout))
+    http_client = create_mcp_http_client(headers=headers, timeout=httpx2.Timeout(timeout))
 
     async with http_client:
         async with streamable_http_client(url, http_client=http_client) as (
             read,
             write,
-            _get_session_id,
         ):
             async with ClientSession(read, write) as session:
                 await session.initialize()
@@ -139,12 +140,12 @@ LIST_RETURNING_TOOLS = frozenset({"list_jobs", "list_contacts", "list_unanalyzed
 
 
 def _extract_result(result: CallToolResult, tool_name: str) -> Any:
-    if result.isError:
+    if result.is_error:
         message = result.content[0].text if result.content else "unknown error"
         raise MCPError(f"MCP error [{tool_name}]: {message}")
 
-    if result.structuredContent is not None:
-        sc = result.structuredContent
+    if result.structured_content is not None:
+        sc = result.structured_content
         if isinstance(sc, dict) and set(sc.keys()) == {"result"}:
             return sc["result"]
         return sc

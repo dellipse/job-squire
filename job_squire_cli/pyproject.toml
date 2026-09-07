@@ -30,12 +30,14 @@ dependencies = [
 [project.optional-dependencies]
 query = [
     "rich>=13.0",
-    # <2 is deliberate: mcp 2.x renamed FastMCP to MCPServer and swapped httpx
-    # for httpx2, so v1 code raises ModuleNotFoundError on import. Migration is
-    # tracked separately; lift this bound only with that work.
-    "mcp>=1.28.1,<2",
+    # <3 is deliberate: mcp's own VERSIONING.md reserves breaking changes for
+    # major bumps, and 1.x->2.x already broke this client once (FastMCP ->
+    # MCPServer, httpx -> httpx2, CallToolResult's isError/structuredContent
+    # -> is_error/structured_content). Lift this bound only after auditing the
+    # next migration guide the same way.
+    "mcp>=2.0.0,<3",
     "anyio>=4.0",
-    "httpx>=0.27",
+    "httpx2>=2.5.0",
 ]
 
 # job-squire is the canonical command; jobsquire is kept as an alias to the

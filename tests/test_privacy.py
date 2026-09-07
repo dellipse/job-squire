@@ -352,7 +352,7 @@ class TestMcpBoundary:
         import asyncio
         tools = {t.name: t for t in asyncio.run(mcp.list_tools())}
         assert "get_pipeline" in tools and "set_job_fit" in tools
-        props = tools["set_job_fit"].inputSchema.get("properties", {})
+        props = tools["set_job_fit"].input_schema.get("properties", {})
         assert {"job_id", "score", "reason"} <= set(props)
 
     def test_read_tool_output_redacted(self, seeded):

@@ -13,12 +13,12 @@
 """job_squire_cli.query.mcp_client -- result decoding and end-to-end calls.
 
 _extract_result's cases are pinned directly against real mcp.types objects
-built the way FastMCP actually builds them (verified empirically against
-mcp==1.28.1 with an in-memory server -- see the module docstring), rather
+built the way MCPServer actually builds them (verified empirically against
+mcp==2.2.0 with an in-memory server -- see the module docstring), rather
 than against hand-rolled fakes, so a future `mcp` upgrade that changes the
 wrapping is caught here instead of only in production.
 
-The end-to-end tests spin up a real FastMCP app (Streamable HTTP) in a
+The end-to-end tests spin up a real MCPServer app (Streamable HTTP) in a
 background thread on a loopback port and drive it through call_tool() and
 check_health() exactly as the query commands do -- no Hermes, no
 ~/.hermes/, nothing but this module and a live instance.
@@ -28,7 +28,7 @@ import time
 
 import pytest
 import uvicorn
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from mcp.types import CallToolResult, TextContent
 
 from job_squire_cli.query import mcp_client
@@ -42,8 +42,8 @@ from job_squire_cli.query.mcp_client import MCPError, _extract_result
 def test_dict_return_type_single_text_block():
     result = CallToolResult(
         content=[TextContent(type="text", text='{"jobs": [], "count": 0}')],
-        structuredContent=None,
-        isError=False,
+        structured_content=None,
+        is_error=False,
     )
     assert _extract_result(result, "get_pipeline") == {"jobs": [], "count": 0}
 
@@ -54,8 +54,8 @@ def test_list_return_type_one_block_per_item():
             TextContent(type="text", text='{"id": 1}'),
             TextContent(type="text", text='{"id": 2}'),
         ],
-        structuredContent=None,
-        isError=False,
+        structured_content=None,
+        is_error=False,
     )
     assert _extract_result(result, "list_jobs") == [{"id": 1}, {"id": 2}]
 
@@ -68,8 +68,8 @@ def test_list_return_type_single_item_stays_a_list():
     # exactly one job.
     result = CallToolResult(
         content=[TextContent(type="text", text='{"id": 1}')],
-        structuredContent=None,
-        isError=False,
+        structured_content=None,
+        is_error=False,
     )
     assert _extract_result(result, "list_jobs") == [{"id": 1}]
     # The same single-block shape from a *dict*-returning tool must stay a
@@ -78,15 +78,15 @@ def test_list_return_type_single_item_stays_a_list():
 
 
 def test_empty_list_return_type_zero_blocks():
-    result = CallToolResult(content=[], structuredContent=None, isError=False)
+    result = CallToolResult(content=[], structured_content=None, is_error=False)
     assert _extract_result(result, "list_jobs") == []
 
 
 def test_str_return_type_wrapped_in_structured_content():
     result = CallToolResult(
         content=[TextContent(type="text", text="# Profile\nmarkdown")],
-        structuredContent={"result": "# Profile\nmarkdown"},
-        isError=False,
+        structured_content={"result": "# Profile\nmarkdown"},
+        is_error=False,
     )
     assert _extract_result(result, "get_candidate_profile") == "# Profile\nmarkdown"
 
@@ -94,8 +94,8 @@ def test_str_return_type_wrapped_in_structured_content():
 def test_error_result_raises_mcp_error_with_message():
     result = CallToolResult(
         content=[TextContent(type="text", text="Error executing tool boom: job not found")],
-        structuredContent=None,
-        isError=True,
+        structured_content=None,
+        is_error=True,
     )
     with pytest.raises(MCPError, match="job not found"):
         _extract_result(result, "boom")
@@ -107,7 +107,7 @@ def test_error_result_raises_mcp_error_with_message():
 
 @pytest.fixture
 def running_server():
-    mcp = FastMCP("test-job-squire")
+    mcp = MCPServer("test-job-squire")
 
     @mcp.tool()
     def list_jobs(status: str = "") -> list:
@@ -160,7 +160,14 @@ def test_call_tool_round_trip(running_server):
 
 
 def test_call_tool_error_surfaces_as_mcp_error(running_server):
-    with pytest.raises(MCPError, match="nope"):
+    # mcp 2.x behavior change (verified against mcp==2.2.0, not documented in
+    # the migration guide's headline sections): an *unexpected* crash inside a
+    # tool body (a plain exception, not a deliberate ToolError/ResourceError)
+    # now reaches the client as a generic "Error executing tool <name>"
+    # message -- the original exception text ("nope") stays server-side only,
+    # in the log line MCPServer emits. v1 put the original message on the
+    # wire; assert on the generic wrapper text instead of the original.
+    with pytest.raises(MCPError, match="Error executing tool boom"):
         mcp_client.call_tool(running_server, None, "boom", {})
 
 
