@@ -27,9 +27,11 @@ updates:
       # Context: the note above these pins in requirements.txt.
       - dependency-name: "pydantic"
       - dependency-name: "pydantic-core"
-      # mcp 2.x is a rewrite, not a bump: FastMCP -> MCPServer, httpx -> httpx2,
-      # streamable_http_client removed. Block the major only -- v1.x is in
-      # maintenance mode receiving security fixes, so 1.x updates are wanted.
+      # mcp 1.x -> 2.x was a rewrite, not a bump (FastMCP -> MCPServer, httpx ->
+      # httpx2, CallToolResult field renames -- see the comment above the pin
+      # in requirements.txt); the SDK's own VERSIONING.md reserves breaking
+      # changes for majors, so block the major generically and audit the
+      # migration guide by hand before lifting this for the next one.
       - dependency-name: "mcp"
         update-types: ["version-update:semver-major"]
     commit-message:
