@@ -77,6 +77,16 @@ SWAG_CONTAINER_NAME = "job-squire-swag"
 SWAG_IMAGE = "lscr.io/linuxserver/swag"
 PROXY_CONFS_SUBPATH = ("nginx", "proxy-confs")
 
+# Link-local address used as the pasta `--map-host-loopback` target on a
+# rootless-Podman proxy that runs in pasta network mode (see
+# `container_network_mode`/`provision_instance_proxy`'s pasta branch below).
+# Not 127.0.0.1: pasta rejects the namespace's own loopback address as a
+# remap target ("Invalid address to remap to host"), since it's already a
+# distinct, valid address inside that namespace. A 169.254/16 address is
+# never routable and never assigned to anything else, so it's safe to use
+# as a pure sentinel the operator's proxy config points back at the host.
+DEFAULT_PASTA_HOST_LOOPBACK = "169.254.1.1"
+
 # Docker/Podman's own built-in network names -- never usable for container
 # name resolution (no embedded DNS on these), so a proxy attached only to
 # one of these still needs a real shared network created for it.
@@ -114,6 +124,14 @@ class ProxyProvisionResult:
     web_conf_path: Path
     mcp_conf_path: Path
     installed_swag: bool
+    # Set only when the proxy container turned out to be pasta-networked
+    # (see `container_network_mode`) -- confs were installed using the
+    # host-port strategy, but actually routing traffic depends on the
+    # proxy's own pasta options already including a matching
+    # `--map-host-loopback`, which this CLI has no way to verify or set on
+    # a proxy it didn't install itself. `commands.py` surfaces this to the
+    # operator; it is not a failure on its own.
+    pasta_note: str | None = None
 
 
 # ── nginx conf templates (mirrors examples/nginx/*.subdomain.conf) ──────
@@ -215,14 +233,18 @@ def _container_upstream_block(container_name: str, port: int) -> str:
     )
 
 
-def _hostport_upstream_block(port: int) -> str:
-    """Proxy straight to the instance's published host port -- used when
-    the proxy is *not* containerized (a bare `nginx -s reload`-managed
-    install running directly on the host OS), which shares the host's
-    loopback interface directly and has no Docker network to join. Matches
-    the fallback the app repo's own examples/nginx template documents
-    ("If using host-port mode instead ... proxy_pass http://<host-ip>:8080;")."""
-    return f"        proxy_pass http://127.0.0.1:{port};\n"
+def _hostport_upstream_block(port: int, host: str = "127.0.0.1") -> str:
+    """Proxy straight to the instance's published host port, addressed at
+    `host` -- used whenever the proxy has no Docker/Podman network to join
+    the instance's container over. That's a bare `nginx -s reload`-managed
+    install running directly on the host OS (shares the real host loopback
+    directly, `host="127.0.0.1"`), or a containerized proxy in Podman's
+    rootless pasta network mode (`host=` the pasta `--map-host-loopback`
+    address instead -- pasta's own private loopback is not the host's, see
+    `container_network_mode`'s docstring). Matches the fallback the app
+    repo's own examples/nginx template documents ("If using host-port mode
+    instead ... proxy_pass http://<host-ip>:8080;")."""
+    return f"        proxy_pass http://{host}:{port};\n"
 
 
 def conf_filenames(instance_name: str) -> tuple[str, str]:
@@ -269,18 +291,23 @@ def render_mcp_conf(*, instance_name: str, subdomain: str, upstream_block: str) 
 def install_confs(
     proxy: ProxyTarget, *, instance_name: str, subdomain_web: str, subdomain_mcp: str,
     container_name: str, app_port: int, mcp_port_host: int, mcp_port_internal: int,
+    hostport_addr: str | None = None,
 ) -> tuple[Path, Path]:
     """Render and write both confs into `proxy.config_dir`'s proxy-confs
     subdirectory, returning their paths. Overwrites a previous run's confs
     for the same instance in place (re-provisioning is idempotent).
 
     The upstream form depends on whether the proxy is itself a container
-    (`proxy.container_name` set): containerized, it resolves this
-    instance's container by name over the shared Docker network;
-    otherwise (a bare `nginx -s reload`-managed install on the host) it
-    proxies straight to the instance's published host ports, since a
-    non-containerized proxy has no Docker network to join in the first
-    place (see `_container_upstream_block`/`_hostport_upstream_block`).
+    (`proxy.container_name` set) *and* whether it can actually join a
+    shared Docker/Podman network: normally, a containerized proxy resolves
+    this instance's container by name over that shared network. `hostport_addr`
+    overrides that -- passed by `provision_instance_proxy` when the proxy
+    container turns out to be pasta-networked (see
+    `container_network_mode`), which has no bridge network to join at all,
+    so it proxies straight to the instance's published host ports instead,
+    addressed at `hostport_addr` (pasta's `--map-host-loopback` target)
+    rather than the bare-nginx case's plain `127.0.0.1`
+    (`_container_upstream_block`/`_hostport_upstream_block`).
     """
     confs_dir = proxy.config_dir.joinpath(*PROXY_CONFS_SUBPATH)
     confs_dir.mkdir(parents=True, exist_ok=True)
@@ -288,13 +315,14 @@ def install_confs(
     web_path = confs_dir / web_name
     mcp_path = confs_dir / mcp_name
 
-    if proxy.container_name:
+    if proxy.container_name and hostport_addr is None:
         web_upstream = _container_upstream_block(container_name, 8000)
         mcp_upstream = _container_upstream_block(container_name, mcp_port_internal)
         mcp_note_port = mcp_port_internal
     else:
-        web_upstream = _hostport_upstream_block(app_port)
-        mcp_upstream = _hostport_upstream_block(mcp_port_host)
+        host = hostport_addr or "127.0.0.1"
+        web_upstream = _hostport_upstream_block(app_port, host=host)
+        mcp_upstream = _hostport_upstream_block(mcp_port_host, host=host)
         mcp_note_port = mcp_port_host
 
     web_path.write_text(render_web_conf(
@@ -424,6 +452,31 @@ def inspect_networks(runtime: str, container_name: str, *, run: Runner = subproc
     except (json.JSONDecodeError, TypeError):
         return []
     return list(parsed.keys()) if isinstance(parsed, dict) else []
+
+
+def container_network_mode(runtime: str, container_name: str, *, run: Runner = subprocess.run) -> str:
+    """The container's own `HostConfig.NetworkMode` -- e.g. `"bridge"`, a
+    named network, `"host"`, or Podman's rootless-default `"pasta"`.
+
+    `resolve_shared_network`/`attach_to_network` assume the proxy container
+    can join an *additional* bridge network alongside whatever it's already
+    on; that assumption fails outright for a pasta-networked proxy, since
+    pasta gives a container a private point-to-point link to the host with
+    no bridge to join at all (`podman network connect` against one fails
+    with "pasta is not supported: invalid network mode").
+    `provision_instance_proxy` calls this to route around that case rather
+    than let the network-join attempt fail. Returns "" (matching no known
+    mode) if inspection fails for any reason -- treated as "not pasta" by
+    every caller, i.e. falls back to the pre-existing bridge-join behavior.
+    """
+    argv = [compose.runtime_binary(runtime), "inspect", "--format", "{{.HostConfig.NetworkMode}}", container_name]
+    try:
+        result = run(argv, capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    if result.returncode != 0:
+        return ""
+    return (result.stdout or "").strip()
 
 
 def _mount_source(mounts: list[dict], destination: str) -> str | None:
@@ -702,6 +755,7 @@ def provision_instance_proxy(
     confirm: Confirm = lambda _msg: True,
     run: Runner = subprocess.run,
     sleep: Sleep = time.sleep,
+    pasta_host_addr: str | None = None,
 ) -> ProxyProvisionResult:
     """Provision a reverse proxy for a network-mode instance end to end:
     detect an existing proxy or install SWAG, attach the instance's
@@ -713,6 +767,16 @@ def provision_instance_proxy(
     `_print_mcp_config`, rather than re-deriving it here, since an adopted
     instance's data_dir does not necessarily live under the default
     per-user data root).
+
+    `pasta_host_addr` only matters when the detected/given proxy container
+    turns out to be pasta-networked (see `container_network_mode`); it's
+    the address the operator configured (or will configure) as that
+    proxy's own pasta `--map-host-loopback` target. Defaults to
+    `DEFAULT_PASTA_HOST_LOOPBACK` if the proxy is pasta-networked and this
+    is left unset -- a reasonable zero-config default, but this CLI cannot
+    verify or set that option on a proxy it didn't install itself, so
+    confs are installed either way and `ProxyProvisionResult.pasta_note`
+    carries the caveat for the caller to surface.
     """
     if instance.mode != "network":
         raise ProxyError(
@@ -760,38 +824,63 @@ def provision_instance_proxy(
         _await_swag_ready(instance.runtime, proxy.container_name, run=run, sleep=sleep)
 
     resolved_network = network
+    hostport_addr: str | None = None
+    pasta_note: str | None = None
     if proxy.container_name:
-        # Containerized proxy: share a Docker network with this instance's
-        # container so nginx can resolve it by name (see
-        # resolve_shared_network's own docstring for why this reuses the
-        # proxy's existing network when it has one). A non-containerized
-        # proxy has no Docker network to join at all, so this whole branch
-        # is skipped for it -- install_confs falls back to a host-port
-        # proxy_pass instead (see its own docstring).
-        resolved_network = resolve_shared_network(instance.runtime, proxy, network, run=run)
-        attach_to_network(instance.runtime, container_name, resolved_network, run=run)
-
-        compose.write_compose_files(
-            root, container_name=container_name, image=image, loopback_only=False,
-            app_port=instance.app_port, mcp_port=instance.mcp_port, proxy_network=resolved_network,
-        )
-        up_result = compose.compose_up(
-            instance.runtime, root, container_name, run=run, extra_args=["--force-recreate"],
-        )
-        if up_result.returncode != 0:
-            raise ProxyError(
-                f"Attached {instance.name!r} to network {resolved_network!r} but recreating the container "
-                f"to pick it up failed: {(up_result.stderr or up_result.stdout).strip()}"
+        # A containerized proxy in Podman's rootless pasta network mode
+        # (its own default, and the mode this box's SWAG install ended up
+        # in) has no bridge network at all to join -- `podman network
+        # connect` against it fails outright ("pasta is not supported:
+        # invalid network mode"), unlike a normal bridge-networked
+        # container. Route around the join attempt entirely for it and use
+        # the host-port strategy instead (see `container_network_mode`'s
+        # and `_hostport_upstream_block`'s docstrings for why pasta needs
+        # its own sentinel address rather than plain 127.0.0.1).
+        if container_network_mode(instance.runtime, proxy.container_name, run=run) == "pasta":
+            hostport_addr = pasta_host_addr or DEFAULT_PASTA_HOST_LOOPBACK
+            pasta_note = (
+                f"{proxy.container_name!r} runs in Podman's rootless pasta network mode, which can't "
+                f"join a shared bridge network the way a normal containerized proxy can -- routing to "
+                f"its published host ports at {hostport_addr!r} instead. This only actually reaches "
+                f"the instance if the proxy's own pasta network options already include "
+                f"`--map-host-loopback {hostport_addr}` (e.g. `--network pasta:--map-host-loopback,"
+                f"{hostport_addr}` for a manually managed proxy) -- this CLI can't add that to a proxy "
+                f"it didn't install itself. Add it and restart the proxy if traffic doesn't reach "
+                f"{instance.name!r} after this."
             )
+        else:
+            # Containerized proxy: share a Docker network with this instance's
+            # container so nginx can resolve it by name (see
+            # resolve_shared_network's own docstring for why this reuses the
+            # proxy's existing network when it has one). A non-containerized
+            # proxy has no Docker network to join at all, so this whole branch
+            # is skipped for it -- install_confs falls back to a host-port
+            # proxy_pass instead (see its own docstring).
+            resolved_network = resolve_shared_network(instance.runtime, proxy, network, run=run)
+            attach_to_network(instance.runtime, container_name, resolved_network, run=run)
+
+            compose.write_compose_files(
+                root, container_name=container_name, image=image, loopback_only=False,
+                app_port=instance.app_port, mcp_port=instance.mcp_port, proxy_network=resolved_network,
+            )
+            up_result = compose.compose_up(
+                instance.runtime, root, container_name, run=run, extra_args=["--force-recreate"],
+            )
+            if up_result.returncode != 0:
+                raise ProxyError(
+                    f"Attached {instance.name!r} to network {resolved_network!r} but recreating the container "
+                    f"to pick it up failed: {(up_result.stderr or up_result.stdout).strip()}"
+                )
 
     web_path, mcp_path = install_confs(
         proxy, instance_name=instance.name, subdomain_web=subdomain_web, subdomain_mcp=subdomain_mcp,
         container_name=container_name, app_port=instance.app_port or 0,
         mcp_port_host=instance.mcp_port or 0, mcp_port_internal=mcp_port_internal,
+        hostport_addr=hostport_addr,
     )
     reload_proxy(proxy, runtime=instance.runtime, run=run)
 
     return ProxyProvisionResult(
         proxy=proxy, network=resolved_network, web_conf_path=web_path, mcp_conf_path=mcp_path,
-        installed_swag=installed_swag,
+        installed_swag=installed_swag, pasta_note=pasta_note,
     )

@@ -1921,7 +1921,7 @@ def test_proxy_happy_path_prints_result(runner, monkeypatch, tmp_path):
     captured = {}
 
     def fake_provision(instance, *, root, proxy_container, config_dir, network, install_if_missing,
-                        swag_timezone, swag_url, swag_validation, confirm):
+                        swag_timezone, swag_url, swag_validation, confirm, pasta_host_addr):
         captured.update(name=instance.name, network=network, install_if_missing=install_if_missing)
         target = proxy_ops.ProxyTarget(config_dir=tmp_path / "swag-config", container_name="swag", kind="swag")
         return proxy_ops.ProxyProvisionResult(
@@ -1946,7 +1946,7 @@ def test_proxy_no_install_flag_disables_swag_fallback(runner, monkeypatch, tmp_p
     captured = {}
 
     def fake_provision(instance, *, root, proxy_container, config_dir, network, install_if_missing,
-                        swag_timezone, swag_url, swag_validation, confirm):
+                        swag_timezone, swag_url, swag_validation, confirm, pasta_host_addr):
         captured["install_if_missing"] = install_if_missing
         raise proxy_ops.ProxyError("no proxy available")
 

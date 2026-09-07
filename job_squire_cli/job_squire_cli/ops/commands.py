@@ -228,6 +228,8 @@ def _offer_proxy_setup(instance: Instance, *, confirm) -> None:
         return
 
     click.echo(f"  Reverse proxy provisioned ({result.proxy.kind}).")
+    if result.pasta_note:
+        click.echo(f"  Note: {result.pasta_note}")
     if result.installed_swag:
         click.echo(f"  Installed a new SWAG container (config at {result.proxy.config_dir}).")
         click.echo(
@@ -1342,8 +1344,15 @@ def restore_cmd(archive_path, rename_to, overwrite, passphrase, image, bring_up,
               show_default=True, help="SWAG VALIDATION env var, if a fresh SWAG install is needed.")
 @click.option("--yes", "assume_yes", is_flag=True, default=False,
               help="Don't ask before installing SWAG if no reverse proxy is detected.")
+@click.option("--pasta-host-addr", "pasta_host_addr", default=None,
+              help="Only used if the detected/given proxy container runs in Podman's rootless pasta "
+                   f"network mode (default {proxy_ops.DEFAULT_PASTA_HOST_LOOPBACK!r}): the address "
+                   "that proxy's own pasta network options map to the host via --map-host-loopback. "
+                   "A pasta-networked proxy has no bridge network to join, so confs route to the "
+                   "instance's published host ports at this address instead -- see `job-squire proxy "
+                   "--help`'s pasta note in the output after running this.")
 def proxy_cmd(name, proxy_container, config_dir, network, no_install, swag_timezone, swag_url,
-              swag_validation, assume_yes):
+              swag_validation, assume_yes, pasta_host_addr):
     instance = _require_instance(name)
     if instance.mode != "network":
         _fail(
@@ -1362,6 +1371,7 @@ def proxy_cmd(name, proxy_container, config_dir, network, no_install, swag_timez
             instance, root=root, proxy_container=proxy_container, config_dir=config_dir,
             network=network, install_if_missing=not no_install, swag_timezone=swag_timezone,
             swag_url=swag_url, swag_validation=swag_validation, confirm=confirm,
+            pasta_host_addr=pasta_host_addr,
         )
     except proxy_ops.ProxyError as exc:
         _fail(str(exc))
@@ -1369,6 +1379,8 @@ def proxy_cmd(name, proxy_container, config_dir, network, no_install, swag_timez
     click.echo(f"Reverse proxy provisioned for {instance.name!r} ({result.proxy.kind}).")
     if result.installed_swag:
         click.echo(f"  Installed a new SWAG container (config at {result.proxy.config_dir}).")
+    if result.pasta_note:
+        click.echo(f"  Note: {result.pasta_note}")
         click.echo(
             "  DNS/TLS validation isn't fully configured yet -- network mode is not considered "
             "configured without a working proxy in front of it."
