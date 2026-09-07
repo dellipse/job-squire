@@ -135,6 +135,16 @@ def test_render_web_conf_hostport_fallback_has_no_docker_resolution():
     assert "$upstream_app" not in text
 
 
+def test_render_web_conf_hostport_pasta_addr_is_not_loopback():
+    text = proxy.render_web_conf(
+        instance_name="castelo", subdomain="squire", proxy_container="swag",
+        mcp_port_note=9000, upstream_block=proxy._hostport_upstream_block(8081, host="169.254.1.1"),
+    )
+    assert "proxy_pass http://169.254.1.1:8081;" in text
+    assert "resolver" not in text
+    assert "$upstream_app" not in text
+
+
 def test_render_mcp_conf_uses_mcp_port_and_http2_off():
     text = proxy.render_mcp_conf(
         instance_name="castelo", subdomain="mcp-squire",
@@ -298,6 +308,20 @@ def test_detect_existing_proxy_ignores_swag_container_with_no_config_mount():
     assert proxy.detect_existing_proxy("docker", run=run) is None
 
 
+def test_container_network_mode_returns_the_inspected_mode():
+    run = FakeRun().on(
+        ("docker", "inspect", "--format", "{{.HostConfig.NetworkMode}}", "swag"), stdout="pasta\n"
+    )
+    assert proxy.container_network_mode("docker", "swag", run=run) == "pasta"
+
+
+def test_container_network_mode_returns_empty_string_on_inspect_failure():
+    run = FakeRun().on(
+        ("docker", "inspect", "--format", "{{.HostConfig.NetworkMode}}", "swag"), returncode=1, stderr="no such container"
+    )
+    assert proxy.container_network_mode("docker", "swag", run=run) == ""
+
+
 # ── shared network ────────────────────────────────────────────────────────
 
 
@@ -407,6 +431,7 @@ def test_provision_instance_proxy_with_existing_swag(instance_root):
         .on(("docker", "ps"), stdout="swag\tlscr.io/linuxserver/swag\n")
         .on(("docker", "inspect", "--format", "{{json .Mounts}}", "swag"),
             stdout=json.dumps([{"Destination": "/config", "Source": str(instance_root.parent / "swag-config")}]))
+        .on(("docker", "inspect", "--format", "{{.HostConfig.NetworkMode}}", "swag"), stdout="bridge\n")
         .on(("docker", "inspect", "--format", "{{json .NetworkSettings.Networks}}", "swag"),
             stdout=json.dumps({"bridge": {}}))
         .on(("docker", "network", "create", "job-squire-proxy"), returncode=0)
@@ -427,6 +452,51 @@ def test_provision_instance_proxy_with_existing_swag(instance_root):
     assert "job-squire-proxy" in paths.compose_path(instance_root).read_text()
 
 
+def test_provision_instance_proxy_routes_around_a_pasta_networked_proxy(instance_root):
+    """A pre-existing SWAG in Podman's rootless pasta network mode can't
+    join a shared bridge network at all (`podman network connect` fails
+    outright against it) -- this must skip the join/attach/recreate
+    entirely and fall back to the host-port strategy, addressed at the
+    pasta `--map-host-loopback` sentinel, without ever calling `network
+    connect` or recreating the instance's own container."""
+    instance = make_instance()
+    run = (
+        FakeRun()
+        .on(("docker", "ps"), stdout="swag\tlscr.io/linuxserver/swag\n")
+        .on(("docker", "inspect", "--format", "{{json .Mounts}}", "swag"),
+            stdout=json.dumps([{"Destination": "/config", "Source": str(instance_root.parent / "swag-config")}]))
+        .on(("docker", "inspect", "--format", "{{.HostConfig.NetworkMode}}", "swag"), stdout="pasta\n")
+        .on(("docker", "exec", "swag", "nginx", "-s", "reload"), returncode=0)
+    )
+    result = proxy.provision_instance_proxy(instance, root=instance_root, run=run)
+
+    assert result.proxy.kind == "swag"
+    assert result.network == proxy.DEFAULT_PROXY_NETWORK  # unchanged: no network was ever joined
+    assert result.pasta_note is not None
+    assert proxy.DEFAULT_PASTA_HOST_LOOPBACK in result.pasta_note
+    assert f"proxy_pass http://{proxy.DEFAULT_PASTA_HOST_LOOPBACK}:8081;" in result.web_conf_path.read_text()
+    assert f"proxy_pass http://{proxy.DEFAULT_PASTA_HOST_LOOPBACK}:9001;" in result.mcp_conf_path.read_text()
+    assert not any(call[:2] == ("docker", "network") for call in run.calls)
+    # The instance's own compose file is untouched -- no proxy_network line, no recreate.
+    assert "job-squire-proxy" not in paths.compose_path(instance_root).read_text()
+    assert not any(call[:2] == ("docker", "compose") for call in run.calls)
+
+
+def test_provision_instance_proxy_pasta_addr_is_overridable(instance_root):
+    instance = make_instance()
+    run = (
+        FakeRun()
+        .on(("docker", "ps"), stdout="swag\tlscr.io/linuxserver/swag\n")
+        .on(("docker", "inspect", "--format", "{{json .Mounts}}", "swag"),
+            stdout=json.dumps([{"Destination": "/config", "Source": str(instance_root.parent / "swag-config")}]))
+        .on(("docker", "inspect", "--format", "{{.HostConfig.NetworkMode}}", "swag"), stdout="pasta\n")
+        .on(("docker", "exec", "swag", "nginx", "-s", "reload"), returncode=0)
+    )
+    result = proxy.provision_instance_proxy(instance, root=instance_root, run=run, pasta_host_addr="10.99.0.1")
+    assert "proxy_pass http://10.99.0.1:8081;" in result.web_conf_path.read_text()
+    assert "10.99.0.1" in result.pasta_note
+
+
 def test_provision_instance_proxy_installs_swag_when_none_detected_and_confirmed(instance_root, tmp_path):
     instance = make_instance()
     run = (
@@ -434,6 +504,8 @@ def test_provision_instance_proxy_installs_swag_when_none_detected_and_confirmed
         .on(("docker", "ps"), stdout="")
         .on(("docker", "network", "create", "job-squire-proxy"), returncode=0)
         .on(("docker", "compose"), returncode=0)
+        .on(("docker", "inspect", "--format", "{{.HostConfig.NetworkMode}}", proxy.SWAG_CONTAINER_NAME),
+            stdout="job-squire-proxy\n")
         # install_swag's own compose file already attaches the fresh SWAG
         # container to job-squire-proxy, so resolve_shared_network finds
         # it there and skips re-creating/re-attaching the proxy itself.
@@ -527,6 +599,8 @@ def test_provision_instance_proxy_waits_for_swag_before_reloading(instance_root,
         .on(("docker", "ps"), stdout="")
         .on(("docker", "network", "create", "job-squire-proxy"), returncode=0)
         .on(("docker", "compose"), returncode=0)
+        .on(("docker", "inspect", "--format", "{{.HostConfig.NetworkMode}}", proxy.SWAG_CONTAINER_NAME),
+            stdout="job-squire-proxy\n")
         .on(("docker", "inspect", "--format", "{{json .NetworkSettings.Networks}}", proxy.SWAG_CONTAINER_NAME),
             stdout=json.dumps({"job-squire-proxy": {}}))
         .on(("docker", "network", "connect", "job-squire-proxy", "job-squire-castelo"), returncode=0)
