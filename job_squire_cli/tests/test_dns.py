@@ -160,7 +160,10 @@ def test_configure_duckdns_wildcard_writes_dns01_mode_and_polls_success(tmp_path
     assert 'SUBDOMAINS: "wildcard"' in compose_text
     assert 'DUCKDNSTOKEN: "tok123"' in compose_text
     assert 'URL: "castelo.duckdns.org"' in compose_text
-    assert ("docker", "compose", "--project-directory", str(proxy.swag_root(tmp_path)),
+    # No `--project-directory`: podman-compose 1.5.0 doesn't recognize it
+    # (see ops/compose.py's `_compose_argv` docstring) -- every invocation
+    # would die with `argument command: invalid choice` instead.
+    assert ("docker", "compose",
             "-f", str(proxy.swag_root(tmp_path) / "docker-compose.yml"),
             "-p", "job-squire-proxy", "up", "-d", "--force-recreate") in run.calls
 

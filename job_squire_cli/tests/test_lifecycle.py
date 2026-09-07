@@ -93,6 +93,17 @@ class FakeRuntime:
         self.fail_rmi: set[str] = set()
         self.fail_volume_rm: set[str] = set()
         self.removed_images: list[str] = []
+        # Projects that should report Health.Status "starting" for this many
+        # `inspect` polls before flipping to "healthy" -- lets a test drive
+        # wait_for_state through several "starting" observations the same
+        # way a real container's start_period does, instead of ops/
+        # lifecycle.py ever seeing "healthy" on the very first poll.
+        self.health_delay: dict[str, int] = {}
+        # Projects that should come up already Health.Status "unhealthy"
+        # (as if the runtime's own healthcheck already exhausted its
+        # retries) -- lets a test exercise `_raise_for_failed_state`'s
+        # unhealthy branch distinctly from a genuinely exited container.
+        self.unhealthy_projects: set[str] = set()
         # Stand-in for the real `{container_name}-data` named volume every
         # compose "up"/"create" implicitly materializes (ops/compose.py's
         # `data_volume_key`) -- container_name == project throughout this
@@ -102,7 +113,9 @@ class FakeRuntime:
         self.calls: list[tuple] = []
         # Stand-in for "what the named volume contains", keyed by container
         # name -- populated whenever a compose call supplies `cwd` (create/
-        # up/start/restart all pass `--project-directory root`, i.e. cwd).
+        # up/start/restart all pass `cwd=root`; there's no `--project-
+        # directory` in the real argv -- see ops/compose.py's
+        # `_compose_argv` docstring).
         self.data_dirs: dict[str, Path] = {}
 
     def run(self, args, **kwargs):
@@ -160,9 +173,16 @@ class FakeRuntime:
             return SimpleNamespace(returncode=0, stdout="", stderr="")
 
         if len(args) >= 2 and args[1] == "inspect":
-            state = self.containers.get(args[-1])
+            container_name = args[-1]
+            state = self.containers.get(container_name)
             if state is None:
                 return SimpleNamespace(returncode=1, stdout="", stderr="no such container")
+            remaining = self.health_delay.get(container_name, 0)
+            if remaining > 0:
+                remaining -= 1
+                self.health_delay[container_name] = remaining
+                if remaining == 0:
+                    state["Health"] = {"Status": "healthy"}
             return SimpleNamespace(returncode=0, stdout=json.dumps(state), stderr="")
 
         if len(args) >= 2 and args[1] == "logs":
@@ -236,7 +256,11 @@ class FakeRuntime:
                 "PUBLIC_URL=https://<your-domain>, or set DEPLOY_MODE=local.\n"
             )
             return
-        self.containers[project] = {"Status": "running", "Health": {"Status": "healthy"}}
+        if project in self.unhealthy_projects:
+            self.containers[project] = {"Status": "running", "Health": {"Status": "unhealthy"}}
+            return
+        initial_health = "starting" if self.health_delay.get(project, 0) > 0 else "healthy"
+        self.containers[project] = {"Status": "running", "Health": {"Status": initial_health}}
         if cwd is not None:
             self.data_dirs[project] = paths.data_dir(Path(cwd))
             db_path = paths.sqlite_db_path(Path(cwd))
@@ -313,6 +337,40 @@ def test_create_never_prompts_for_runtime_install_when_one_already_works(fake, d
     lc.create_instance(name="castelo", mode="local", data_root=data_root, **create_kwargs(fake))
     assert ("docker", "info") in fake.calls
     assert not any("brew" in call or "apt-get" in call for call in fake.calls)
+
+
+# ── create: waiting through "starting" before healthy/unhealthy ─────────
+
+
+def test_create_waits_through_several_starting_polls_before_healthy(fake, data_root):
+    """Reproduces the reported race: a container that reports Health.Status
+    "starting" for several `inspect` polls (mirroring a real image's
+    start_period) before flipping to "healthy" must not make create_instance
+    raise -- wait_for_state should just keep polling through "starting"."""
+    fake.health_delay["job-squire-castelo"] = 4
+
+    result = lc.create_instance(name="castelo", mode="local", data_root=data_root, **create_kwargs(fake))
+
+    assert result.health["Health"]["Status"] == "healthy"
+    inspect_calls = [c for c in fake.calls if len(c) >= 2 and c[1] == "inspect" and c[-1] == "job-squire-castelo"]
+    # 3 "starting" observations, then the 4th poll that first sees "healthy" --
+    # if wait_for_state raised on the first "starting" poll instead of
+    # continuing to wait, this would be 1.
+    assert len(inspect_calls) == 4
+
+
+def test_create_raises_for_unhealthy_container_not_merely_starting(fake, data_root):
+    """A container the runtime itself has already marked "unhealthy" (its
+    own healthcheck exhausted its retries) is a genuine failure -- distinct
+    from "starting", which is not."""
+    fake.unhealthy_projects.add("job-squire-castelo")
+
+    with pytest.raises(lc.LifecycleError, match="unhealthy"):
+        lc.create_instance(name="castelo", mode="local", data_root=data_root, **create_kwargs(fake))
+
+    # Registered anyway, same as an exited container -- status/remove need
+    # to be able to see and clean up a failed create.
+    assert reg.get_instance("castelo") is not None
 
 
 # ── create: leftover volume from a same-named, data-kept removal ────────

@@ -231,15 +231,26 @@ def test_write_instance_files_restricts_data_env_permissions(tmp_path):
 # ── driving the runtime ───────────────────────────────────────────────────
 
 
-def test_compose_up_uses_project_directory_and_env_file(tmp_path):
+def test_compose_up_uses_cwd_and_env_file_not_project_directory(tmp_path):
+    """No `--project-directory`: podman-compose 1.5.0 (the external
+    provider a rootless Podman install actually shells out to for `podman
+    compose`) doesn't recognize that flag at all -- its argparse misreads
+    the path as the positional `command` and every invocation dies with
+    `argument command: invalid choice`, confirmed against a real install.
+    `cwd` plus `-f`'s own absolute path are what anchor the compose file's
+    relative paths at `root` instead.
+    """
     root = tmp_path / "castelo"
     root.mkdir()
     run = fake_run()
     compose.compose_up("docker", root, "job-squire-castelo", run=run)
-    args = run.calls[0]["args"]
+    call = run.calls[0]
+    args = call["args"]
     assert args[:2] == ("docker", "compose")
-    assert "--project-directory" in args
-    assert str(root) in args
+    assert "--project-directory" not in args
+    assert call["kwargs"]["cwd"] == str(root)
+    assert "-f" in args and str(paths.compose_path(root)) in args
+    assert "--env-file" in args and str(paths.compose_env_path(root)) in args
     assert "-p" in args and "job-squire-castelo" in args
     assert "up" in args and "-d" in args
 

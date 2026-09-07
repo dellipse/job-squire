@@ -110,12 +110,27 @@ def generate_password(length: int = 20) -> str:
 
 def wait_for_state(
     runtime: str, container_name: str, *, run: Runner = subprocess.run,
-    sleep: Sleep = time.sleep, attempts: int = 20, interval: float = 3.0,
+    sleep: Sleep = time.sleep, attempts: int = 25, interval: float = 5.0,
 ) -> dict | None:
-    """Poll `docker/podman inspect` until the container is healthy (or has
-    no healthcheck and is simply running), has exited, or `attempts` is
-    exhausted. Returns the last observed `.State` dict, or None if the
+    """Poll `docker/podman inspect` until the container is healthy,
+    unhealthy, has exited, or (for a container with no healthcheck at all)
+    is simply running -- or until `attempts` is exhausted, whichever comes
+    first. Returns the last observed `.State` dict, or None if the
     container was never observed at all.
+
+    `attempts * interval` (default 25 * 5s = 120s) is sized to comfortably
+    outlast the app image's own healthcheck timing baked into
+    ops/compose.py's `render_compose_yaml` (`start_period: 45s, interval:
+    30s, timeout: 10s, retries: 3`): the runtime won't even run the check
+    that can first flip a container to "healthy" until start_period has
+    elapsed, and that check itself can take up to `timeout` to complete --
+    worst case ~45s + 30s + 10s = 85s before "healthy" is even possible.
+    A container reporting "starting" hasn't failed *or* succeeded yet, so
+    it keeps this loop polling exactly like a healthcheck-less "running"
+    container does -- only "healthy"/healthcheck-less-"running",
+    "unhealthy", and "exited" are terminal (caught on the runtime's own
+    schedule, not guessed at by trying to out-wait it with a shorter
+    budget).
     """
     state = None
     for attempt in range(attempts):
@@ -123,13 +138,28 @@ def wait_for_state(
         if state is not None:
             health = (state.get("Health") or {}).get("Status")
             status = state.get("Status")
-            if health == "healthy" or (health is None and status == "running"):
+            if health in ("healthy", "unhealthy") or (health is None and status == "running"):
                 return state
             if status == "exited":
                 return state
         if attempt < attempts - 1:
             sleep(interval)
     return state
+
+
+def _failed_state(state: dict | None) -> bool:
+    """True if `state` (as returned by `wait_for_state`) represents a
+    genuine failure -- the container process exited, or its own
+    healthcheck gave up and marked it unhealthy -- as opposed to merely
+    still being "starting" (wait_for_state itself never returns that as a
+    final state unless `attempts` ran out, in which case it's still not a
+    failure: the container may simply need more time than this CLI felt
+    like waiting, not evidence it's actually broken)."""
+    if state is None:
+        return False
+    if state.get("Status") == "exited":
+        return True
+    return (state.get("Health") or {}).get("Status") == "unhealthy"
 
 
 def _guard_failure_from_logs(runtime: str, container_name: str, *, run: Runner) -> StartupGuardFailure | None:
@@ -142,10 +172,16 @@ def _raise_for_failed_state(runtime: str, container_name: str, state: dict | Non
     """Raise StartupGuardFailure if the container exited because of the
     app's startup guard, else a generic LifecycleError with whatever the
     runtime reported. Called after a compose command reports failure, or
-    after wait_for_state observes an exited container."""
+    after wait_for_state observes a genuinely failed state (`_failed_state`
+    -- exited, or the runtime's own healthcheck marked it unhealthy)."""
     guard_failure = _guard_failure_from_logs(runtime, container_name, run=run)
     if guard_failure is not None:
         raise guard_failure
+    if state is not None and (state.get("Health") or {}).get("Status") == "unhealthy":
+        raise LifecycleError(
+            f"Container {container_name!r} is unhealthy (status={state.get('Status')!r}). "
+            f"Check `job-squire status {container_name}` or run the runtime's own logs command directly."
+        )
     if state is not None:
         raise LifecycleError(
             f"Container {container_name!r} exited (status={state.get('Status')!r}, "
@@ -307,7 +343,7 @@ def create_instance(
         _raise_for_failed_state(chosen_runtime, container_name, None, run=run)
 
     health = wait_for_state(chosen_runtime, container_name, run=run, sleep=sleep)
-    if health is not None and health.get("Status") == "exited":
+    if _failed_state(health):
         _raise_for_failed_state(chosen_runtime, container_name, health, run=run)
 
     import_summary = None
@@ -384,7 +420,7 @@ def start_instance(name: str, *, data_root: Path | None = None, run: Runner = su
     if result.returncode != 0:
         _raise_for_failed_state(instance.runtime, container_name, None, run=run)
     state = wait_for_state(instance.runtime, container_name, run=run, sleep=sleep)
-    if state is not None and state.get("Status") == "exited":
+    if _failed_state(state):
         _raise_for_failed_state(instance.runtime, container_name, state, run=run)
     return state
 
@@ -407,7 +443,7 @@ def restart_instance(name: str, *, data_root: Path | None = None, run: Runner = 
     if result.returncode != 0:
         _raise_for_failed_state(instance.runtime, container_name, None, run=run)
     state = wait_for_state(instance.runtime, container_name, run=run, sleep=sleep)
-    if state is not None and state.get("Status") == "exited":
+    if _failed_state(state):
         _raise_for_failed_state(instance.runtime, container_name, state, run=run)
     return state
 
@@ -471,7 +507,7 @@ def update_instance(
         _raise_for_failed_state(instance.runtime, container_name, None, run=run)
 
     health = wait_for_state(instance.runtime, container_name, run=run, sleep=sleep)
-    if health is not None and health.get("Status") == "exited":
+    if _failed_state(health):
         _raise_for_failed_state(instance.runtime, container_name, health, run=run)
 
     return UpdateResult(instance=instance, previous_image=current_image, new_image=new_image, health=health)

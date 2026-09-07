@@ -241,8 +241,10 @@ def test_remove_managed_swag_stops_the_container_and_deletes_the_config_dir(tmp_
     run = FakeRun().on(("docker", "compose"), returncode=0)
     proxy.remove_managed_swag("docker", data_root=tmp_path, run=run)
     assert not root.exists()
+    # No `--project-directory`: podman-compose 1.5.0 doesn't recognize it
+    # (see ops/compose.py's `_compose_argv` docstring).
     assert (
-        "docker", "compose", "--project-directory", str(root), "-f", str(root / "docker-compose.yml"),
+        "docker", "compose", "-f", str(root / "docker-compose.yml"),
         "-p", "job-squire-proxy", "down",
     ) in run.calls
 
