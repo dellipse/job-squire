@@ -253,6 +253,21 @@ def render_compose_env(
         lines.append(f"APP_HOST_PORT={app_port}")
     if mcp_port is not None:
         lines.append(f"MCP_HOST_PORT={mcp_port}")
+        # render_compose_yaml's ports line publishes
+        # "{host}:${MCP_HOST_PORT:-9000}:${MCP_PORT:-9000}" -- host side,
+        # then container side. Without this, MCP_PORT is never set here at
+        # all, so that second substitution silently falls back to its
+        # literal default (9000) instead of tracking the instance's actual
+        # allocated port -- invisible for the very first instance (whose
+        # mcp_port happens to already be 9000) but breaks every instance
+        # after it: the container's own MCP server binds the port from
+        # render_data_env's MCP_PORT (always == mcp_port, forwarded via
+        # data/.env, see InstanceEnv), so compose ends up publishing the
+        # wrong container port and every request gets a bare connection
+        # reset -- no listener on the port compose thinks it's forwarding
+        # to. Mirroring the same value here keeps both `.env` files and the
+        # actual listening port in agreement.
+        lines.append(f"MCP_PORT={mcp_port}")
     return "\n".join(lines) + "\n"
 
 

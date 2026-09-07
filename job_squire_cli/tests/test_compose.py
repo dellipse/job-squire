@@ -136,6 +136,14 @@ def test_render_compose_env_includes_hostports_when_given():
     env_text = compose.render_compose_env(app_port=8081, mcp_port=9001)
     assert "APP_HOST_PORT=8081" in env_text
     assert "MCP_HOST_PORT=9001" in env_text
+    # Regression: render_compose_yaml's ports line has a *second*
+    # substitution for the container-side MCP port
+    # ("${MCP_HOST_PORT:-9000}:${MCP_PORT:-9000}"), which must track the
+    # same allocated port as MCP_HOST_PORT and render_data_env's own
+    # MCP_PORT (what the container's MCP server actually binds to) --
+    # otherwise compose publishes a container port nothing listens on for
+    # any instance whose mcp_port isn't the literal default 9000.
+    assert "MCP_PORT=9001" in env_text
     assert "PUID=1000" in env_text
     assert "DATA_HOST_DIR" not in env_text  # /data is a named volume now, not a configurable host path
 
@@ -144,6 +152,7 @@ def test_render_compose_env_omits_hostports_when_not_given():
     env_text = compose.render_compose_env(app_port=None, mcp_port=None)
     assert "APP_HOST_PORT" not in env_text
     assert "MCP_HOST_PORT" not in env_text
+    assert "MCP_PORT" not in env_text
 
 
 def _sample_env(**overrides):
