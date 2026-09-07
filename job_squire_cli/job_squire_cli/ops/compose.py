@@ -379,9 +379,23 @@ def write_instance_files(root: Path, *, container_name: str, image: str, loopbac
 
 
 def _compose_argv(runtime: str, root: Path, project: str) -> list[str]:
+    """Deliberately omits `--project-directory`: podman-compose (the
+    external Python provider `podman compose` shells out to on a rootless
+    Podman install -- as opposed to the `docker compose` Go binary, which
+    tolerates it fine) doesn't recognize that flag at all in the version
+    this CLI has actually been run against (1.5.0) -- its argparse
+    misreads the path as the positional `command` argument and every
+    invocation dies with `argument command: invalid choice`, 100% of the
+    time, well before anything about the container's own health is even
+    checked. It's also redundant: `-f`/`--env-file` above are already
+    absolute paths, `_run_compose` already passes `cwd=str(root)`, and a
+    compose file's own directory (what determines where its relative
+    paths -- like `./data/.env` in render_compose_yaml -- resolve against,
+    absent an explicit `--project-directory` override) is exactly `root`
+    either way, since that's where `-f` points.
+    """
     return [
         *compose_binary(runtime),
-        "--project-directory", str(root),
         "-f", str(paths.compose_path(root)),
         "--env-file", str(paths.compose_env_path(root)),
         "-p", project,

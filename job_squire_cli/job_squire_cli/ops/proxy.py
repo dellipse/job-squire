@@ -363,7 +363,11 @@ def remove_managed_swag(runtime: str, *, data_root: Path | None = None, run: Run
     root = swag_root(data_root)
     compose_path = root / "docker-compose.yml"
     if compose_path.exists():
-        argv = [*compose.compose_binary(runtime), "--project-directory", str(root),
+        # No `--project-directory`: see ops/compose.py's `_compose_argv` docstring --
+        # podman-compose 1.5.0 doesn't recognize the flag and dies on every
+        # invocation; `cwd=str(root)` below plus `-f`'s own absolute path
+        # already anchor this compose file's relative paths at `root`.
+        argv = [*compose.compose_binary(runtime),
                 "-f", str(compose_path), "-p", "job-squire-proxy", "down"]
         try:
             result = run(argv, cwd=str(root), capture_output=True, text=True, timeout=60)
@@ -672,7 +676,11 @@ def install_swag(
     compose_path = root / "docker-compose.yml"
     compose_path.write_text(render_swag_compose(network=network, timezone=timezone, url=url, validation=validation))
 
-    argv = [*compose.compose_binary(runtime), "--project-directory", str(root),
+    # No `--project-directory`: see ops/compose.py's `_compose_argv` docstring --
+    # podman-compose 1.5.0 doesn't recognize the flag and dies on every
+    # invocation; `cwd=str(root)` below plus `-f`'s own absolute path already
+    # anchor this compose file's relative paths at `root`.
+    argv = [*compose.compose_binary(runtime),
             "-f", str(compose_path), "-p", "job-squire-proxy", "up", "-d"]
     try:
         result = run(argv, cwd=str(root), capture_output=True, text=True, timeout=180)

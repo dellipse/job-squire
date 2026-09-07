@@ -178,7 +178,11 @@ def _rewrite_and_recreate(
     except OSError:
         pass  # best-effort; some filesystems (e.g. certain CI/CD bind mounts) don't support chmod
 
-    argv = [*compose.compose_binary(runtime), "--project-directory", str(root),
+    # No `--project-directory`: see ops/compose.py's `_compose_argv` docstring --
+    # podman-compose 1.5.0 doesn't recognize the flag and dies on every
+    # invocation; `cwd=str(root)` below plus `-f`'s own absolute path already
+    # anchor this compose file's relative paths at `root`.
+    argv = [*compose.compose_binary(runtime),
             "-f", str(compose_path), "-p", "job-squire-proxy", "up", "-d", "--force-recreate"]
     try:
         result = run(argv, cwd=str(root), capture_output=True, text=True, timeout=180)
