@@ -65,6 +65,13 @@ RUN apk add --no-cache python3 py3-pip && \
 # pydantic/pydantic-core explicitly (transitive via mcp) so this resolution
 # is deterministic; the full lockfile has been verified to resolve to binary
 # musllinux wheels only, with no source builds, on this base.
+#
+# mcp 2.x's new/raised transitive deps (httpx2, mcp-types, opentelemetry-api,
+# jsonschema, sse-starlette>=3, pyjwt[crypto], python-multipart,
+# typing-extensions/typing-inspection) were checked individually on PyPI
+# before this bump: every one of them ships only a `py3-none-any` wheel, so
+# none of them is a compiled-extension / musl-wheel risk at all -- no
+# build-toolchain stage needed here for this migration.
 COPY requirements.txt .
 RUN /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
 

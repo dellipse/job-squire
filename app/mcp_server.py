@@ -37,7 +37,7 @@ from urllib.parse import parse_qs
 
 import logging
 import uvicorn
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 from werkzeug.security import check_password_hash
 
@@ -71,7 +71,7 @@ from .models import AIConfig, AIInsight, CandidateAsset, Contact, Interview, Job
 
 flask_app = create_app()
 
-# FastMCP's DNS-rebinding protection validates the Host header against an
+# MCPServer's DNS-rebinding protection validates the Host header against an
 # explicit allowlist.  We run behind SWAG, so Claude's requests arrive with the
 # public hostname.  List all hosts that may appear: the public subdomain, plus
 # localhost variants for local testing.  Protection stays ON — we just tell it
@@ -96,7 +96,9 @@ _transport_security = TransportSecuritySettings(
         "https://claude.ai",
     ],
 )
-mcp = FastMCP("JobSquire", stateless_http=True, transport_security=_transport_security)
+# mcp 2.x moved transport params (stateless_http, transport_security) off the
+# constructor and onto streamable_http_app() -- see where _inner is built below.
+mcp = MCPServer("JobSquire")
 
 
 def _ptool():
@@ -1130,7 +1132,9 @@ def _extract_bearer(scope) -> str:
 # Main ASGI app
 # ---------------------------------------------------------------------------
 
-_inner = mcp.streamable_http_app()
+# stateless_http and transport_security moved here from the MCPServer
+# constructor in mcp 2.x (see the comment where `mcp` is constructed above).
+_inner = mcp.streamable_http_app(stateless_http=True, transport_security=_transport_security)
 
 
 async def _send_json(send, status, body):
