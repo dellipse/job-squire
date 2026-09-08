@@ -29,11 +29,12 @@ Run:  python -m app.mcp_server      (listens on 0.0.0.0:9000)
 import base64
 import functools
 import hashlib
+import html
 import json
 import os
 import secrets
 import time
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlsplit
 
 import logging
 import uvicorn
@@ -133,6 +134,22 @@ def _ptool():
 # and codes expire in 10 minutes, so persistence adds no value.
 _clients: dict = {}     # client_id -> {redirect_uris}
 _codes: dict = {}       # code -> {client_id, redirect_uri, code_challenge, exp}
+_MAX_CLIENTS = 500       # cap on open dynamic client registration (SEC-02)
+
+_register_attempts: dict = {}   # ip -> list of registration timestamps (SEC-02)
+_REGISTER_MAX_PER_WINDOW = 10
+_REGISTER_WINDOW = 600  # seconds
+
+
+def _register_rate_ok(ip: str) -> bool:
+    now = _time.time()
+    recent = [t for t in _register_attempts.get(ip, []) if now - t < _REGISTER_WINDOW]
+    _register_attempts[ip] = recent
+    return len(recent) < _REGISTER_MAX_PER_WINDOW
+
+
+def _record_register_attempt(ip: str) -> None:
+    _register_attempts.setdefault(ip, []).append(_time.time())
 
 # Access tokens ARE persisted to DATA_DIR/oauth_tokens.json so they survive
 # container restarts (30-day TTL means a restart would otherwise force re-auth).
@@ -458,7 +475,7 @@ def _run_ats_after_kit(job):
     try:
         from .models import AIConfig
         cfg = db.session.get(AIConfig, 1)
-        if not cfg or cfg.mode != "api":
+        if not cfg or not cfg.api_enabled:
             return
         secret = flask_app.config.get("SECRET_KEY", "")
         from .crypto import decrypt as _dec
@@ -548,6 +565,7 @@ def add_contact(name: str, agency: str = "", contact_type: str = "Recruiter",
     'Hiring Manager', 'Networking', 'Reference' (defaults to 'Recruiter').
     Returns the new contact id.
     """
+    from .search import _http_url
     with flask_app.app_context():
         c = Contact(
             name=(name or "").strip(),
@@ -556,7 +574,7 @@ def add_contact(name: str, agency: str = "", contact_type: str = "Recruiter",
             title=(title or "").strip(),
             email=(email or "").strip(),
             phone=(phone or "").strip(),
-            linkedin_url=(linkedin_url or "").strip(),
+            linkedin_url=_http_url(linkedin_url),
             notes=notes or "",
             created_by="Claude (MCP)",
         )
@@ -846,6 +864,13 @@ _AUTH_PAGE = """\
              padding: 0 1.25rem; color: #1a1a1a; }}
     h2 {{ margin-bottom: .25rem; }}
     p  {{ color: #555; margin-top: 0; }}
+    .consent {{ background: #f3f1fc; border: 1px solid #d8d1f5; border-radius: 8px;
+                padding: .8rem 1rem; margin-top: 1rem; }}
+    .consent .client {{ font-weight: 700; font-size: 1.05rem; word-break: break-word; }}
+    .consent .dest {{ color: #555; font-size: .85rem; margin-top: .3rem; word-break: break-all; }}
+    .consent label {{ display: flex; align-items: flex-start; gap: .5rem; margin-top: .75rem;
+                       font-weight: 400; font-size: .9rem; }}
+    .consent input[type=checkbox] {{ margin-top: .2rem; }}
     label {{ display: block; margin: 1rem 0 .3rem; font-weight: 600; }}
     input[type=text], input[type=password] {{
       width: 100%; padding: .55rem .7rem; font-size: 1rem;
@@ -861,7 +886,11 @@ _AUTH_PAGE = """\
 </head>
 <body>
   <h2>Connect Claude to JobSquire</h2>
-  <p>Sign in with your JobSquire account to let Claude read and update your pipeline.</p>
+  <p>Sign in with your JobSquire account to let the application below read and update your pipeline.</p>
+  <div class="consent">
+    <div class="client">{client_name}</div>
+    <div class="dest">will redirect to: {redirect_host}</div>
+  </div>
   <form method="post">
     <input type="hidden" name="client_id"             value="{client_id}">
     <input type="hidden" name="redirect_uri"          value="{redirect_uri}">
@@ -872,12 +901,40 @@ _AUTH_PAGE = """\
     <input id="u" type="text" name="username" autocomplete="username" autofocus>
     <label for="p">Password</label>
     <input id="p" type="password" name="password" autocomplete="current-password">
+    <div class="consent">
+      <label for="c">
+        <input id="c" type="checkbox" name="consent" value="yes" required>
+        <span>I want to let <strong>{client_name}</strong> access my JobSquire pipeline.</span>
+      </label>
+    </div>
     {error_html}
     <button type="submit">Authorize</button>
   </form>
 </body>
 </html>
 """
+
+
+def _render_auth_page(*, client_id, redirect_uri, state, code_challenge,
+                       code_challenge_method, error_html) -> str:
+    """Render `_AUTH_PAGE` with every interpolated value HTML-escaped (SEC-01).
+
+    `error_html` is the one field allowed to carry markup — it is always one
+    of the fixed `<p class="err">…</p>` strings below, never derived from
+    request input.
+    """
+    client_name = _clients.get(client_id, {}).get("client_name", "Unknown client")
+    redirect_host = urlsplit(redirect_uri).netloc or redirect_uri
+    return _AUTH_PAGE.format(
+        client_id=html.escape(client_id, quote=True),
+        redirect_uri=html.escape(redirect_uri, quote=True),
+        state=html.escape(state, quote=True),
+        code_challenge=html.escape(code_challenge, quote=True),
+        code_challenge_method=html.escape(code_challenge_method, quote=True),
+        client_name=html.escape(client_name, quote=True),
+        redirect_host=html.escape(redirect_host, quote=True),
+        error_html=error_html,
+    )
 
 
 async def _read_body(receive) -> bytes:
@@ -888,6 +945,14 @@ async def _read_body(receive) -> bytes:
         if not ev.get("more_body"):
             break
     return body
+
+
+_SECURITY_HEADERS = [
+    (b"content-security-policy",
+     b"default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'"),
+    (b"x-frame-options", b"DENY"),
+    (b"x-content-type-options", b"nosniff"),
+]
 
 
 async def _respond(send, status: int, body, content_type: str = "application/json"):
@@ -901,6 +966,7 @@ async def _respond(send, status: int, body, content_type: str = "application/jso
             (b"content-type", content_type.encode()),
             (b"content-length", str(len(body)).encode()),
             (b"cache-control", b"no-store"),
+            *_SECURITY_HEADERS,
         ],
     })
     await send({"type": "http.response.body", "body": body})
@@ -930,24 +996,59 @@ async def _handle_revoke(scope, receive, send):
     await _respond(send, 200, {})
 
 
+def _valid_redirect_uri(uri) -> bool:
+    """Absolute https:// URL, no fragment, sane length (SEC-01/SEC-02).
+
+    Loopback http:// is allowed too, for local testing against a non-proxied
+    MCP server — the same carve-out the deploy guard elsewhere in the app
+    makes for http on loopback.
+    """
+    if not isinstance(uri, str) or not uri or len(uri) > 2048:
+        return False
+    parts = urlsplit(uri)
+    if parts.fragment:
+        return False
+    if parts.scheme == "https" and parts.netloc:
+        return True
+    if parts.scheme == "http" and parts.hostname in ("localhost", "127.0.0.1", "::1"):
+        return True
+    return False
+
+
 async def _handle_register(scope, receive, send):
+    ip = _get_client_ip(scope)
+    if not _register_rate_ok(ip):
+        await _respond(send, 429, {"error": "too_many_requests"})
+        return
+    if len(_clients) >= _MAX_CLIENTS:
+        await _respond(send, 503, {"error": "registration_temporarily_unavailable"})
+        return
     raw = await _read_body(receive)
     try:
         data = json.loads(raw)
     except Exception:
         await _respond(send, 400, {"error": "invalid_request"})
         return
+    redirect_uris = data.get("redirect_uris", [])
+    if not isinstance(redirect_uris, list) or not redirect_uris or \
+            not all(_valid_redirect_uri(u) for u in redirect_uris):
+        await _respond(send, 400, {
+            "error": "invalid_redirect_uri",
+            "error_description": "redirect_uris must be absolute https:// URLs with no fragment",
+        })
+        return
+    _record_register_attempt(ip)
     client_id = secrets.token_urlsafe(16)
     # Capture client_name so it can be stored with issued tokens for the management UI.
     client_name = (data.get("client_name") or "").strip() or "Unknown client"
     _clients[client_id] = {
-        "redirect_uris": data.get("redirect_uris", []),
+        "redirect_uris": redirect_uris,
         "client_name": client_name,
     }
     await _respond(send, 201, {
         "client_id": client_id,
         "client_name": client_name,
-        "redirect_uris": data.get("redirect_uris", []),
+        "redirect_uris": redirect_uris,
     })
 
 
@@ -966,7 +1067,7 @@ async def _handle_authorize_get(scope, receive, send):
     if not code_challenge or code_challenge_method != "S256":
         await _respond(send, 400, "invalid_request: PKCE with S256 is required", "text/plain")
         return
-    html = _AUTH_PAGE.format(
+    page = _render_auth_page(
         client_id=client_id,
         redirect_uri=redirect_uri,
         state=qs.get("state", ""),
@@ -974,7 +1075,7 @@ async def _handle_authorize_get(scope, receive, send):
         code_challenge_method=code_challenge_method,
         error_html="",
     )
-    await _respond(send, 200, html, "text/html; charset=utf-8")
+    await _respond(send, 200, page, "text/html; charset=utf-8")
 
 
 def _get_client_ip(scope: dict) -> str:
@@ -1038,12 +1139,12 @@ async def _handle_authorize_post(scope, receive, send):
 
     if not authed:
         _record_login_failure(ip)
-        html = _AUTH_PAGE.format(
+        page = _render_auth_page(
             client_id=client_id, redirect_uri=redirect_uri, state=state,
             code_challenge=code_challenge, code_challenge_method=code_challenge_method,
             error_html='<p class="err">Incorrect username or password.</p>',
         )
-        await _respond(send, 200, html, "text/html; charset=utf-8")
+        await _respond(send, 200, page, "text/html; charset=utf-8")
         return
 
     _login_failures.pop(ip, None)
@@ -1062,6 +1163,7 @@ async def _handle_authorize_post(scope, receive, send):
         "headers": [
             (b"location", location.encode()),
             (b"cache-control", b"no-store"),
+            *_SECURITY_HEADERS,
         ],
     })
     await send({"type": "http.response.body", "body": b""})
@@ -1144,6 +1246,7 @@ async def _send_json(send, status, body):
         "headers": [
             (b"content-type", b"application/json"),
             (b"content-length", str(len(data)).encode()),
+            *_SECURITY_HEADERS,
         ],
     })
     await send({"type": "http.response.body", "body": data})
@@ -1165,6 +1268,17 @@ async def asgi_app(scope, receive, send):
     # Health check — always open
     if path == "/health":
         await _send_json(send, 200, {"ok": True})
+        return
+
+    # SEC-03: the Settings "MCP Connector" toggle must actually gate this
+    # surface. Everything below (metadata, register/authorize/token/revoke,
+    # and /mcp itself — both the OAuth and static-key auth paths) is closed
+    # with a 404 while AIConfig.mcp_enabled is off, so disabling the toggle
+    # really does take the connector off the internet.
+    with flask_app.app_context():
+        _mcp_cfg = db.session.get(AIConfig, 1)
+    if not _mcp_cfg or not _mcp_cfg.mcp_enabled:
+        await _send_json(send, 404, {"error": "not_found"})
         return
 
     # RFC 9396 Protected Resource Metadata — Claude probes this before falling

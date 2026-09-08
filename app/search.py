@@ -109,6 +109,18 @@ def _norm(s):
     return (s or "").strip().lower()
 
 
+def _http_url(u):
+    """Normalise a URL field to http(s)-only, dropping anything else (SEC-04).
+
+    Templates render these as ``<a href>`` with no further validation, so a
+    ``javascript:`` (or other) scheme accepted here becomes a stored XSS
+    payload. This is the single choke point for job/contact URLs coming from
+    untrusted sources — search ingest, ``/api/ingest``, and MCP tools.
+    """
+    u = (u or "").strip()
+    return u if u.lower().startswith(("http://", "https://")) else ""
+
+
 def ingest_jobs(items, created_by="auto-search", default_status="Saved"):
     """Insert normalized job dicts, skipping duplicates. Returns (created_jobs, skipped)."""
     created, skipped = [], 0
@@ -163,7 +175,7 @@ def ingest_jobs(items, created_by="auto-search", default_status="Saved"):
             work_mode="Unknown",
             source=source,
             external_id=ext,
-            url=(it.get("url") or "").strip(),
+            url=_http_url(it.get("url")),
             salary=(it.get("salary") or "").strip(),
             status=default_status,
             notes=notes,

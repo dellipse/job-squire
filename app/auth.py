@@ -82,7 +82,14 @@ def account():
             flash("New password must be different from the current password.", "danger")
         else:
             current_user.set_password(form.new_password.data)
+            # SEC-05: rotate the session-invalidation stamp so every other
+            # outstanding session/remember-cookie for this account (a stolen
+            # one included) stops working immediately. Re-login refreshes
+            # *this* browser's cookie with the new token so the user making
+            # the change isn't logged out by their own action.
+            current_user.rotate_session_token()
             commit()
+            login_user(current_user, remember=True)
             flash("Password changed.", "success")
             return redirect(url_for("auth.account"))
     return render_template("account.html", form=form)

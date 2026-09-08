@@ -11,6 +11,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 """Application factory for the Job Squire."""
+import hmac
 import logging
 import os
 from datetime import timedelta, timezone as _utc
@@ -104,6 +105,14 @@ def create_app():
         # Defaults to DEPLOY_MODE's preset (see app/deploy.py) when unset;
         # an explicit SESSION_COOKIE_SECURE always overrides the preset.
         SESSION_COOKIE_SECURE=deploy_flags["secure_cookie"],
+        # SEC-05: the remember-me cookie is a separate mechanism from the
+        # session cookie above and Flask-Login's own defaults (365-day
+        # duration, Secure=False, SameSite=None) silently overrode the
+        # SESSION_DAYS/SESSION_COOKIE_SECURE guarantees this app otherwise
+        # enforces -- it was the one that actually kept a login alive.
+        REMEMBER_COOKIE_SECURE=deploy_flags["secure_cookie"],
+        REMEMBER_COOKIE_SAMESITE="Lax",
+        REMEMBER_COOKIE_DURATION=timedelta(days=int(os.environ.get("SESSION_DAYS", "7"))),
         DEPLOY_MODE=deploy_flags["mode"],
         TRUST_PROXY=deploy_flags["trust_proxy"],
         # Startup safety guard warnings (see app/deploy.py) -- rendered as a
@@ -138,7 +147,18 @@ def create_app():
 
     @login_manager.user_loader
     def load_user(user_id):
-        return db.session.get(User, int(user_id))
+        # SEC-05: user_id is "<id>:<session_token>" (see User.get_id()). A
+        # missing or mismatched token means the session/remember-cookie
+        # predates the account's last password change -- treat it as
+        # logged out rather than trusting a stale id.
+        raw_id, _, token = (user_id or "").partition(":")
+        try:
+            user = db.session.get(User, int(raw_id))
+        except (TypeError, ValueError):
+            return None
+        if user is None or not hmac.compare_digest(user.session_token or "", token):
+            return None
+        return user
 
     # --- Blueprints --------------------------------------------------------
     from .auth import auth_bp
@@ -400,6 +420,12 @@ def _run_migrations():
         # the base. Everything else defaults to not-base.
         "UPDATE candidate_assets SET is_base = 1 WHERE kind = 'Resume' AND is_base IS NULL",
         "UPDATE candidate_assets SET is_base = 0 WHERE is_base IS NULL",
+        # SEC-05: per-user session-invalidation stamp (see User.get_id() /
+        # rotate_session_token() in models.py). No DEFAULT here -- existing
+        # rows land as '' so the Python backfill below (which needs a real
+        # per-row random value, not a single SQL constant every user would
+        # share) can tell "not yet migrated" apart from an already-rotated token.
+        "ALTER TABLE users ADD COLUMN session_token VARCHAR(64) DEFAULT ''",
     ]
     for stmt in migrations:
         try:
@@ -413,6 +439,19 @@ def _run_migrations():
                 pass  # idempotent — column is already there
             else:
                 log.warning("migration skipped (%s): %s", type(e).__name__, e)
+
+    # SEC-05: backfill a real random session_token for every row still at the
+    # migration's '' sentinel (new installs get one from the column default
+    # at insert time, so this only ever touches upgraded rows).
+    try:
+        from .models import User as _User
+        import secrets as _secrets
+        for u in _User.query.filter((_User.session_token.is_(None)) | (_User.session_token == "")).all():
+            u.session_token = _secrets.token_urlsafe(32)
+        commit()
+    except Exception as e:  # noqa: BLE001
+        db.session.rollback()
+        log.warning("session_token backfill skipped: %s", e)
 
     # One-time data migration: populate api_enabled/mcp_enabled from legacy mode column.
     # Guard: only fires when the new boolean cols are still at their default (0), meaning

@@ -12,6 +12,7 @@
 #
 """Database models for the Job Squire."""
 import os
+import secrets
 from datetime import datetime, timezone
 
 from flask_login import UserMixin
@@ -99,12 +100,26 @@ class User(UserMixin, db.Model):
     jobs_default_sort = db.Column(db.String(200), nullable=True)
     jobs_default_status = db.Column(db.String(40), nullable=True)
     jobs_default_per_page = db.Column(db.Integer, nullable=True)
+    # SEC-05: Flask-Login "alternative token" -- included in get_id() so
+    # rotating it (on password change) invalidates every outstanding session
+    # and remember-cookie for this account, including one already stolen.
+    # Without this, a stolen remember-cookie (365-day default, see
+    # REMEMBER_COOKIE_DURATION in app/__init__.py) survives a password change.
+    session_token = db.Column(db.String(64), nullable=False,
+                              default=lambda: secrets.token_urlsafe(32))
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
 
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
+
+    def rotate_session_token(self):
+        """Invalidate every session/remember-cookie for this account."""
+        self.session_token = secrets.token_urlsafe(32)
+
+    def get_id(self):
+        return f"{self.id}:{self.session_token}"
 
     @property
     def is_admin(self):

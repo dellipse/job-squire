@@ -48,6 +48,7 @@ def mcp(app):
     m._codes.clear()
     m._tokens.clear()
     m._login_failures.clear()
+    m._register_attempts.clear()
 
     # Start each test with an empty on-disk token store.
     try:
@@ -58,7 +59,24 @@ def mcp(app):
     # Ensure no static MCP key leaks between tests.
     _set_static_key(m, "")
 
+    # The MCP Connector toggle gates the whole surface (SEC-03); these tests
+    # exercise that surface, so default it on. test_mcp_disabled_* below
+    # flips it off explicitly to cover the gate itself.
+    _set_mcp_enabled(m, True)
+
     return m
+
+
+def _set_mcp_enabled(m, enabled):
+    from app.extensions import db
+    from app.models import AIConfig
+    with m.flask_app.app_context():
+        cfg = db.session.get(AIConfig, 1)
+        if cfg is None:
+            cfg = AIConfig(id=1)
+            db.session.add(cfg)
+        cfg.mcp_enabled = enabled
+        db.session.commit()
 
 
 def _set_static_key(m, plaintext, *, allow_network=False, expires_at=None):
@@ -606,3 +624,122 @@ def test_authorize_post_bad_password_no_code(mcp):
     assert status == 200
     assert b"Incorrect username or password" in out
     assert mcp._codes == {}
+
+
+# ---------------------------------------------------------------------------
+# 8. SEC-01: auth page escaping and response security headers
+# ---------------------------------------------------------------------------
+
+def test_authorize_get_escapes_injected_state(mcp):
+    """A malicious `state` (or client_id/redirect_uri) must not break out of
+    the hidden input it's rendered into — the reflected-XSS finding."""
+    _, challenge = _pkce()
+    cid = _register_client(mcp, ["https://claude.ai/cb"])
+    payload = "\"><script>alert(1)</script>"
+    from urllib.parse import quote
+    qs = (f"client_id={cid}&redirect_uri=https://claude.ai/cb"
+          f"&code_challenge={challenge}&code_challenge_method=S256"
+          f"&state={quote(payload)}").encode()
+
+    status, _, out = _call(mcp, "GET", "/oauth/authorize", query_string=qs)
+
+    assert status == 200
+    assert b"<script>alert(1)</script>" not in out
+    assert b"&quot;&gt;&lt;script&gt;" in out
+
+
+def test_auth_page_shows_client_name_and_redirect_host(mcp):
+    _, challenge = _pkce()
+    cid = _register_client(mcp, ["https://claude.ai/cb"])
+    qs = (f"client_id={cid}&redirect_uri=https://claude.ai/cb"
+          f"&code_challenge={challenge}&code_challenge_method=S256").encode()
+
+    status, _, out = _call(mcp, "GET", "/oauth/authorize", query_string=qs)
+
+    assert status == 200
+    assert b"Test Client" in out
+    assert b"claude.ai" in out
+
+
+def test_responses_carry_security_headers(mcp):
+    status, headers, _ = _call(mcp, "GET", "/.well-known/oauth-authorization-server")
+    assert status == 200
+    assert headers.get("x-frame-options") == "DENY"
+    assert headers.get("x-content-type-options") == "nosniff"
+    assert "default-src 'none'" in headers.get("content-security-policy", "")
+
+
+# ---------------------------------------------------------------------------
+# 9. SEC-02: registration validates redirect_uris and is rate-limited
+# ---------------------------------------------------------------------------
+
+def test_register_rejects_non_https_redirect_uri(mcp):
+    body = json.dumps({"client_name": "Evil Client",
+                       "redirect_uris": ["javascript:alert(1)"]}).encode()
+    status, _, out = _call(mcp, "POST", "/oauth/register", body=body)
+    assert status == 400
+    assert mcp._clients == {}
+
+
+def test_register_rejects_uri_with_fragment(mcp):
+    body = json.dumps({"client_name": "Client",
+                       "redirect_uris": ["https://claude.ai/cb#frag"]}).encode()
+    status, _, out = _call(mcp, "POST", "/oauth/register", body=body)
+    assert status == 400
+    assert mcp._clients == {}
+
+
+def test_register_rate_limited_per_ip(mcp):
+    for _ in range(mcp._REGISTER_MAX_PER_WINDOW):
+        status, _, _ = _call(mcp, "POST", "/oauth/register",
+                             body=json.dumps({"redirect_uris": ["https://claude.ai/cb"]}).encode())
+        assert status == 201
+
+    status, _, out = _call(mcp, "POST", "/oauth/register",
+                           body=json.dumps({"redirect_uris": ["https://claude.ai/cb"]}).encode())
+    assert status == 429
+
+
+# ---------------------------------------------------------------------------
+# 10. SEC-03: mcp_enabled gates the whole OAuth/MCP surface
+# ---------------------------------------------------------------------------
+
+def test_mcp_disabled_returns_404_for_well_known(mcp):
+    _set_mcp_enabled(mcp, False)
+    status, _, _ = _call(mcp, "GET", "/.well-known/oauth-authorization-server")
+    assert status == 404
+
+
+def test_mcp_disabled_returns_404_for_register(mcp):
+    _set_mcp_enabled(mcp, False)
+    status, _, _ = _call(mcp, "POST", "/oauth/register",
+                         body=json.dumps({"redirect_uris": ["https://claude.ai/cb"]}).encode())
+    assert status == 404
+
+
+def test_mcp_disabled_returns_404_for_mcp_path_even_with_valid_bearer(mcp, monkeypatch):
+    inner, hits = _sentinel_inner()
+    monkeypatch.setattr(mcp, "_inner", inner)
+    now = time.time()
+    mcp._tokens["good"] = {"client_id": "c", "exp": now + 3600}
+    mcp._save_tokens(mcp._tokens)
+
+    _set_mcp_enabled(mcp, False)
+    status, _, _ = _call(mcp, "POST", "/mcp",
+                         headers=[(b"authorization", b"Bearer good")])
+
+    assert status == 404
+    assert hits["count"] == 0
+
+
+def test_mcp_disabled_returns_404_for_mcp_path_even_with_valid_static_key(mcp, monkeypatch):
+    inner, hits = _sentinel_inner()
+    monkeypatch.setattr(mcp, "_inner", inner)
+    _set_static_key(mcp, "s3cr3t-static-key")
+
+    _set_mcp_enabled(mcp, False)
+    status, _, _ = _call(mcp, "POST", "/mcp",
+                         headers=[(b"authorization", b"Bearer s3cr3t-static-key")])
+
+    assert status == 404
+    assert hits["count"] == 0

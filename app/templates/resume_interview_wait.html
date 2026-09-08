@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Resume interview · Getting Started · JobSquire{% endblock %}
+{% block content %}
+
+<p class="muted small">
+  <a href="{{ back_url }}">&larr; Back to Resume step</a>
+</p>
+
+<h1>Resume interview</h1>
+
+{# data-* attrs are read by app.js (inline scripts are blocked by CSP) #}
+<div id="riw-root"
+     data-poll-url="{{ url_for('main.ai_task_poll', run_id=run_id) }}"
+     data-continue-url="{{ url_for('onboarding.resume_interview_continue') }}"
+     data-csrf-token="{{ csrf_token() }}">
+  <section class="card">
+    <p id="riw-status"><span class="ts-spinner" aria-hidden="true"></span> Thinking…</p>
+    <p id="riw-error" class="muted" style="display:none"></p>
+    <div id="riw-actions" style="display:none; margin-top:1rem">
+      <a class="btn btn-outline" href="{{ url_for('onboarding.resume_interview') }}">Try again</a>
+      <a class="btn btn-outline" href="{{ back_url }}">Back to Resume step</a>
+    </div>
+  </section>
+</div>
+{% endblock %}

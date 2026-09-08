@@ -32,6 +32,15 @@
 
 set -euo pipefail
 
+# SEC-07: the archive below is NOT encrypted (see docs/backup-restore.md --
+# this script is the quick ad-hoc fallback; `job-squire backup` is the
+# encrypted, portable path). It contains data/.env (SECRET_KEY,
+# ADMIN_PASSWORD) in the clear, so at minimum it must not be world/group
+# readable. umask restricts every file this script creates (the tmp workdir,
+# the final archive); the explicit chmod below on the archive is
+# belt-and-suspenders in case DEST_DIR has a permissive default ACL.
+umask 077
+
 CONTAINER="${CONTAINER_NAME:-job-squire}"
 DATA_ENV_DIR="${DATA_ENV_DIR:-./job-squire/data}"
 DEST_DIR="${1:-./backups}"
@@ -73,8 +82,10 @@ fi
 
 ARCHIVE="$DEST_DIR/job-squire-backup-$TS.tgz"
 tar czf "$ARCHIVE" -C "$WORK" .
+chmod 600 "$ARCHIVE"
 
-echo "Wrote $ARCHIVE"
+echo "Wrote $ARCHIVE (mode 600 -- it holds SECRET_KEY and other secrets in the clear, unlike"
+echo "\`job-squire backup\`'s encrypted format; keep it off shared storage.)"
 echo "Contains: job-squire.db (integrity-checked snapshot), uploads/, candidate_profile.md,"
 echo "profile_prompt.md, oauth_tokens.json, privacy_vault.json, .env"
 echo "Restore with: ./scripts/restore.sh $ARCHIVE"
