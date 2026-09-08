@@ -18,11 +18,18 @@ ENV LSIO_FIRST_PARTY=false
 
 # The base tag above is pinned to a dated LinuxServer release (see comment
 # above), so it lags Alpine's rolling package repos for CVE fixes between
-# LinuxServer's own rebuilds. c-ares 1.34.6-r0 in this base has
-# CVE-2026-33630 (use-after-free/double-free in query-completion handling);
-# 1.34.8-r0 fixing it is already in Alpine's v3.23 main repo. Upgrade it
-# explicitly here instead of waiting on LinuxServer's next dated tag.
-RUN apk add --no-cache --upgrade c-ares
+# LinuxServer's own rebuilds. Upgrade the affected packages explicitly here
+# instead of waiting on LinuxServer's next dated tag:
+#  - c-ares 1.34.6-r0: CVE-2026-33630 (use-after-free/double-free in
+#    query-completion handling); 1.34.8-r0 fixes it.
+#  - jq 1.8.1-r0: CVE-2026-32316 / CVE-2026-40164 (DoS / potential code
+#    execution, hash-collision DoS); 1.8.2-r0 fixes both.
+#  - libssl3/libcrypto3 3.5.7-r0: CVE-2026-14456 (OpenSSL QUIC server
+#    unbounded memory growth DoS); 3.5.8-r0 fixes it.
+# All three found by the CI Trivy gate (job-squire-audit-2026-09-08.md
+# follow-up, 2026-09-08); fixed versions confirmed already in Alpine 3.24's
+# repo index at the time of this change.
+RUN apk add --no-cache --upgrade c-ares jq libssl3 libcrypto3
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -56,10 +63,19 @@ WORKDIR /app
 # wheel installs, e.g. CVE-2026-8643, CVE-2026-6357, CVE-2025-8869). pip
 # itself isn't invoked at runtime by the running app, but it stays present
 # in the shipped image, so upgrade it explicitly rather than leaving
-# whatever `ensurepip` bundled.
+# whatever `ensurepip` bundled. `ensurepip` bundles setuptools alongside
+# pip -- same reasoning applies, and it's exactly why CVE-2025-47273
+# (setuptools path traversal, fixed 78.1.1) turned up in the CI Trivy gate
+# on 2026-09-08 at the bundled 70.3.0: this line only upgraded pip, never
+# setuptools. `msgpack` (GHSA-6v7p-g79w-8964, fixed 1.2.1) showed up in the
+# same scan at 1.1.2 despite no package in requirements.txt depending on
+# it -- not reproducible in a clean `pip install -r requirements.txt`
+# locally, so it's pinned here defensively too, in case it's a real
+# transitive resolution difference under this base's specific
+# Python/musl/pip combination rather than a stale cached layer.
 RUN apk add --no-cache python3 py3-pip && \
     python3 -m venv /opt/venv && \
-    /opt/venv/bin/pip install --no-cache-dir --upgrade pip
+    /opt/venv/bin/pip install --no-cache-dir --upgrade pip setuptools 'msgpack>=1.2.1'
 
 # Install dependencies first for better layer caching. requirements.txt pins
 # pydantic/pydantic-core explicitly (transitive via mcp) so this resolution
