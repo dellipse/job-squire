@@ -37,12 +37,25 @@
 
 set -euo pipefail
 
+# SEC-07: the restored data/.env (SECRET_KEY etc.) is written to $WORK and
+# then $DATA_ENV_DIR below in the clear -- keep those owner-only regardless
+# of the invoking shell's umask.
+umask 077
+
 BACKUP_FILE="${1:?Usage: ./scripts/restore.sh path/to/job-squire-backup-*.tgz}"
 CONTAINER="${CONTAINER_NAME:-job-squire}"
 DATA_ENV_DIR="${DATA_ENV_DIR:-./job-squire/data}"
 
 if [[ ! -f "$BACKUP_FILE" ]]; then
   echo "Backup file not found: $BACKUP_FILE" >&2
+  exit 1
+fi
+
+# SEC-07: reject an archive containing an absolute path or a '..'
+# path-traversal segment before extracting anything from it -- a crafted
+# archive could otherwise write outside $WORK.
+if tar tzf "$BACKUP_FILE" | grep -Eq '^/|(^|/)\.\.(/|$)'; then
+  echo "Refusing to extract $BACKUP_FILE: it contains an absolute path or a '..' entry." >&2
   exit 1
 fi
 

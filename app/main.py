@@ -842,19 +842,18 @@ def jobs_build_kits_api():
 @main_bp.route("/jobs/<int:job_id>/prep-interview", methods=["POST"])
 @login_required
 def job_prep_interview(job_id):
-    """Generate an interview prep guide for a single job via the API (api_mode button)."""
-    job = db.get_or_404(Job, job_id)
-    ai_cfg = _singleton(AIConfig)
-    if not ai_cfg.api_enabled:
-        flash("Interview prep requires Automatic features to be enabled in Settings.", "warning")
-        return redirect(url_for("main.job_detail", job_id=job_id))
-    try:
+    """Generate an interview prep guide for a single job via the API (api_mode button).
+
+    REL-01: was previously a synchronous in-request call — the same class of
+    gunicorn-timeout SIGKILL as the job 1162 ats-gap incident. Routed through
+    the shared background-thread + poll pattern like the other single-job AI
+    actions below.
+    """
+    def _work(job):
         from .ai import run_interview_prep_single
         run_interview_prep_single(job)
-        flash("Interview prep guide saved.", "success")
-    except Exception as exc:  # noqa: BLE001
-        flash(f"Prep guide generation failed: {exc}", "danger")
-    return redirect(url_for("main.job_detail", job_id=job_id))
+        return {}
+    return _run_single_job_ai_task(job_id, "prep_interview", "Interview prep", _work)
 
 
 @main_bp.route("/jobs/<int:job_id>/delete", methods=["POST"])
@@ -2160,6 +2159,13 @@ def ai_hub():
 @main_bp.route("/ai/analyze", methods=["POST"])
 @login_required
 def ai_analyze():
+    """Full-pipeline AI analysis (api_mode "Analyze now" button).
+
+    REL-01: was previously a synchronous in-request call — the same class of
+    gunicorn-timeout SIGKILL as the job 1162 ats-gap incident. Routed through
+    the shared background-thread + poll pattern used by triage/followup/
+    weekly_review (see `ai_run_task` just above).
+    """
     if not ConfirmForm().validate_on_submit():
         abort(400)
     cfg = _singleton(AIConfig)
@@ -2169,16 +2175,36 @@ def ai_analyze():
     if not api_key and not has_providers:
         flash("Add an AI provider or Anthropic API key under Settings first.", "warning")
         return redirect(url_for("main.ai_hub"))
-    try:
-        parsed, provider = ai.run_api_analysis(api_key, cfg.model, cfg.thinking_mode or "disabled")
-    except Exception as e:  # noqa: BLE001 - surface API/parse errors to the user
-        flash(f"Analysis failed: {e.__class__.__name__}: {str(e)[:200]}", "danger")
-        return redirect(url_for("main.ai_hub"))
-    updated, missing = ai.apply_analysis(
-        parsed, created_by=current_user.display_name or current_user.username,
-        provider=provider)
-    flash(f"AI analyzed your pipeline. Updated {updated} job(s).", "success")
-    return redirect(url_for("main.ai_hub"))
+
+    run_id = uuid.uuid4().hex
+    data_dir = current_app.config["DATA_DIR"]
+    status = _TaskStatus(run_id, "analyze", data_dir)
+    _app = current_app._get_current_object()
+    ai_log = logging.getLogger("app.ai")
+    created_by = current_user.display_name or current_user.username
+
+    def _run():
+        handler = _StatusLogHandler(status)
+        prior_level = ai_log.level
+        ai_log.addHandler(handler)
+        ai_log.setLevel(logging.INFO)
+        with _app.app_context():
+            try:
+                status.log("INFO Analyzing the full pipeline…")
+                parsed, provider = ai.run_api_analysis(api_key, cfg.model, cfg.thinking_mode or "disabled")
+                updated, missing = ai.apply_analysis(parsed, created_by=created_by, provider=provider)
+                status.done({"updated": updated, "skipped": missing,
+                            "overall_summary": parsed.get("overall_summary", "")})
+            except Exception as exc:  # noqa: BLE001
+                db.session.rollback()
+                log.exception("ai_analyze failed")
+                status.fail(exc)
+            finally:
+                ai_log.removeHandler(handler)
+                ai_log.setLevel(prior_level)
+
+    threading.Thread(target=_run, daemon=True).start()
+    return redirect(url_for("main.ai_task_status", run_id=run_id, task="analyze"))
 
 
 class _TaskStatus:
@@ -2335,6 +2361,7 @@ def ai_task_status(run_id: str):
     labels = {
         "triage": "Auto-Triage", "followup": "Follow-Up Drafts", "weekly_review": "Weekly Review",
         "ats_gap": "ATS Gap Analysis", "score_fit": "Score Fit", "draft_followup": "Draft Follow-Up",
+        "prep_interview": "Interview Prep", "analyze": "AI Analysis",
     }
     label = labels.get(task, task.replace("_", " ").title())
     return render_template("task_status.html", run_id=run_id, task=task, label=label)

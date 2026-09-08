@@ -220,9 +220,9 @@
     <h2>Interview debriefs</h2>
     <div class="actions">
       {% if ai_mode == 'api' %}
-      <form method="post" action="{{ url_for('main.job_prep_interview', job_id=job.id) }}" style="display:inline">
+      <form method="post" action="{{ url_for('main.job_prep_interview', job_id=job.id) }}" target="_blank" style="display:inline">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button class="btn" type="submit" data-loading-text="Preparing…">Prep for interview</button>
+        <button class="btn" type="submit" data-loading-text="Opened in a new tab…">Prep for interview</button>
       </form>
       {% elif claude_buttons_enabled %}
       {% set iv_round = job.interviews[-1].round_type if job.interviews else '' %}

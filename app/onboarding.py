@@ -664,8 +664,17 @@ def resume_interview():
     State lives entirely in a hidden `history_json` form field (a list of
     {role, content} turns) rather than a server-side session, matching this
     app's stateless-request style. See ai.run_resume_interview_turn().
+
+    REL-01: the actual AI call for each turn used to run on the request
+    thread, which crashed a gunicorn worker mid-interview against a slow
+    provider (WORKER TIMEOUT, 2026-07-13 — see docs/PLAN-onboarding.md's
+    "Follow-up" section). Each turn now runs in a background thread behind
+    the same `_TaskStatus` + poll pattern as the other AI call sites
+    (`app/main.py:_run_single_job_ai_task` / job 1162 ats-gap incident);
+    `resume_interview_continue()` below does the (AI-call-free, so
+    timeout-safe) template rendering once a turn finishes.
     """
-    from .ai import run_resume_interview_turn, _has_ranked_providers
+    from .ai import _has_ranked_providers
 
     ai_cfg = db.session.get(AIConfig, 1)
     has_provider = _has_ranked_providers() or bool(ai_cfg and ai_cfg.api_key_enc)
@@ -689,28 +698,86 @@ def resume_interview():
             history.append({"role": "user", "content": answer})
 
     back_url = url_for("onboarding.step", step="profile")
-    try:
-        result = run_resume_interview_turn(history, candidate_name)
-    except Exception as exc:  # noqa: BLE001
-        log.warning("resume interview turn failed: %s", exc)
-        flash(f"The AI interview hit an error ({exc}). Try again, or use the "
-              "copy-paste or Claude connector option instead.", "danger")
-        return render_template("resume_interview.html", history=history, done=False,
-                               history_json=json.dumps(history), question=None,
-                               back_url=back_url)
 
-    if result.get("done"):
+    import threading
+    from .main import _StatusLogHandler, _TaskStatus
+
+    run_id = uuid.uuid4().hex
+    data_dir = current_app.config["DATA_DIR"]
+    status = _TaskStatus(run_id, "resume_interview_turn", data_dir)
+    _app = current_app._get_current_object()
+    ai_log = logging.getLogger("app.ai")
+
+    def _run():
+        from .ai import run_resume_interview_turn
+        handler = _StatusLogHandler(status)
+        prior_level = ai_log.level
+        ai_log.addHandler(handler)
+        ai_log.setLevel(logging.INFO)
+        with _app.app_context():
+            try:
+                result = run_resume_interview_turn(history, candidate_name)
+                if result.get("done"):
+                    payload = {
+                        "done": True,
+                        "history": history,
+                        "resume_markdown": result.get("resume_markdown", ""),
+                        "profile_facts": result.get("profile_facts", ""),
+                    }
+                else:
+                    payload = {
+                        "done": False,
+                        "history": history + [{"role": "assistant",
+                                               "content": result.get("message", "")}],
+                        "question": result.get("message", ""),
+                    }
+                status.done(payload)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("resume interview turn failed: %s", exc)
+                status.fail(exc)
+            finally:
+                ai_log.removeHandler(handler)
+                ai_log.setLevel(prior_level)
+
+    threading.Thread(target=_run, daemon=True).start()
+    return render_template(
+        "resume_interview_wait.html", run_id=run_id, back_url=back_url,
+    )
+
+
+@onboarding_bp.route("/getting-started/profile/interview/continue", methods=["POST"])
+@login_required
+@_admin_required
+def resume_interview_continue():
+    """Render the next resume-interview turn once its background AI call has
+    finished (posted here by resume_interview_wait.html's poller). Pure
+    template rendering — no AI call, so this can't hit the gunicorn timeout
+    that motivated REL-01.
+    """
+    back_url = url_for("onboarding.step", step="profile")
+    try:
+        payload = json.loads(request.form.get("payload") or "{}")
+    except ValueError:
+        payload = {}
+
+    if not isinstance(payload, dict) or not payload:
+        flash("The AI interview hit an error. Try again, or use the "
+              "copy-paste or Claude connector option instead.", "danger")
+        return render_template("resume_interview.html", history=[], done=False,
+                               history_json="[]", question=None, back_url=back_url)
+
+    if payload.get("done"):
         return render_template(
-            "resume_interview.html", history=history, done=True,
-            resume_markdown=result.get("resume_markdown", ""),
-            profile_facts=result.get("profile_facts", ""),
+            "resume_interview.html", history=payload.get("history") or [], done=True,
+            resume_markdown=payload.get("resume_markdown", ""),
+            profile_facts=payload.get("profile_facts", ""),
             back_url=back_url,
         )
 
-    history.append({"role": "assistant", "content": result.get("message", "")})
+    history = payload.get("history") or []
     return render_template(
         "resume_interview.html", history=history, done=False,
-        history_json=json.dumps(history), question=result.get("message", ""),
+        history_json=json.dumps(history), question=payload.get("question", ""),
         back_url=back_url,
     )
 

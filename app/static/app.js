@@ -784,6 +784,12 @@ document.addEventListener('DOMContentLoaded', function () {
         if (tsTask === 'ats_gap' && r.overall_match_estimate) {
           parts.push('Match estimate: ' + r.overall_match_estimate);
         }
+        if (tsTask === 'prep_interview' && r.job_id !== undefined) {
+          parts.push('Prep guide saved');
+        }
+        if (tsTask === 'analyze' && r.updated !== undefined) {
+          parts.push('Updated: ' + r.updated);
+        }
         if (tsTask === 'build_kit' && r.title !== undefined && r.company !== undefined && !parts.length) {
           parts.push('Kit built for ' + r.title + ' at ' + r.company);
         }
@@ -813,7 +819,7 @@ document.addEventListener('DOMContentLoaded', function () {
         // Single-job result: ats-gap, score-fit, draft-followup. A link back to
         // the job, plus an inline preview of whatever the task produced.
         var jobExtra = document.getElementById('ts-job-extra');
-        var singleJobTasks = {ats_gap: 1, score_fit: 1, draft_followup: 1};
+        var singleJobTasks = {ats_gap: 1, score_fit: 1, draft_followup: 1, prep_interview: 1};
         if (jobExtra && singleJobTasks[tsTask] && r.job_id) {
           jobExtra.style.display = '';
           var jLink = document.getElementById('ts-job-link');
@@ -833,6 +839,8 @@ document.addEventListener('DOMContentLoaded', function () {
           } else if (tsTask === 'ats_gap') {
             resultTitle.textContent = 'ATS match estimate: ' + (r.overall_match_estimate || 'N/A');
             body = (r.missing_count || 0) + ' missing keyword(s) identified — see the job page for the full breakdown.';
+          } else if (tsTask === 'prep_interview') {
+            resultTitle.textContent = 'Interview prep guide saved';
           }
           if (body) {
             resultText.textContent = body;
@@ -879,6 +887,75 @@ document.addEventListener('DOMContentLoaded', function () {
         /^Running… .*? elapsed/, 'Running… ' + tsElapsedText() + ' elapsed');
     }, 1000);
     tsPoll();
+  }
+
+  // -----------------------------------------------------------------------
+  // Resume interview turn — background AI call + auto-continue (REL-01).
+  // Polls the same /ai/task/<run_id>/poll endpoint as the task-status page,
+  // then posts the finished turn's result to the render-only "continue"
+  // endpoint so the conversational wizard keeps going without ever blocking
+  // a gunicorn worker on the AI call itself.
+  // -----------------------------------------------------------------------
+  var riwRoot = document.getElementById('riw-root');
+  if (riwRoot) {
+    var riwPollUrl     = riwRoot.getAttribute('data-poll-url');
+    var riwContinueUrl = riwRoot.getAttribute('data-continue-url');
+    var riwCsrf        = riwRoot.getAttribute('data-csrf-token');
+    var riwStatus      = document.getElementById('riw-status');
+    var riwError       = document.getElementById('riw-error');
+    var riwActions     = document.getElementById('riw-actions');
+    var riwTimer;
+
+    function riwShowError(msg) {
+      if (riwStatus) riwStatus.style.display = 'none';
+      riwError.textContent = msg;
+      riwError.style.display = '';
+      riwActions.style.display = '';
+    }
+
+    function riwContinue(result) {
+      if (riwStatus) riwStatus.textContent = 'Got it — continuing…';
+      var form = document.createElement('form');
+      form.method = 'post';
+      form.action = riwContinueUrl;
+      var csrfInput = document.createElement('input');
+      csrfInput.type = 'hidden';
+      csrfInput.name = 'csrf_token';
+      csrfInput.value = riwCsrf;
+      form.appendChild(csrfInput);
+      var payloadInput = document.createElement('input');
+      payloadInput.type = 'hidden';
+      payloadInput.name = 'payload';
+      payloadInput.value = JSON.stringify(result || {});
+      form.appendChild(payloadInput);
+      document.body.appendChild(form);
+      form.submit();
+    }
+
+    function riwPoll() {
+      fetch(riwPollUrl, {credentials: 'same-origin'})
+        .then(function(r) {
+          if (r.status === 404) { throw new Error('not_found'); }
+          return r.json();
+        })
+        .then(function(data) {
+          if (data.status === 'running') return;
+          clearInterval(riwTimer);
+          if (data.status === 'done') {
+            riwContinue(data.result);
+          } else {
+            riwShowError('The AI interview hit an error (' + (data.error || 'unknown') +
+              '). Try again, or use the copy-paste or Claude connector option instead.');
+          }
+        })
+        .catch(function() {
+          clearInterval(riwTimer);
+          riwShowError('Lost track of the interview run. Try again.');
+        });
+    }
+
+    riwTimer = setInterval(riwPoll, 1500);
+    riwPoll();
   }
 
   // -----------------------------------------------------------------------

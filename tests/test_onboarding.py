@@ -396,6 +396,68 @@ class TestResumeInterview:
         assert "Jordan Lee" in result2["resume_markdown"]
         assert "operations manager" in result2["profile_facts"].lower()
 
+    def _configure_provider(self, app):
+        from app.crypto import encrypt
+        from app.models import AIConfig
+        with app.app_context():
+            cfg = db.session.get(AIConfig, 1)
+            if cfg is None:
+                cfg = AIConfig(id=1)
+                db.session.add(cfg)
+            cfg.api_key_enc = encrypt(app.config["SECRET_KEY"], "fake-anthropic-key")
+            db.session.commit()
+
+    def test_resume_interview_get_returns_quickly_even_if_provider_stalls(
+            self, clean_state, client, app, monkeypatch):
+        """REL-01 regression: the AI turn must run off the request thread —
+        assert the route responds long before a stalled provider would, and
+        renders the wait/poll page rather than the finished question."""
+        _login_admin(client, app)
+        self._configure_provider(app)
+
+        import time as _time
+        import app.ai as ai_mod
+
+        def _slow_call(*a, **k):
+            _time.sleep(1.0)
+            return "What roles are you targeting?", "test-provider"
+        monkeypatch.setattr(ai_mod, "call_with_fallback", _slow_call)
+
+        started = _time.monotonic()
+        r = client.get("/getting-started/profile/interview")
+        elapsed = _time.monotonic() - started
+
+        assert r.status_code == 200
+        assert elapsed < 0.5, f"request thread blocked for {elapsed}s -- REL-01 regression"
+        assert b'id="riw-root"' in r.data
+        assert b"data-poll-url" in r.data
+
+    def test_resume_interview_continue_renders_next_question(self, clean_state, client, app):
+        import json
+        _login_admin(client, app)
+        r = client.post("/getting-started/profile/interview/continue", data={
+            "payload": json.dumps({
+                "done": False,
+                "history": [{"role": "assistant", "content": "What roles are you targeting?"}],
+                "question": "What roles are you targeting?",
+            }),
+        })
+        assert r.status_code == 200
+        assert b"What roles are you targeting?" in r.data
+
+    def test_resume_interview_continue_renders_done(self, clean_state, client, app):
+        import json
+        _login_admin(client, app)
+        r = client.post("/getting-started/profile/interview/continue", data={
+            "payload": json.dumps({
+                "done": True,
+                "resume_markdown": "# Jordan Lee",
+                "profile_facts": "Targets operations manager roles.",
+            }),
+        })
+        assert r.status_code == 200
+        assert b"Jordan Lee" in r.data
+
 
 class TestResumeUploadAutoConvert:
     """Uploading a "Base Resume" document should auto-convert it to markdown

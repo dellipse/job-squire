@@ -394,6 +394,25 @@ def test_ingest_skips_incomplete_rows(app_context):
     assert skipped == 2
 
 
+def test_ingest_drops_non_http_url_scheme(app_context):
+    """SEC-04: a javascript: (or other non-http(s)) URL must not be stored —
+    templates render job.url straight into an <a href>."""
+    from app.search import ingest_jobs
+    items = [{"title": "Dev", "company": "EvilCo", "source": "adzuna",
+              "url": "javascript:alert(document.cookie)"}]
+    created, skipped = ingest_jobs(items)
+    assert len(created) == 1
+    assert created[0].url == ""
+
+
+def test_ingest_keeps_http_and_https_url(app_context):
+    from app.search import ingest_jobs
+    items = [{"title": "Dev", "company": "GoodCo", "source": "adzuna",
+              "url": "https://example.com/job/123"}]
+    created, skipped = ingest_jobs(items)
+    assert created[0].url == "https://example.com/job/123"
+
+
 # ---------------------------------------------------------------------------
 # 5. Cooldown + daily-run bookkeeping in search.py
 # ---------------------------------------------------------------------------

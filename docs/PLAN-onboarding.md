@@ -118,6 +118,14 @@ Fixed by dropping the singleton assumption rather than patching around it:
 
 ## Follow-up — resume interview should move to the async pattern (noted 2026-07-13)
 
+**Status: first bullet DONE (2026-09-08, REL-01 audit finding).** `resume_interview()` now
+dispatches each turn to a background thread behind the same `_TaskStatus` + poll pattern as the
+other AI call sites, rendering `resume_interview_wait.html` (polls `GET /ai/task/<run_id>/poll`)
+instead of blocking the request. A new AI-call-free route, `resume_interview_continue()`, does the
+actual template rendering once a turn finishes — see `app/onboarding.py` and
+`app/static/app.js`'s `riw-root` block. The second bullet (a real multi-turn chat session /
+streaming instead of resend-the-whole-transcript) is still open.
+
 `onboarding.resume_interview()` → `ai.run_resume_interview_turn()` (`app/ai.py:1407`) still calls
 `call_with_fallback()` directly on the request thread — one full round trip per turn, blocking a
 gunicorn worker for the whole model call. Every other slow-AI-call route in this codebase (triage,

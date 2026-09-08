@@ -25,9 +25,9 @@
       {% endfor %}
     </p>
     {% endif %}
-    <form method="post" action="{{ url_for('main.ai_analyze') }}">
+    <form method="post" action="{{ url_for('main.ai_analyze') }}" target="_blank">
       {{ confirm_form.hidden_tag() }}
-      <button class="btn btn-primary" type="submit">Analyze now</button>
+      <button class="btn btn-primary" type="submit" data-loading-text="Opened in a new tab…">Analyze now</button>
     </form>
     {% if ai_providers %}
     <p class="muted small">Tries each provider in order; falls back to the next on rate-limit or server errors.</p>
