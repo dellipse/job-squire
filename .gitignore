@@ -12,3 +12,6 @@ CLAUDE.md
 AGENTS.md
 .DS_Store
 .claude/settings.local.json
+# Generated at build time and attested to the published image (see the
+# "Attest SBOM" step in ci.yml) -- not committed, see sbom/README.md.
+sbom/job-squire.cdx.json

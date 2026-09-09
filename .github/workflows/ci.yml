@@ -102,7 +102,9 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      # contents: read is enough now that this job no longer pushes a commit
+      # back to main (see the "Attest SBOM" step's comment below).
+      contents: read
       packages: write
       id-token: write
       security-events: write
@@ -249,6 +251,22 @@ jobs:
         run: python scripts/generate_sbom.py
 
       - name: Attest SBOM to the published image
+        # This attestation -- signed, and cryptographically tied to the exact
+        # digest that just got pushed -- is the SBOM's canonical, verifiable
+        # home (`cosign verify-attestation` / `docker buildx imagetools
+        # inspect`). A previous version of this job also committed the same
+        # file to sbom/job-squire.cdx.json in the repo for convenience, but
+        # that copy carried no integrity guarantee (a plain JSON file anyone
+        # with write access could hand-edit, not tied to any specific image
+        # build) and had gone silently stale for weeks whenever this job
+        # failed a step upstream (see git history / job-squire-audit-
+        # 2026-09-08.md's DEP-01 finding). It also couldn't be committed
+        # directly to protected main at all once branch protection started
+        # requiring lint/test/pip-audit to pass on every ref update, since
+        # this step's [skip ci] commit could never produce those checks on
+        # its own SHA (confirmed 2026-09-08: 5/5 retries rejected on the
+        # first run that got far enough to reach this step). Dropped rather
+        # than worked around -- see sbom/README.md.
         env:
           DIGEST: ${{ steps.push.outputs.digest }}
         run: |
@@ -256,38 +274,3 @@ jobs:
             --predicate sbom/job-squire.cdx.json \
             --type cyclonedx \
             "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${DIGEST}"
-
-      - name: Commit SBOM if changed
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          # Regenerate-on-latest instead of rebasing. Another push to main off
-          # the same trigger -- a second build-and-publish run, or release.yml's
-          # CLI-stamp commit -- can land first. Rebasing our SBOM commit onto
-          # theirs conflicts whenever both touched sbom/job-squire.cdx.json
-          # (confirmed 2026-07-18: the merge run's SBOM commit vs. the version-
-          # bump run's, a plain rebase conflict that failed the build). So on
-          # every attempt we reset to the current tip of main and regenerate the
-          # SBOM there: the commit always applies cleanly and the file reflects
-          # main's real state. The SBOM is deterministic (generate_sbom.py drops
-          # the per-run timestamp/serialNumber), so an unchanged dependency set
-          # regenerates byte-identically and produces no commit at all.
-          for attempt in 1 2 3 4 5; do
-            git fetch --quiet origin main
-            git reset --quiet --hard origin/main
-            python scripts/generate_sbom.py
-            if git diff --quiet -- sbom/job-squire.cdx.json; then
-              echo "SBOM unchanged on main -- nothing to commit."
-              exit 0
-            fi
-            git add sbom/job-squire.cdx.json
-            git commit -m "CHORE: Update SBOM (${SHORT_SHA}) [skip ci]"
-            if git push origin HEAD:main; then
-              echo "SBOM committed on attempt ${attempt}."
-              exit 0
-            fi
-            echo "Push lost a race (attempt ${attempt}); regenerating on the new tip..."
-            sleep $((RANDOM % 5 + 2))
-          done
-          echo "Could not push SBOM update after 5 attempts." >&2
-          exit 1
