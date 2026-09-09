@@ -63,8 +63,10 @@ jobs:
 
       - name: Enforce overall coverage floor
         # Ratchet: raise this as coverage of the remaining modules (ai, main,
-        # worker, notify, websearch) is added. Measured 35% at this pass.
-        run: coverage report --fail-under=33
+        # worker, notify, websearch) is added. Measured 57% at this pass
+        # (TEST-01: route smoke tests for the previously-untested
+        # destructive/admin routes, plus test_worker.py).
+        run: coverage report --fail-under=50
 
       - name: Enforce critical-module coverage floor
         # The security- and correctness-critical surfaces carry a higher bar:
