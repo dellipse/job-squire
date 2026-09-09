@@ -97,7 +97,7 @@
   <h2>Per-job analysis</h2>
   <ul class="followups">
     {% for j in analyzed_jobs %}
-    <li><a href="{{ url_for('main.job_detail', job_id=j.id) }}">{{ j.title }} — {{ j.company }}</a>
+    <li><a href="{{ url_for('jobs.job_detail', job_id=j.id) }}">{{ j.title }} — {{ j.company }}</a>
         <span class="muted small">{{ j.ai_analysis_at | local_date if j.ai_analysis_at else '' }}</span></li>
     {% endfor %}
   </ul>

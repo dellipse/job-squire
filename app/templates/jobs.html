@@ -8,12 +8,12 @@
     {% if claude_buttons_enabled and search_prompt %}
     <button class="btn btn-outline open-in-claude-btn" data-prompt="{{ search_prompt | e }}">Search jobs in Claude ↗</button>
     {% endif %}
-    <a class="btn btn-outline" href="{{ url_for('main.export_csv') }}">Export CSV</a>
-    <a class="btn btn-primary" href="{{ url_for('main.job_new') }}">+ Add job</a>
+    <a class="btn btn-outline" href="{{ url_for('jobs.export_csv') }}">Export CSV</a>
+    <a class="btn btn-primary" href="{{ url_for('jobs.job_new') }}">+ Add job</a>
   </div>
 </div>
 
-<form class="filters" method="get" action="{{ url_for('main.jobs_list') }}" id="jobs-filter-form">
+<form class="filters" method="get" action="{{ url_for('jobs.jobs_list') }}" id="jobs-filter-form">
   <input type="hidden" name="sort" id="sort-input" value="{{ sort_str }}">
   <input type="hidden" name="per_page" id="per-page-input" value="{{ per_page }}">
   <input type="text" name="q" value="{{ q }}" placeholder="Search company, title, location">
@@ -34,12 +34,12 @@
   <div class="table-info">
     <span class="muted">{{ total }} job{{ 's' if total != 1 }}</span>
     {% if sort_str and sort_str != 'created_at:desc' %}
-    <a class="clear-sort" href="{{ url_for('main.jobs_list', q=q, status=current_status, per_page=per_page, sort='') }}">✕ Clear sort</a>
+    <a class="clear-sort" href="{{ url_for('jobs.jobs_list', q=q, status=current_status, per_page=per_page, sort='') }}">✕ Clear sort</a>
     {% endif %}
   </div>
   <div class="toolbar-right">
     <div class="save-view-wrap">
-      <form method="post" action="{{ url_for('main.jobs_save_default_view') }}" id="save-view-form">
+      <form method="post" action="{{ url_for('jobs.jobs_save_default_view') }}" id="save-view-form">
         {{ confirm_form.hidden_tag() }}
         <input type="hidden" name="sort" value="{{ sort_str }}">
         <input type="hidden" name="status" value="{{ current_status }}">
@@ -47,7 +47,7 @@
         <button type="submit" class="btn btn-sm btn-save-view" title="Save current filter, sort, and page size as your default view">⭐ Save view</button>
       </form>
       {% if has_default_view %}
-      <form method="post" action="{{ url_for('main.jobs_clear_default_view') }}" style="display:inline">
+      <form method="post" action="{{ url_for('jobs.jobs_clear_default_view') }}" style="display:inline">
         {{ confirm_form.hidden_tag() }}
         <button type="submit" class="btn btn-sm btn-clear-view" title="Reset to system defaults">✕ Clear default</button>
       </form>
@@ -65,7 +65,7 @@
 </div>
 
 <!-- Hidden bulk-update form. Checkboxes write into this form. -->
-<form id="bulk-form" method="post" action="{{ url_for('main.jobs_bulk_update') }}" style="display:none">
+<form id="bulk-form" method="post" action="{{ url_for('jobs.jobs_bulk_update') }}" style="display:none">
   {{ confirm_form.hidden_tag() }}
   <div id="bulk-job-ids"></div>
   <input type="hidden" name="action" id="bulk-action" value="">
@@ -106,7 +106,7 @@
   </thead>
   <tbody>
     {% for j in jobs %}
-    <tr data-href="{{ url_for('main.job_detail', job_id=j.id) }}">
+    <tr data-href="{{ url_for('jobs.job_detail', job_id=j.id) }}">
       <td class="col-cb" onclick="event.stopPropagation()">
         <input type="checkbox" class="job-cb" value="{{ j.id }}" aria-label="Select {{ j.company }}">
       </td>
@@ -163,14 +163,14 @@
 <div class="pagination">
   <div class="page-links">
     {% if pagination.has_prev %}
-    <a href="{{ url_for('main.jobs_list', page=pagination.prev_num, per_page=per_page, q=q, status=current_status, sort=sort_str) }}">&laquo;</a>
+    <a href="{{ url_for('jobs.jobs_list', page=pagination.prev_num, per_page=per_page, q=q, status=current_status, sort=sort_str) }}">&laquo;</a>
     {% else %}
     <span class="page-disabled">&laquo;</span>
     {% endif %}
 
     {% for p in pagination.iter_pages(left_edge=1, right_edge=1, left_current=2, right_current=2) %}
       {% if p %}
-        <a href="{{ url_for('main.jobs_list', page=p, per_page=per_page, q=q, status=current_status, sort=sort_str) }}"
+        <a href="{{ url_for('jobs.jobs_list', page=p, per_page=per_page, q=q, status=current_status, sort=sort_str) }}"
            class="{{ 'page-current' if p == pagination.page else '' }}">{{ p }}</a>
       {% else %}
         <span class="page-ellipsis">…</span>
@@ -178,7 +178,7 @@
     {% endfor %}
 
     {% if pagination.has_next %}
-    <a href="{{ url_for('main.jobs_list', page=pagination.next_num, per_page=per_page, q=q, status=current_status, sort=sort_str) }}">&raquo;</a>
+    <a href="{{ url_for('jobs.jobs_list', page=pagination.next_num, per_page=per_page, q=q, status=current_status, sort=sort_str) }}">&raquo;</a>
     {% else %}
     <span class="page-disabled">&raquo;</span>
     {% endif %}
@@ -188,7 +188,7 @@
 {% endif %}
 
 {% else %}
-<p class="muted">No jobs match. <a href="{{ url_for('main.job_new') }}">Add one</a>.</p>
+<p class="muted">No jobs match. <a href="{{ url_for('jobs.job_new') }}">Add one</a>.</p>
 {% endif %}
 
 <style>

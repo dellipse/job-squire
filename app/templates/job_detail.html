@@ -8,11 +8,11 @@
   </div>
   <div class="actions">
     {% if ai_mode == 'api' %}
-    <form method="post" action="{{ url_for('main.job_score_fit', job_id=job.id) }}" target="_blank" style="display:inline">
+    <form method="post" action="{{ url_for('jobs.job_score_fit', job_id=job.id) }}" target="_blank" style="display:inline">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <button class="btn btn-primary" type="submit" data-loading-text="Opened in a new tab…">Score fit</button>
     </form>
-    <form method="post" action="{{ url_for('main.job_draft_followup', job_id=job.id) }}" target="_blank" style="display:inline">
+    <form method="post" action="{{ url_for('jobs.job_draft_followup', job_id=job.id) }}" target="_blank" style="display:inline">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <button class="btn" type="submit" data-loading-text="Opened in a new tab…">Draft follow-up</button>
     </form>
@@ -33,7 +33,7 @@
             data-prompt="{{ fu_prompt | e }}">Draft follow-up in Claude ↗</button>
     {% endif %}
     {% if ai_mode == 'api' %}
-    <form method="post" action="{{ url_for('main.job_ats_gap', job_id=job.id) }}"
+    <form method="post" action="{{ url_for('jobs.job_ats_gap', job_id=job.id) }}"
           target="_blank" style="display:inline">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <button class="btn" type="submit" data-loading-text="Opened in a new tab…">ATS gap analysis</button>
@@ -41,9 +41,9 @@
     {% endif %}
     <a class="btn btn-outline" href="{{ url_for('kits.job_kit', job_id=job.id) }}"
        title="Downloads a prompt file to paste into any AI assistant yourself">Download kit prompt (.md)</a>
-    <a class="btn btn-outline" href="{{ url_for('main.job_edit', job_id=job.id) }}">Edit</a>
+    <a class="btn btn-outline" href="{{ url_for('jobs.job_edit', job_id=job.id) }}">Edit</a>
     {% if current_user.is_admin %}
-    <form method="post" action="{{ url_for('main.job_delete', job_id=job.id) }}"
+    <form method="post" action="{{ url_for('jobs.job_delete', job_id=job.id) }}"
           data-confirm="Delete this job and its debriefs/attachments?" style="display:inline">
       {{ confirm_form.hidden_tag() }}
       <button class="btn btn-danger" type="submit">Delete</button>
@@ -79,9 +79,9 @@
       {% for a in job.attachments %}
       <li>
         <span class="kind">{{ a.kind }}</span>
-        <a href="{{ url_for('main.attachment_download', att_id=a.id) }}">{{ a.original_name }}</a>
+        <a href="{{ url_for('jobs.attachment_download', att_id=a.id) }}">{{ a.original_name }}</a>
         <span class="muted small">{{ (a.size / 1024) | round(0) }} KB</span>
-        <form method="post" action="{{ url_for('main.attachment_delete', att_id=a.id) }}"
+        <form method="post" action="{{ url_for('jobs.attachment_delete', att_id=a.id) }}"
               data-confirm="Remove this file?" style="display:inline">
           {{ confirm_form.hidden_tag() }}
           <button class="link-btn" type="submit">remove</button>
@@ -93,7 +93,7 @@
     <p class="muted">No files yet. Attach the tailored resume / cover letter you used.</p>
     {% endif %}
     <form method="post" enctype="multipart/form-data" class="upload-form"
-          action="{{ url_for('main.attachment_upload', job_id=job.id) }}">
+          action="{{ url_for('jobs.attachment_upload', job_id=job.id) }}">
       {{ confirm_form.csrf_token }}
       <select name="kind">
         <option>Resume</option><option>Cover Letter</option>
@@ -108,14 +108,14 @@
 <section class="card">
   <div class="card-head">
     <h2>Activity log</h2>
-    <form method="post" action="{{ url_for('main.job_set_followup', job_id=job.id) }}" class="inline-form">
+    <form method="post" action="{{ url_for('jobs.job_set_followup', job_id=job.id) }}" class="inline-form">
       {{ confirm_form.hidden_tag() }}
       <input type="date" name="follow_up_date" id="followup-date-input" class="date-input">
       <button class="btn" type="submit">Set follow-up</button>
     </form>
   </div>
 
-  <form method="post" action="{{ url_for('main.job_add_note', job_id=job.id) }}" class="note-add-form">
+  <form method="post" action="{{ url_for('jobs.job_add_note', job_id=job.id) }}" class="note-add-form">
     {{ confirm_form.hidden_tag() }}
     <textarea name="content" placeholder="Add a note..." rows="2" class="note-textarea" required></textarea>
     <button class="btn" type="submit">Add note</button>
@@ -220,7 +220,7 @@
     <h2>Interview debriefs</h2>
     <div class="actions">
       {% if ai_mode == 'api' %}
-      <form method="post" action="{{ url_for('main.job_prep_interview', job_id=job.id) }}" target="_blank" style="display:inline">
+      <form method="post" action="{{ url_for('jobs.job_prep_interview', job_id=job.id) }}" target="_blank" style="display:inline">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button class="btn" type="submit" data-loading-text="Opened in a new tab…">Prep for interview</button>
       </form>
@@ -230,7 +230,7 @@
       <button class="btn btn-outline open-in-claude-btn"
               data-prompt="{{ prep_prompt | e }}">Prep for interview in Claude ↗</button>
       {% endif %}
-      <a class="btn btn-primary" href="{{ url_for('main.interview_new', job_id=job.id) }}">+ Add debrief</a>
+      <a class="btn btn-primary" href="{{ url_for('jobs.interview_new', job_id=job.id) }}">+ Add debrief</a>
     </div>
   </div>
   {% if job.interviews %}
@@ -245,8 +245,8 @@
         {% if gcal_urls.get(iv.id) %}
         <a class="link-btn" href="{{ gcal_urls[iv.id] }}" target="_blank" rel="noopener noreferrer" title="Add to Google Calendar">📅</a>
         {% endif %}
-        <a class="link-btn" href="{{ url_for('main.interview_edit', iv_id=iv.id) }}">edit</a>
-        <form method="post" action="{{ url_for('main.interview_delete', iv_id=iv.id) }}"
+        <a class="link-btn" href="{{ url_for('jobs.interview_edit', iv_id=iv.id) }}">edit</a>
+        <form method="post" action="{{ url_for('jobs.interview_delete', iv_id=iv.id) }}"
               data-confirm="Remove this debrief?" style="display:inline">
           {{ confirm_form.hidden_tag() }}
           <button class="link-btn" type="submit">delete</button>

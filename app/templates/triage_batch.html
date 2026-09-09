@@ -76,7 +76,7 @@
   {# All done card — hidden, revealed by JS when no jobs remain #}
   <div class="card" id="tr-all-done-card" style="display:none;text-align:center;padding:1.5rem">
     <p style="font-size:1.1rem;margin:0">All done &mdash; no more unscored jobs.</p>
-    <a class="btn btn-outline" href="{{ url_for('main.jobs_list', status='Saved') }}" style="margin-top:.75rem">View Saved jobs</a>
+    <a class="btn btn-outline" href="{{ url_for('jobs.jobs_list', status='Saved') }}" style="margin-top:.75rem">View Saved jobs</a>
   </div>
 
 </div>
@@ -85,7 +85,7 @@
 {# ── All caught up ── #}
 <div class="card" style="text-align:center;padding:2rem">
   <p style="font-size:1.25rem">All caught up &mdash; no unscored Saved jobs.</p>
-  <a class="btn btn-outline" href="{{ url_for('main.jobs_list', status='Saved') }}">View Saved jobs</a>
+  <a class="btn btn-outline" href="{{ url_for('jobs.jobs_list', status='Saved') }}">View Saved jobs</a>
 </div>
 
 {% else %}

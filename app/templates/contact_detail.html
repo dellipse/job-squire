@@ -53,7 +53,7 @@
     <tbody>
       {% for s in contact.submissions %}
       <tr>
-        <td>{% if s.job_id %}<a href="{{ url_for('main.job_detail', job_id=s.job_id) }}">{{ s.company or '(tracked job)' }}</a>{% else %}{{ s.company or '—' }}{% endif %}</td>
+        <td>{% if s.job_id %}<a href="{{ url_for('jobs.job_detail', job_id=s.job_id) }}">{{ s.company or '(tracked job)' }}</a>{% else %}{{ s.company or '—' }}{% endif %}</td>
         <td>{{ s.role_title or '—' }}</td>
         <td><span class="status s-{{ s.status | replace(' ', '') }}">{{ s.status }}</span></td>
         <td class="mob-hide">{{ s.submitted_date or '—' }}</td>

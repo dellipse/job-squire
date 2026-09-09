@@ -43,13 +43,13 @@
 
   <div class="card" id="kb-all-done-card" style="display:none;text-align:center;padding:1.5rem">
     <p style="font-size:1.1rem;margin:0">All kits built &mdash; nothing left in the queue.</p>
-    <a class="btn btn-outline" href="{{ url_for('main.jobs_list', status='Applied') }}" style="margin-top:.75rem">View Applied jobs</a>
+    <a class="btn btn-outline" href="{{ url_for('jobs.jobs_list', status='Applied') }}" style="margin-top:.75rem">View Applied jobs</a>
   </div>
 
   <div class="card" id="kb-partial-done-card" style="display:none;text-align:center;padding:1.5rem">
     <p style="font-size:1.1rem;margin:0" id="kb-partial-msg"></p>
     <div style="margin-top:.75rem;display:flex;gap:.5rem;justify-content:center">
-      <a class="btn btn-outline" href="{{ url_for('main.jobs_list', status='unkitted') }}">View remaining</a>
+      <a class="btn btn-outline" href="{{ url_for('jobs.jobs_list', status='unkitted') }}">View remaining</a>
       <a class="btn btn-primary" href="{{ url_for('kits.kit_batch') }}">Run again</a>
     </div>
   </div>
@@ -60,7 +60,7 @@
 {# ── All caught up ── #}
 <div class="card" style="text-align:center;padding:2rem">
   <p style="font-size:1.25rem">All caught up &mdash; no Applied jobs are missing kits.</p>
-  <a class="btn btn-outline" href="{{ url_for('main.jobs_list', status='Applied') }}">View Applied jobs</a>
+  <a class="btn btn-outline" href="{{ url_for('jobs.jobs_list', status='Applied') }}">View Applied jobs</a>
 </div>
 
 {% else %}
