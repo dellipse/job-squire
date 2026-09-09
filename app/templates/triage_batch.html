@@ -11,7 +11,7 @@
 <div id="triage-run-root"
      data-poll-url="{{ poll_url }}"
      data-job-url-base="/jobs/"
-     data-next-action="{{ url_for('main.triage_batch') }}">
+     data-next-action="{{ url_for('ai_tasks.triage_batch') }}">
 
   {# Live log box — always visible while running #}
   <section class="card" style="margin-bottom:1.25rem">
@@ -50,7 +50,7 @@
       <h2>Next batch</h2>
       <span id="tr-remaining-label" class="muted small"></span>
     </div>
-    <form method="post" action="{{ url_for('main.triage_batch') }}" class="form" style="margin-top:.75rem">
+    <form method="post" action="{{ url_for('ai_tasks.triage_batch') }}" class="form" style="margin-top:.75rem">
       {{ confirm_form.hidden_tag() }}
       <input type="hidden" name="offset" id="tr-next-offset" value="0">
       <div class="form-grid" style="grid-template-columns:1fr auto;align-items:flex-end;gap:1rem">
@@ -95,7 +95,7 @@
     <h2>Run batch</h2>
     <span class="muted small">{{ total_remaining }} unscored job{{ 's' if total_remaining != 1 }} remaining</span>
   </div>
-  <form method="post" action="{{ url_for('main.triage_batch') }}" class="form" style="margin-top:.75rem">
+  <form method="post" action="{{ url_for('ai_tasks.triage_batch') }}" class="form" style="margin-top:.75rem">
     {{ confirm_form.hidden_tag() }}
     <input type="hidden" name="offset" value="0">
     <div class="form-grid" style="grid-template-columns:1fr auto;align-items:flex-end;gap:1rem">

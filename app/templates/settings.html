@@ -234,7 +234,7 @@
       <div class="mode-info-box" style="margin-top:.75rem">
         <strong>No AI provider?</strong> You can still use Manual mode — export your pipeline as JSON,
         paste it into any AI chat with the prompt shown on the
-        <a href="{{ url_for('main.ai_hub') }}">AI analysis</a> page, and paste the result back.
+        <a href="{{ url_for('ai_tasks.ai_hub') }}">AI analysis</a> page, and paste the result back.
         Works with any AI tool, no API key needed.
       </div>
       <div class="actions" style="margin-top:1.25rem">
@@ -671,7 +671,7 @@
         {% if task_name in ('triage', 'followup', 'weekly_review') and ai_cfg.api_enabled %}
         <div style="margin-top:.75rem;padding-top:.75rem;border-top:1px solid var(--border,#e5e7eb);display:flex;align-items:center;gap:.75rem">
           {% if task_name == 'triage' %}
-          <a href="{{ url_for('main.triage_batch') }}" class="btn btn-sm btn-outline">Run now</a>
+          <a href="{{ url_for('ai_tasks.triage_batch') }}" class="btn btn-sm btn-outline">Run now</a>
           {% else %}
           <button type="submit" form="run-task-{{ task_name }}" class="btn btn-sm">Run now</button>
           {% endif %}
@@ -705,7 +705,7 @@
     {% if ai_cfg.api_enabled %}
     {% for task_name in ('followup', 'weekly_review') %}
     <form id="run-task-{{ task_name }}" method="post"
-          action="{{ url_for('main.ai_run_task', task=task_name) }}"
+          action="{{ url_for('ai_tasks.ai_run_task', task=task_name) }}"
           target="_blank"
           style="display:none">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -1249,7 +1249,7 @@ openclaw mcp doctor {{ connector }} --probe{% endset %}
 
     {% if ai_cfg.api_enabled %}
     <div style="margin-top:1rem;padding-top:1rem;border-top:1px solid var(--border)">
-      <form method="post" action="{{ url_for('main.ai_run_task', task='rescore') }}"
+      <form method="post" action="{{ url_for('ai_tasks.ai_run_task', task='rescore') }}"
             target="_blank" style="display:flex;gap:.75rem;align-items:center;flex-wrap:wrap">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button class="btn btn-outline" type="submit">Rescore all Saved jobs</button>
