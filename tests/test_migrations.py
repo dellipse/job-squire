@@ -19,6 +19,7 @@ is reordered or extended.
 import pytest
 from flask import Flask
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 from app import _run_migrations
 from app.extensions import db
@@ -223,3 +224,139 @@ def test_search_config_country_backfills_to_us(mdb):
         text("SELECT country FROM search_config WHERE id=1")
     ).fetchone()
     assert row[0] == "US"
+
+
+# ---------------------------------------------------------------------------
+# REL-03: uq_jobs_source_external_id must land safely on a database that
+# already has duplicate (source, external_id) rows -- the exact situation any
+# real pre-fix install could be in, since ingest_jobs() was read-then-insert
+# with no DB-level guard until this migration.
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def mdb_bare_jobs():
+    """A throwaway DB whose ``jobs`` table is built by hand in the *pre-fix*
+    shape (no uq_jobs_source_external_id, external_id defaulting to '' rather
+    than NULL) instead of ``db.create_all()``.
+
+    The plain ``mdb`` fixture above builds every table from the *current*
+    models, which already bakes uq_jobs_source_external_id into the jobs
+    table's CREATE TABLE statement (as a SQLite ``sqlite_autoindex``, which
+    can't even be dropped after the fact) -- so it can't hold the duplicate
+    rows this test needs to insert. This fixture isolates the migration's
+    dedupe/backfill logic from that already-fixed schema, the same way
+    ``test_upgrade_adds_missing_columns`` isolates a dropped column.
+    """
+    migration_app = Flask(f"{__name__}-bare-jobs-app")
+    migration_app.config.update(
+        SQLALCHEMY_DATABASE_URI="sqlite://",
+        SQLALCHEMY_TRACK_MODIFICATIONS=False,
+        SECRET_KEY="test-migration-secret-not-for-production-use",
+    )
+    db.init_app(migration_app)
+    with migration_app.app_context():
+        db.session.execute(text(
+            "CREATE TABLE jobs ("
+            "id INTEGER PRIMARY KEY, company VARCHAR(160) NOT NULL, "
+            "title VARCHAR(160) NOT NULL, source VARCHAR(80) DEFAULT '', "
+            "external_id VARCHAR(255) DEFAULT '', status VARCHAR(40) DEFAULT 'Applied')"
+        ))
+        db.session.commit()
+        try:
+            yield db
+        finally:
+            db.session.remove()
+            db.engine.dispose()
+
+
+def test_migration_dedupes_preexisting_duplicate_external_id(mdb_bare_jobs):
+    """A pre-fix DB with a genuine duplicate (source, external_id) pair, plus
+    the old '' external_id sentinel, must come out of the migration with:
+    no rows deleted, exactly one row per (source, external_id) group keeping
+    its external_id (the rest NULLed, not lost), '' normalized to NULL, and
+    the new unique index actually enforcing going forward."""
+    db.session.execute(text(
+        "INSERT INTO jobs (company, title, source, external_id, status) VALUES "
+        "('DupCoOld', 'Engineer', 'jooble', 'dup-A', 'Saved'),"
+        "('DupCoNew', 'Different Title', 'jooble', 'dup-A', 'Applied'),"
+        "('SoloCo', 'Analyst', 'jooble', 'solo-1', 'Saved'),"
+        "('NoIdCoA', 'QA One', 'referral', '', 'Saved'),"
+        "('NoIdCoB', 'QA Two', 'referral', '', 'Saved')"
+    ))
+    db.session.commit()
+
+    assert db.session.execute(text("SELECT COUNT(*) FROM jobs")).scalar() == 5
+
+    _run_migrations()
+
+    # No data destroyed.
+    assert db.session.execute(text("SELECT COUNT(*) FROM jobs")).scalar() == 5
+
+    # Only the oldest (lowest id) row of the duplicate pair keeps external_id.
+    dup_rows = db.session.execute(text(
+        "SELECT company, external_id FROM jobs "
+        "WHERE source='jooble' AND external_id='dup-A' ORDER BY id"
+    )).fetchall()
+    assert len(dup_rows) == 1
+    assert dup_rows[0][0] == "DupCoOld"
+
+    loser_external_id = db.session.execute(text(
+        "SELECT external_id FROM jobs WHERE company='DupCoNew'"
+    )).scalar()
+    assert loser_external_id is None, "losing duplicate must be NULLed, not deleted"
+
+    # The non-duplicate row is untouched.
+    solo_external_id = db.session.execute(text(
+        "SELECT external_id FROM jobs WHERE company='SoloCo'"
+    )).scalar()
+    assert solo_external_id == "solo-1"
+
+    # The old '' sentinel is gone; no row has an empty-string external_id.
+    assert db.session.execute(
+        text("SELECT COUNT(*) FROM jobs WHERE external_id = ''")
+    ).scalar() == 0
+
+    # Both no-id 'referral' jobs survive as distinct rows (NULL != NULL).
+    no_id_count = db.session.execute(text(
+        "SELECT COUNT(*) FROM jobs WHERE source='referral' AND external_id IS NULL"
+    )).scalar()
+    assert no_id_count == 2
+
+    # The index now exists and is a real constraint going forward.
+    idx = db.session.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='index' "
+        "AND name='uq_jobs_source_external_id'"
+    )).fetchone()
+    assert idx is not None
+
+    with pytest.raises(IntegrityError):
+        db.session.execute(text(
+            "INSERT INTO jobs (company, title, source, external_id, status) "
+            "VALUES ('ShouldFail', 'X', 'jooble', 'solo-1', 'Saved')"
+        ))
+        db.session.commit()
+    db.session.rollback()
+
+
+def test_migration_dedupe_is_idempotent_on_rerun(mdb_bare_jobs):
+    """Running the dedupe/index migration again after it already succeeded must
+    not raise and must not touch the now-correct data further."""
+    db.session.execute(text(
+        "INSERT INTO jobs (company, title, source, external_id, status) VALUES "
+        "('DupCoOld', 'Engineer', 'jooble', 'dup-B', 'Saved'),"
+        "('DupCoNew', 'Different Title', 'jooble', 'dup-B', 'Applied')"
+    ))
+    db.session.commit()
+
+    _run_migrations()
+    first_pass = db.session.execute(text(
+        "SELECT id, external_id FROM jobs ORDER BY id"
+    )).fetchall()
+
+    _run_migrations()
+    _run_migrations()
+    second_pass = db.session.execute(text(
+        "SELECT id, external_id FROM jobs ORDER BY id"
+    )).fetchall()
+
+    assert first_pass == second_pass

@@ -202,12 +202,24 @@ def _call_anthropic_sdk(api_key: str, model: str, thinking_mode: str | None,
     }
     if thinking_mode and thinking_mode != "disabled":
         _apply_thinking(body, model_str, thinking_mode)
+        # Extended thinking (see _THINKING_BUDGETS / _apply_thinking above) can
+        # legitimately run well past the normal cloud timeout even at the largest
+        # budget (10000 tokens for "high"), so keep the long timeout here rather
+        # than fail a real in-progress request. A fixed value is fine -- deriving
+        # one from budget_tokens would just be guessing at a tokens/sec rate.
+        timeout = 300
+    else:
+        # REL-04: previously always 300s regardless of thinking_mode, so a stalled
+        # rank-1 Anthropic provider in the ranked fallback chain (call_with_fallback)
+        # blocked for 5 minutes instead of failing fast into the next provider like
+        # every other cloud provider does via _http_timeout_for().
+        timeout = _http_timeout_for("anthropic")
     headers = {
         "x-api-key": api_key,
         "anthropic-version": "2023-06-01",
         "content-type": "application/json",
     }
-    r = requests.post(ANTHROPIC_URL, headers=headers, json=body, timeout=300)
+    r = requests.post(ANTHROPIC_URL, headers=headers, json=body, timeout=timeout)
     r.raise_for_status()
     parts = r.json().get("content", [])
     return "".join(p.get("text", "") for p in parts if p.get("type") == "text")

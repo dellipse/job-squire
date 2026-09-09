@@ -394,6 +394,111 @@ def test_ingest_skips_incomplete_rows(app_context):
     assert skipped == 2
 
 
+# ---------------------------------------------------------------------------
+# REL-03: uq_jobs_source_external_id (DB-level guard behind ingest_jobs()'s
+# read-then-insert dedupe check)
+# ---------------------------------------------------------------------------
+
+def test_ingest_stores_null_not_empty_string_for_missing_external_id(app_context):
+    """A job with no external_id must land as NULL, not '' -- otherwise every
+    no-external_id job from the same source would collide under the unique
+    constraint (SQL NULL != NULL, but '' == '')."""
+    from app.search import ingest_jobs
+    created, skipped = ingest_jobs(
+        [{"title": "Analyst", "company": "NullIdCo", "source": "referral"}]
+    )
+    assert len(created) == 1
+    assert created[0].external_id is None
+
+
+def test_ingest_multiple_no_external_id_jobs_same_source_do_not_collide(app_context):
+    """Two distinct jobs from the same source, neither with an external_id, must
+    both be created -- NULL external_id must not make them look like duplicates
+    under uq_jobs_source_external_id."""
+    from app.search import ingest_jobs
+    created, skipped = ingest_jobs([
+        {"title": "Analyst One", "company": "NullCollideCoA", "source": "referral"},
+        {"title": "Analyst Two", "company": "NullCollideCoB", "source": "referral"},
+    ])
+    assert len(created) == 2
+    assert skipped == 0
+
+
+def test_db_unique_constraint_rejects_duplicate_source_external_id(app_context):
+    """The constraint itself (not ingest_jobs()'s own check) rejects a second row
+    with the same (source, external_id) -- this is the authoritative guard the
+    race-condition fix in ingest_jobs() relies on."""
+    from sqlalchemy.exc import IntegrityError
+
+    from app.extensions import db
+    from app.models import Job
+
+    db.session.add(Job(company="ConstraintCo", title="Engineer",
+                        source="jooble", external_id="uq-1", status="Saved"))
+    db.session.commit()
+
+    db.session.add(Job(company="ConstraintCoDup", title="Different Title",
+                        source="jooble", external_id="uq-1", status="Saved"))
+    with pytest.raises(IntegrityError):
+        db.session.commit()
+    db.session.rollback()
+
+
+def test_ingest_race_integrity_error_treated_as_duplicate(app_context, monkeypatch):
+    """Simulate the actual race REL-03 is about: a second process (e.g. MCP's
+    add_jobs, per app/mcp_server.py) commits a row with the same (source,
+    external_id) via a separate DB connection in the window between
+    ingest_jobs()'s own read-check (which finds nothing) and its insert. The
+    UNIQUE constraint must catch what the read-then-insert check missed, and
+    ingest_jobs() must treat that as a normal skipped-duplicate, not a crash.
+    """
+    import sqlite3
+
+    from app.extensions import db
+    from app.models import Job
+    from app.search import ingest_jobs
+
+    db_path = app_context.config["SQLALCHEMY_DATABASE_URI"].replace("sqlite:///", "")
+    real_add = db.session.add
+    fired = {"done": False}
+
+    def racy_add(instance, *args, **kwargs):
+        # Fire once, right as ingest_jobs() stages its own new Job for this
+        # (source, external_id) -- i.e. strictly after its read-then-check
+        # dedupe already ran and found nothing, and strictly before its own
+        # flush opens a write transaction (which would otherwise make this
+        # second, independent connection block on SQLite's single-writer lock
+        # instead of modelling two genuinely separate, non-overlapping commits).
+        if (not fired["done"] and isinstance(instance, Job)
+                and instance.source == "racezone" and instance.external_id == "race-1"):
+            fired["done"] = True
+            conn = sqlite3.connect(db_path, timeout=30)
+            try:
+                conn.execute(
+                    "INSERT INTO jobs (company, title, source, external_id, status) "
+                    "VALUES (?, ?, ?, ?, 'Saved')",
+                    ("RaceWinner Co", "Race Winner Title", "racezone", "race-1"),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        return real_add(instance, *args, **kwargs)
+
+    monkeypatch.setattr(db.session, "add", racy_add)
+
+    created, skipped = ingest_jobs([
+        {"title": "Race Loser Title", "company": "RaceLoser Co",
+         "source": "racezone", "external_id": "race-1"},
+    ])
+
+    assert created == []
+    assert skipped == 1
+
+    rows = Job.query.filter_by(source="racezone", external_id="race-1").all()
+    assert len(rows) == 1
+    assert rows[0].company == "RaceWinner Co"
+
+
 def test_ingest_drops_non_http_url_scheme(app_context):
     """SEC-04: a javascript: (or other non-http(s)) URL must not be stored —
     templates render job.url straight into an <a href>."""
