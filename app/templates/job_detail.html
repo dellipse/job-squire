@@ -192,7 +192,7 @@
 <section class="card">
   <div class="card-head">
     <h2>Recruiter submissions</h2>
-    <a class="btn" href="{{ url_for('main.submission_new', job_id=job.id) }}">+ Log submission</a>
+    <a class="btn" href="{{ url_for('contacts.submission_new', job_id=job.id) }}">+ Log submission</a>
   </div>
   {% if job.submissions %}
   <div class="table-wrap">
@@ -201,7 +201,7 @@
     <tbody>
       {% for s in job.submissions %}
       <tr>
-        <td>{% if s.contact %}<a href="{{ url_for('main.contact_detail', contact_id=s.contact_id) }}">{{ s.contact.name }}{% if s.contact.agency %} · {{ s.contact.agency }}{% endif %}</a>{% else %}—{% endif %}</td>
+        <td>{% if s.contact %}<a href="{{ url_for('contacts.contact_detail', contact_id=s.contact_id) }}">{{ s.contact.name }}{% if s.contact.agency %} · {{ s.contact.agency }}{% endif %}</a>{% else %}—{% endif %}</td>
         <td><span class="status s-{{ s.status | replace(' ', '') }}">{{ s.status }}</span></td>
         <td class="mob-hide">{{ s.submitted_date or '—' }}</td>
         <td class="mob-hide">{% if s.follow_up_date %}<span class="{% if s.follow_up_due %}due-now{% endif %}">{{ s.follow_up_date }}</span>{% else %}—{% endif %}</td>
@@ -211,7 +211,7 @@
   </table>
   </div>
   {% else %}
-  <p class="muted">No recruiter has been logged as submitting User for this role. If an agency put him forward here, <a href="{{ url_for('main.submission_new', job_id=job.id) }}">log it</a>.</p>
+  <p class="muted">No recruiter has been logged as submitting User for this role. If an agency put him forward here, <a href="{{ url_for('contacts.submission_new', job_id=job.id) }}">log it</a>.</p>
   {% endif %}
 </section>
 

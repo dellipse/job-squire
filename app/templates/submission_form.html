@@ -5,7 +5,7 @@
 <p class="muted">Record that a recruiter or agency put User forward for a specific role. Link a tracked job if there is one; otherwise just type the company and role.</p>
 
 <form method="post" class="card form" novalidate
-      action="{{ url_for('main.submission_edit', sub_id=submission.id) if mode=='edit' else url_for('main.submission_new') }}">
+      action="{{ url_for('contacts.submission_edit', sub_id=submission.id) if mode=='edit' else url_for('contacts.submission_new') }}">
   {{ form.hidden_tag() }}
   <div class="form-grid">
     <div class="field">{{ form.contact_id.label }} {{ form.contact_id() }}</div>
@@ -42,7 +42,7 @@
   {% endfor %}
   <div class="actions">
     {{ form.submit(class="btn btn-primary") }}
-    <a class="btn btn-outline" href="{{ url_for('main.contacts_list') }}">Cancel</a>
+    <a class="btn btn-outline" href="{{ url_for('contacts.contacts_list') }}">Cancel</a>
   </div>
 </form>
 {% endblock %}
