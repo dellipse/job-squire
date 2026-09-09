@@ -50,7 +50,7 @@
     <p style="font-size:1.1rem;margin:0" id="kb-partial-msg"></p>
     <div style="margin-top:.75rem;display:flex;gap:.5rem;justify-content:center">
       <a class="btn btn-outline" href="{{ url_for('main.jobs_list', status='unkitted') }}">View remaining</a>
-      <a class="btn btn-primary" href="{{ url_for('main.kit_batch') }}">Run again</a>
+      <a class="btn btn-primary" href="{{ url_for('kits.kit_batch') }}">Run again</a>
     </div>
   </div>
 
@@ -70,7 +70,7 @@
     <h2>Run batch</h2>
     <span class="muted small">{{ total_remaining }} Applied job{{ 's' if total_remaining != 1 }} without a kit</span>
   </div>
-  <form method="post" action="{{ url_for('main.kit_batch') }}" class="form" style="margin-top:.75rem">
+  <form method="post" action="{{ url_for('kits.kit_batch') }}" class="form" style="margin-top:.75rem">
     {{ confirm_form.hidden_tag() }}
     <button type="submit" class="btn btn-primary">Build {{ total_remaining }} kit{{ 's' if total_remaining != 1 }} &rarr;</button>
   </form>

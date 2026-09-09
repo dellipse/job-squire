@@ -15,13 +15,13 @@
 </section>
 
 <div class="actions">
-  <form method="post" action="{{ url_for('main.kit_download_docx') }}" style="display:inline">
+  <form method="post" action="{{ url_for('kits.kit_download_docx') }}" style="display:inline">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <textarea name="kit_markdown" hidden>{{ kit_markdown }}</textarea>
     <input type="hidden" name="company" value="{{ company }}">
     <input type="hidden" name="title" value="{{ title }}">
     <button class="btn btn-outline" type="submit">Download as .docx</button>
   </form>
-  <a class="btn btn-outline" href="{{ url_for('main.kit_hub') }}">Back to kit generator</a>
+  <a class="btn btn-outline" href="{{ url_for('kits.kit_hub') }}">Back to kit generator</a>
 </div>
 {% endblock %}

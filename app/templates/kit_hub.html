@@ -8,7 +8,7 @@
 <section class="card">
   <h2>Use a tracked job</h2>
   <div class="filters">
-    <div class="job-picker" data-navigate="{{ url_for('main.kit_hub') }}?job_id=">
+    <div class="job-picker" data-navigate="{{ url_for('kits.kit_hub') }}?job_id=">
       <input class="job-picker-search" type="text" autocomplete="off" spellcheck="false"
              placeholder="Type company or title to filter…"
              value="{% if selected %}{{ selected.company }} — {{ selected.title }}{% if selected.status %} ({{ selected.status }}){% endif %}{% endif %}">
@@ -21,7 +21,7 @@
         {% endfor %}
       </ul>
     </div>
-    {% if selected %}<a class="btn btn-outline" href="{{ url_for('main.kit_hub') }}">Clear</a>{% endif %}
+    {% if selected %}<a class="btn btn-outline" href="{{ url_for('kits.kit_hub') }}">Clear</a>{% endif %}
   </div>
   <p class="muted small">Selecting a job fills in the form below. Then download the kit file,
     {% if claude_buttons_enabled %}use <strong>Build kit in Claude</strong>,{% endif %}
@@ -31,7 +31,7 @@
     option that also works with free-tier providers{% endif %}.</p>
 </section>
 
-<form method="post" class="card form" novalidate action="{{ url_for('main.kit_hub') }}">
+<form method="post" class="card form" novalidate action="{{ url_for('kits.kit_hub') }}">
   {{ form.hidden_tag() }}
   {% if selected %}<input type="hidden" name="tracked_job_id" value="{{ selected.id }}">{% endif %}
   <h2>{{ 'Edit the details' if selected else 'Or paste a new posting' }}</h2>
@@ -60,7 +60,7 @@
   {% endfor %}
   <div class="actions">
     {% if ai_api_enabled %}
-    <button class="btn btn-primary" type="submit" formaction="{{ url_for('main.kit_run') }}"
+    <button class="btn btn-primary" type="submit" formaction="{{ url_for('kits.kit_run') }}"
             formtarget="_blank" formnovalidate data-loading-text="Opened in a new tab…">Build kit via API</button>
     {% endif %}
     {% if claude_buttons_enabled %}
