@@ -913,3 +913,16 @@ def test_bearer_revocation_via_own_endpoint_is_immediate_despite_cache(mcp, monk
     assert after == 401
     assert json.loads(out)["error"] == "unauthorized"
     assert hits["count"] == 1, "only the pre-revocation call should have reached the inner app"
+
+
+def test_get_kit_instructions_returns_the_real_kit_prompt(mcp):
+    """Regression test: get_kit_instructions() used to import KIT_PROMPT from
+    app.main, which silently broke (ImportError at call time, not at module
+    import time) when the QUAL-01 kits-blueprint split (PR #49) moved
+    KIT_PROMPT to app.kits without updating this lazy import. Nothing
+    exercised this tool in CI, so it shipped broken."""
+    from app.kits import KIT_PROMPT
+
+    result = mcp.get_kit_instructions()
+    assert result == KIT_PROMPT
+    assert "FIT ASSESSMENT" in result

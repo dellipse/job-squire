@@ -98,7 +98,7 @@
     <strong>1. Local AI (most private).</strong> Run <a href="https://ollama.com" target="_blank" rel="noopener">Ollama</a>
     on your own machine — your data never leaves it. Needs a reasonably capable
     computer (16 GB+ memory recommended). Add it under
-    <a href="{{ url_for('main.settings', _anchor='tab-claude') }}">Settings &rarr; AI &rarr; Providers</a>
+    <a href="{{ url_for('settings.settings', _anchor='tab-claude') }}">Settings &rarr; AI &rarr; Providers</a>
     with provider type "Ollama (local)".
   </div>
   <div class="mode-info-box" style="margin:0.75rem 0">
@@ -108,14 +108,14 @@
     <a href="https://openrouter.ai" target="_blank" rel="noopener">OpenRouter</a> all offer
     free API tiers that work well here. Your identifiers are automatically replaced
     with placeholders before anything is sent (see
-    <a href="{{ url_for('main.settings', _anchor='tab-claude') }}">Privacy settings</a>).
+    <a href="{{ url_for('settings.settings', _anchor='tab-claude') }}">Privacy settings</a>).
     Add keys under Settings &rarr; AI &rarr; Providers.
   </div>
   <div class="mode-info-box" style="margin:0.75rem 0">
     <strong>3. A Claude subscription (Pro/Max).</strong> Connect Claude directly to Job Squire
     as a live connector — Claude reads your pipeline and writes analyses, kits, and
     drafts back on its own. Set up under
-    <a href="{{ url_for('main.settings', _anchor='tab-claude') }}">Settings &rarr; AI &rarr; Connectors</a>.
+    <a href="{{ url_for('settings.settings', _anchor='tab-claude') }}">Settings &rarr; AI &rarr; Connectors</a>.
     Also have a ChatGPT, Gemini, or Nous subscription? Their API keys work via the
     Providers tab too.
   </div>
@@ -128,7 +128,7 @@
   <form method="post" action="{{ url_for('onboarding.save_ai') }}" class="form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="actions" style="margin-top:1rem">
-      <a class="btn btn-primary" href="{{ url_for('main.settings', _anchor='tab-claude') }}">Open AI settings</a>
+      <a class="btn btn-primary" href="{{ url_for('settings.settings', _anchor='tab-claude') }}">Open AI settings</a>
       <button class="btn btn-outline" type="submit">I've set up AI — continue</button>
       <button class="btn btn-outline" type="submit" name="action" value="no_ai">Continue without AI</button>
     </div>
@@ -159,14 +159,14 @@
       {{ v.display_name }} <span class="muted small">({{ v.size_kb }} KB, {{ v.uploaded_at | local_date }})</span>
       {% if v.is_base %}<span class="badge admin">base</span>
       {% else %}
-      <form method="post" action="{{ url_for('main.asset_set_base', asset_id=v.id) }}" style="display:inline">
+      <form method="post" action="{{ url_for('settings.asset_set_base', asset_id=v.id) }}" style="display:inline">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button class="btn btn-sm btn-outline" type="submit">Make base</button>
       </form>
       {% endif %}
-      <a class="btn btn-sm btn-outline" href="{{ url_for('main.asset_download', asset_id=v.id) }}">Download markdown</a>
+      <a class="btn btn-sm btn-outline" href="{{ url_for('settings.asset_download', asset_id=v.id) }}">Download markdown</a>
       {% if v.source_stored_name %}
-      <a class="btn btn-sm btn-outline" href="{{ url_for('main.asset_download_source', asset_id=v.id) }}">Download original</a>
+      <a class="btn btn-sm btn-outline" href="{{ url_for('settings.asset_download_source', asset_id=v.id) }}">Download original</a>
       {% endif %}
     </li>
     {% endfor %}
@@ -177,7 +177,7 @@
     TXT, or MD) into a new markdown variant automatically, no AI needed. Either way it
     becomes the base for tailored versions per application. Certifications, recommendation
     letters, and portfolio samples help too: the AI mines them for specifics.</p>
-  <form method="post" action="{{ url_for('main.settings_asset_upload') }}"
+  <form method="post" action="{{ url_for('settings.settings_asset_upload') }}"
         enctype="multipart/form-data" class="form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="next" value="{{ back_url }}">
@@ -209,7 +209,7 @@
     </div>
     {% else %}
     <span class="muted small">Needs an AI provider configured under
-      <a href="{{ url_for('main.settings', _anchor='tab-claude') }}">Settings &rarr; AI</a> first.</span>
+      <a href="{{ url_for('settings.settings', _anchor='tab-claude') }}">Settings &rarr; AI</a> first.</span>
     {% endif %}
   </div>
 
@@ -289,7 +289,7 @@
 <section class="card">
   <p>What should Job Squire look for? Be specific with titles — each line is a
     separate search query.</p>
-  <form method="post" action="{{ url_for('main.settings_search') }}" class="form">
+  <form method="post" action="{{ url_for('settings.settings_search') }}" class="form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="next" value="{{ back_url }}">
     <input type="hidden" name="max_age_days" value="{{ search_cfg.max_age_days or 14 }}">
@@ -334,7 +334,7 @@
   <h2>Works immediately — no API key</h2>
   <p>These boards need no sign-up. Enable them now and your first search will
     return real results:</p>
-  <form method="post" action="{{ url_for('main.settings_providers_keyless_save') }}" class="form">
+  <form method="post" action="{{ url_for('settings.settings_providers_keyless_save') }}" class="form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="next" value="{{ back_url }}">
     {% for p in keyless_providers %}
@@ -357,7 +357,7 @@
   <h2>Free with an API key</h2>
   <p>These need a (free) key from the board. Each takes a few minutes to sign up
     for; add keys under
-    <a href="{{ url_for('main.settings', _anchor='tab-sources') }}">Settings &rarr; Sources</a>.</p>
+    <a href="{{ url_for('settings.settings', _anchor='tab-sources') }}">Settings &rarr; Sources</a>.</p>
   <ul>
     {% for p in keyed_providers %}
     <li>
@@ -409,7 +409,7 @@
   {% set _confirmed_running = last_run and last_run.status == 'running' %}
   {% set _unconfirmed_running = _just_started and not last_run %}
   {% if search_ready %}
-  <form method="post" action="{{ url_for('main.settings_run') }}" class="form">
+  <form method="post" action="{{ url_for('settings.settings_run') }}" class="form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="next" value="{{ back_url }}?started=1">
     <div class="actions">
@@ -478,7 +478,7 @@
     full Gmail address.
   </div>
 
-  <form method="post" action="{{ url_for('main.settings_smtp') }}" class="form">
+  <form method="post" action="{{ url_for('settings.settings_smtp') }}" class="form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="next" value="{{ back_url }}">
     <div class="form-grid">
@@ -501,7 +501,7 @@
   </form>
 
   <div class="test-email" style="margin-top:0.5rem">
-    <form method="post" action="{{ url_for('main.settings_test_email') }}" style="display:inline">
+    <form method="post" action="{{ url_for('settings.settings_test_email') }}" style="display:inline">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="next" value="{{ back_url }}">
       <button class="btn btn-outline" type="submit">Send test email</button>
@@ -516,7 +516,7 @@
   <p class="muted small" style="margin-top:0.5rem">Without email: everything else works
     normally — search, tracking, funnel metrics, and follow-up reminders all still show
     up in the app. Add email any time under
-    <a href="{{ url_for('main.settings', _anchor='tab-email') }}">Settings &rarr; Email</a>.</p>
+    <a href="{{ url_for('settings.settings', _anchor='tab-email') }}">Settings &rarr; Email</a>.</p>
 </section>
 {% endif %}
 

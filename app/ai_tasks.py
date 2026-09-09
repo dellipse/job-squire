@@ -181,14 +181,14 @@ def ai_run_task(task):
     cfg = _singleton(AIConfig)
     if not cfg.api_enabled:
         flash("Automatic features are not enabled. Turn them on in Settings → Claude.", "warning")
-        return redirect(url_for("main.settings", _anchor="ai-auto-settings-card"))
+        return redirect(url_for("settings.settings", _anchor="ai-auto-settings-card"))
     if not ai._has_ranked_providers():
         secret = current_app.config["SECRET_KEY"]
         api_key = decrypt(secret, cfg.api_key_enc) if cfg.api_key_enc else ""
         if not api_key:
             flash("Add an AI provider or Anthropic API key under Settings → Claude first.", "warning")
             anchor = "tab-documents" if task == "rescore" else f"feature-{task}"
-            return redirect(url_for("main.settings", _anchor=anchor))
+            return redirect(url_for("settings.settings", _anchor=anchor))
 
     run_id = uuid.uuid4().hex
     data_dir = current_app.config["DATA_DIR"]

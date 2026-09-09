@@ -101,7 +101,7 @@ def test_test_email_success_reports_recipient(client, app, monkeypatch):
     _login_admin(client)
     _post_smtp(client)
     sent = []
-    monkeypatch.setattr("app.main.send_email", lambda *a, **kw: sent.append(a))
+    monkeypatch.setattr("app.settings.send_email", lambda *a, **kw: sent.append(a))
     r = client.post(TEST_EMAIL_URL, data={}, follow_redirects=True)
     assert b"Test email sent to me@example.com" in r.data
     assert len(sent) == 1
@@ -113,7 +113,7 @@ def test_test_email_failure_reports_error(client, app, monkeypatch):
 
     def boom(*a, **kw):
         raise OSError("Connection refused")
-    monkeypatch.setattr("app.main.send_email", boom)
+    monkeypatch.setattr("app.settings.send_email", boom)
     r = client.post(TEST_EMAIL_URL, data={}, follow_redirects=True)
     assert b"Test failed" in r.data
     assert b"Connection refused" in r.data
@@ -122,7 +122,7 @@ def test_test_email_failure_reports_error(client, app, monkeypatch):
 def test_test_email_honors_next(client, app, monkeypatch):
     _login_admin(client)
     _post_smtp(client)
-    monkeypatch.setattr("app.main.send_email", lambda *a, **kw: None)
+    monkeypatch.setattr("app.settings.send_email", lambda *a, **kw: None)
     r = client.post(TEST_EMAIL_URL, data={"next": "/getting-started/notifications"},
                     follow_redirects=False)
     assert r.headers["Location"].endswith("/getting-started/notifications")
