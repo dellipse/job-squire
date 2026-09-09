@@ -21,13 +21,15 @@ Free/Pro/Max/Team/Enterprise (launched March 2026).
   token. `/health` is open and returns `{"ok": true}`.
 - OAuth clients/codes/tokens are kept **in memory**, so a container restart invalidates them —
   re-authorizing takes ~10 seconds. Only the **user** account (role `user`) may authorize.
-- A **legacy token-in-path** route (`/mcp/<token>`, token from `AIConfig.mcp_token_enc`) is still
-  accepted as a fallback for any older API-mode callers, but new connectors use OAuth.
+- A **static API key** (`Authorization: Bearer <key>`, generated on the Settings page and stored
+  Fernet-encrypted in `AIConfig.mcp_api_key_enc`) is also accepted, for scripts and non-Claude
+  tools that can't complete OAuth's browser redirect — see `app/mcp_auth.py` for the full token
+  spec and the loopback-only reachability rule. There is no token-in-path route.
 - DNS-rebinding protection is on; the public MCP host (`PUBLIC_MCP_HOST`) is allowlisted.
 
 ## Tools exposed
 
-23 tools total across reads and writes.
+24 tools total across reads and writes.
 
 ### Core tools
 
@@ -38,6 +40,7 @@ Free/Pro/Max/Team/Enterprise (launched March 2026).
 | `get_job` | `(job_id) -> dict` | Full detail for one job incl. debriefs. |
 | `get_candidate_profile` | `() -> str` | User's master profile (from `candidate_profile.md`). |
 | `save_candidate_profile` | `(profile_markdown) -> dict` | Save an updated master profile back to Job Squire. |
+| `save_resume_draft` | `(resume_markdown, profile_facts="") -> dict` | Save the final resume from the Getting Started resume-interview routine, replacing any previous draft; optionally folds new profile facts into the candidate profile. |
 | `get_candidate_assets` | `(kind="") -> list` | List master documents (resume, rec letters, certs); inlines text/markdown content, returns metadata for binaries. |
 | `get_search_targets` | `() -> dict` | Target titles + location, so Claude knows what to search. |
 | `add_jobs` | `(jobs) -> dict` | Push found jobs into Job Squire as `Saved` (deduped via `ingest_jobs`). |
@@ -64,7 +67,7 @@ These tools support the automated and semi-automated routines (triage, follow-up
 | `save_interview_prep` | `(job_id, prep_notes) -> dict` | Save an AI-generated interview prep guide to the most recent interview record for a job. Falls back to job notes if no interview record exists yet. |
 | `get_weekly_summary` | `() -> dict` | Return a summary of pipeline activity over the past 7 days: new jobs added, status changes, interviews completed, and recent AI insights. Used by the Weekly Strategy Review routine. |
 
-Reads: `get_*`, `list_*`, `get_weekly_summary`. Writes: `save_candidate_profile`, `add_jobs`, `save_analysis`, `update_job_notes`, `save_kit`, `set_follow_up`, `add_contact`, `log_submission`, `set_job_fit`, `save_followup_draft`, `save_interview_prep`.
+Reads: `get_*`, `list_*`, `get_weekly_summary`. Writes: `save_candidate_profile`, `save_resume_draft`, `add_jobs`, `save_analysis`, `update_job_notes`, `save_kit`, `set_follow_up`, `add_contact`, `log_submission`, `set_job_fit`, `save_followup_draft`, `save_interview_prep`.
 
 All tools run inside a Flask app context against the shared SQLite DB. The application-kit flow chains: `get_kit_instructions` → build documents → `save_kit` + `set_follow_up`.
 
@@ -127,7 +130,8 @@ The prompts enforce the writing style rules (no em-dashes, no AI-tell phrasing, 
 - Reads expose User's full pipeline, profile, and documents; writes can add jobs, analysis, kits,
   contacts, and submissions. There is no per-tool permissioning, so the connector should only be
   added in the user's own Claude.
-- The legacy `/mcp/<token>` path remains as a fallback; treat that token like a password if used.
+- The static API key (`app/mcp_auth.py`) is loopback-only by default; treat it like a password if
+  network access is ever enabled for it.
 
 ## Testing without Claude
 

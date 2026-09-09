@@ -100,7 +100,7 @@ COPY docs/wiki ./docs/wiki
 
 # BUILD_VERSION default below should track the semantic version in ./VERSION;
 # CI overrides it with "<VERSION>-<short sha>" on every publish (see
-# .github/workflows/docker-publish.yml).
+# .github/workflows/ci.yml).
 ARG BUILD_VERSION=0.1.0-dev
 ENV BUILD_VERSION=${BUILD_VERSION}
 

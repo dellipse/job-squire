@@ -10,34 +10,36 @@ The Job Squire exposes two programmatic interfaces: a **REST ingest endpoint** f
 
 Push a batch of job postings into Job Squire. Jobs are deduplicated by `external_id` and stored with status `Saved`.
 
-**Authentication.** Include the `INGEST_API_KEY` as a Bearer token:
+**Authentication.** Include the `INGEST_API_KEY` in the `X-API-Key` header:
 
 ```
-Authorization: Bearer <INGEST_API_KEY>
+X-API-Key: <INGEST_API_KEY>
 ```
 
-The endpoint is disabled (returns 404) unless `INGEST_API_KEY` is set in `data/.env`. The comparison is constant-time to prevent timing attacks.
+If `INGEST_API_KEY` isn't set in `data/.env`, or the provided key doesn't match, the endpoint returns 401. The comparison is constant-time to prevent timing attacks.
 
-**Request body.** JSON array of job objects:
+**Request body.** JSON object with a `jobs` array:
 
 ```json
-[
-  {
-    "title":       "Supply Chain Analyst",
-    "company":     "Acme Corp",
-    "location":    "Columbus, OH",
-    "url":         "https://example.com/jobs/42",
-    "description": "Full job description text...",
-    "source":      "external-claude",
-    "external_id": "acme-42",
-    "salary":      "$70,000 - $90,000",
-    "work_mode":   "Hybrid",
-    "posted_date": "2026-06-20"
-  }
-]
+{
+  "jobs": [
+    {
+      "title":       "Supply Chain Analyst",
+      "company":     "Acme Corp",
+      "location":    "Columbus, OH",
+      "url":         "https://example.com/jobs/42",
+      "description": "Full job description text...",
+      "source":      "external-claude",
+      "external_id": "acme-42",
+      "salary":      "$70,000 - $90,000",
+      "work_mode":   "Hybrid",
+      "posted_date": "2026-06-20"
+    }
+  ]
+}
 ```
 
-All fields except `title` are optional. `external_id` is used for deduplication -- jobs with a matching `external_id` are skipped.
+All fields except `title` are optional. `external_id` is used for deduplication -- jobs with a matching `external_id` are skipped. An optional top-level `created_by` string tags who/what submitted the batch (defaults to `"api"`).
 
 **Response:**
 
@@ -45,24 +47,26 @@ All fields except `title` are optional. `external_id` is used for deduplication 
 {
   "created": 3,
   "skipped": 1,
-  "total":   4
+  "ids":     [101, 102, 103]
 }
 ```
+
+`ids` lists the database IDs of the newly created jobs (not the skipped ones).
 
 **Example:**
 
 ```bash
 curl -s -X POST https://squire.yourdomain.com/api/ingest \
-  -H "Authorization: Bearer <INGEST_API_KEY>" \
+  -H "X-API-Key: <INGEST_API_KEY>" \
   -H "Content-Type: application/json" \
-  -d '[{"title":"Analyst","company":"Acme","url":"https://example.com/jobs/1","external_id":"acme-1"}]'
+  -d '{"jobs":[{"title":"Analyst","company":"Acme","url":"https://example.com/jobs/1","external_id":"acme-1"}]}'
 ```
 
 ---
 
 ## MCP Connector
 
-The MCP server (`app/mcp_server.py`) runs as one of three s6-supervised processes inside Job Squire's single container (alongside web and worker) and is reached at `https://mcp-squire.<domain>`. It exposes 23 tools over Streamable HTTP (uvicorn + FastMCP).
+The MCP server (`app/mcp_server.py`) runs as one of three s6-supervised processes inside Job Squire's single container (alongside web and worker) and is reached at `https://mcp-squire.<domain>`. It exposes 24 tools over Streamable HTTP (uvicorn + FastMCP).
 
 **Authentication.** OAuth 2.0 Authorization Code flow with PKCE. Claude handles the handshake automatically when the connector is added. The user signs in with their Job Squire credentials on the OAuth page; Claude stores a 30-day Bearer token. Tokens are persisted to `DATA_DIR/oauth_tokens.json`.
 

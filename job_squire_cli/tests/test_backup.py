@@ -107,17 +107,6 @@ def test_create_backup_no_data_directory_raises(tmp_path):
         bk.create_backup(instance, dest_dir=tmp_path, passphrase="pw", **_CHEAP_ARGON2)
 
 
-def test_create_all_backups_writes_one_archive_per_instance(fake, data_root, tmp_path):
-    _make_instance(fake, data_root, name="one")
-    _make_instance(fake, data_root, name="two")
-
-    results = bk.create_all_backups(dest_dir=tmp_path / "backups", passphrase="pw", run=fake.run, **_CHEAP_ARGON2)
-
-    assert sorted(r.instance_name for r in results) == ["one", "two"]
-    assert len({r.archive_path for r in results}) == 2
-    assert all(r.archive_path.exists() for r in results)
-
-
 # ── open_backup ──────────────────────────────────────────────────────────
 
 

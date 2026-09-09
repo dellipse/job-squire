@@ -5,6 +5,7 @@ __pycache__/
 *.pyc
 .venv/
 .pytest_cache/
+.ruff_cache/
 .coverage
 .coverage.*
 htmlcov/
@@ -12,6 +13,15 @@ CLAUDE.md
 AGENTS.md
 .DS_Store
 .claude/settings.local.json
+# Local secrets that should never land in git, wherever they end up.
+.env*
+*.pem
+*.key
+oauth_tokens.json
 # Generated at build time and attested to the published image (see the
 # "Attest SBOM" step in ci.yml) -- not committed, see sbom/README.md.
 sbom/job-squire.cdx.json
+# Generated at build time and uploaded as a CI artifact instead of
+# committed (see the "sbom" job in cli.yml) -- not committed, see
+# job_squire_cli/sbom/README.md.
+job_squire_cli/sbom/job-squire-cli.cdx.json

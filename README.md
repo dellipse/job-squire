@@ -193,7 +193,7 @@ The **AI analysis** tab shows up to three options depending on what's configured
 
 **Hermes Agent or other tools (static key):** Click **Generate static API key** in Settings → AI → MCP Connector. Configure the tool to send `Authorization: Bearer <key>` to your `PUBLIC_MCP_URL`. The Automatic Features toggle and the MCP connector are independent — both can be enabled at the same time.
 
-The MCP server exposes 23 tools for reads and writes. See [`docs/mcp-connector.md`](docs/mcp-connector.md) for the full list.
+The MCP server exposes 24 tools for reads and writes. See [`docs/mcp-connector.md`](docs/mcp-connector.md) for the full list.
 
 ---
 
@@ -225,7 +225,7 @@ job-squire/
     main.py           All UI + API routes
     auth.py           Login / logout blueprint
     ai.py             AI logic: payload, API calls, auto-triage, follow-up drafts, weekly review
-    mcp_server.py     Remote MCP server (OAuth 2.0/PKCE, 23 tools)
+    mcp_server.py     Remote MCP server (OAuth 2.0/PKCE, 24 tools)
     worker.py         APScheduler process
     providers.py      Job-board adapters: The Muse, Jobicy, ZipRecruiter, Google Jobs (SerpApi), Adzuna, Jooble, USAJOBS
     search.py         Search orchestration: dedup, ingest, cooldowns, email trigger

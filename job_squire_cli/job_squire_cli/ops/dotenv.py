@@ -14,10 +14,10 @@
 used by ops/compose.py (compose-level bookkeeping like
 `update`'s `PREVIOUS_IMAGE`), ops/tailscale.py, and ops/backup.py's restore.
 
-`set_line`/`append_if_absent` never reorder or rewrite a file's other
-lines -- each is a targeted single-line change, which is what "additive,
-never assumed" (CLAUDE.md's migration convention) requires of anything
-that touches an *existing* install's `data/.env`.
+`set_line` never reorders or rewrites a file's other lines -- it's a
+targeted single-line change, which is what "additive, never assumed"
+(CLAUDE.md's migration convention) requires of anything that touches an
+*existing* install's `data/.env`.
 """
 from __future__ import annotations
 
@@ -54,17 +54,3 @@ def set_line(path: Path, key: str, value: str) -> None:
             return
     lines.append(f"{key}={value}")
     path.write_text("\n".join(lines) + "\n")
-
-
-def append_if_absent(path: Path, key: str, value: str, *, comment: str | None = None) -> bool:
-    """Append `KEY=value` (with an optional preceding comment block) only
-    if `key` isn't already set anywhere in the file. Returns whether it
-    appended anything, so a caller can report exactly what changed."""
-    if key in parse(path):
-        return False
-    text = path.read_text() if path.exists() else ""
-    block = (f"{comment}\n" if comment else "") + f"{key}={value}\n"
-    separator = "" if (not text or text.endswith("\n")) else "\n"
-    with path.open("a") as f:
-        f.write(f"{separator}\n{block}" if text else block)
-    return True

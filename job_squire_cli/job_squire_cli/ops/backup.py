@@ -345,29 +345,6 @@ def create_backup(
     return BackupResult(instance_name=instance.name, archive_path=archive_path, manifest=manifest)
 
 
-def create_all_backups(
-    *,
-    dest_dir: Path | None = None,
-    passphrase: str,
-    ext: str = "tgz",
-    data_root: Path | None = None,
-    run: Runner = subprocess.run,
-    argon2_time_cost: int = backup_crypto.DEFAULT_TIME_COST,
-    argon2_memory_cost_kib: int = backup_crypto.DEFAULT_MEMORY_COST_KIB,
-    argon2_lanes: int = backup_crypto.DEFAULT_LANES,
-) -> list[BackupResult]:
-    """One archive per registered instance -- an option to back up every
-    registered instance in one run."""
-    return [
-        create_backup(
-            instance, data_root=data_root, dest_dir=dest_dir, passphrase=passphrase, ext=ext, run=run,
-            argon2_time_cost=argon2_time_cost, argon2_memory_cost_kib=argon2_memory_cost_kib,
-            argon2_lanes=argon2_lanes,
-        )
-        for instance in list_instances()
-    ]
-
-
 # ── restore, phase 1: open and verify ────────────────────────────────────
 
 
