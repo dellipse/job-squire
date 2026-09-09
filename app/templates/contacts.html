@@ -4,13 +4,13 @@
 <div class="card-head">
   <h1>Recruiters &amp; contacts</h1>
   <div class="actions">
-    <a class="btn btn-outline" href="{{ url_for('main.export_contacts_csv') }}">Export CSV</a>
-    <a class="btn" href="{{ url_for('main.submission_new') }}">+ Log submission</a>
-    <a class="btn btn-primary" href="{{ url_for('main.contact_new') }}">+ Add contact</a>
+    <a class="btn btn-outline" href="{{ url_for('contacts.export_contacts_csv') }}">Export CSV</a>
+    <a class="btn" href="{{ url_for('contacts.submission_new') }}">+ Log submission</a>
+    <a class="btn btn-primary" href="{{ url_for('contacts.contact_new') }}">+ Add contact</a>
   </div>
 </div>
 
-<form class="filters" method="get" action="{{ url_for('main.contacts_list') }}">
+<form class="filters" method="get" action="{{ url_for('contacts.contacts_list') }}">
   <input type="text" name="q" value="{{ q }}" placeholder="Search name, agency, email">
   <select name="type" data-autosubmit>
     <option value="">All types</option>
@@ -29,7 +29,7 @@
   </thead>
   <tbody>
     {% for c in contacts %}
-    <tr data-href="{{ url_for('main.contact_detail', contact_id=c.id) }}">
+    <tr data-href="{{ url_for('contacts.contact_detail', contact_id=c.id) }}">
       <td>{{ c.name }}{% if c.title %}<span class="muted small"><br>{{ c.title }}</span>{% endif %}{% if c.agency %}<span class="muted small mob-show-inline"> · {{ c.agency }}</span>{% endif %}</td>
       <td class="mob-hide">{{ c.agency or '—' }}</td>
       <td class="mob-hide"><span class="chip">{{ c.contact_type }}</span></td>
@@ -46,6 +46,6 @@
 </table>
 </div>
 {% else %}
-<p class="muted">No contacts yet. <a href="{{ url_for('main.contact_new') }}">Add the first recruiter</a> — staffing agencies, hiring managers, and networking contacts all go here.</p>
+<p class="muted">No contacts yet. <a href="{{ url_for('contacts.contact_new') }}">Add the first recruiter</a> — staffing agencies, hiring managers, and networking contacts all go here.</p>
 {% endif %}
 {% endblock %}

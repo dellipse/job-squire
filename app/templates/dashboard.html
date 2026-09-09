@@ -161,13 +161,13 @@
   <section class="card">
     <div class="card-head">
       <h2>Recruiter follow-ups due</h2>
-      <a class="btn btn-outline" href="{{ url_for('main.contacts_list') }}">All recruiters</a>
+      <a class="btn btn-outline" href="{{ url_for('contacts.contacts_list') }}">All recruiters</a>
     </div>
     {% if contact_follow_ups %}
       <ul class="followups">
         {% for c in contact_follow_ups %}
         <li>
-          <a href="{{ url_for('main.contact_detail', contact_id=c.id) }}">{{ c.name }}{% if c.agency %} — {{ c.agency }}{% endif %}</a>
+          <a href="{{ url_for('contacts.contact_detail', contact_id=c.id) }}">{{ c.name }}{% if c.agency %} — {{ c.agency }}{% endif %}</a>
           <span class="due">{{ c.follow_up_date }}</span>
         </li>
         {% endfor %}
@@ -180,13 +180,13 @@
   <section class="card">
     <div class="card-head">
       <h2>Open submissions</h2>
-      <a class="btn" href="{{ url_for('main.submission_new') }}">+ Log submission</a>
+      <a class="btn" href="{{ url_for('contacts.submission_new') }}">+ Log submission</a>
     </div>
     {% if open_submissions %}
       <ul class="followups">
         {% for s in open_submissions %}
         <li>
-          <a href="{{ url_for('main.contact_detail', contact_id=s.contact_id) if s.contact_id else url_for('main.contacts_list') }}">{{ s.role_title or 'Role' }}{% if s.company %} — {{ s.company }}{% endif %}</a>
+          <a href="{{ url_for('contacts.contact_detail', contact_id=s.contact_id) if s.contact_id else url_for('contacts.contacts_list') }}">{{ s.role_title or 'Role' }}{% if s.company %} — {{ s.company }}{% endif %}</a>
           <span class="due">{{ s.status }}</span>
         </li>
         {% endfor %}

@@ -4,7 +4,7 @@
 <h1>{{ 'Edit contact' if mode=='edit' else 'Add contact' }}</h1>
 
 <form method="post" class="card form" novalidate
-      action="{{ url_for('main.contact_edit', contact_id=contact.id) if mode=='edit' else url_for('main.contact_new') }}">
+      action="{{ url_for('contacts.contact_edit', contact_id=contact.id) if mode=='edit' else url_for('contacts.contact_new') }}">
   {{ form.hidden_tag() }}
   <div class="form-grid">
     <div class="field">{{ form.name.label }} {{ form.name() }}</div>
@@ -23,7 +23,7 @@
   {% endfor %}
   <div class="actions">
     {{ form.submit(class="btn btn-primary") }}
-    <a class="btn btn-outline" href="{{ url_for('main.contact_detail', contact_id=contact.id) if mode=='edit' else url_for('main.contacts_list') }}">Cancel</a>
+    <a class="btn btn-outline" href="{{ url_for('contacts.contact_detail', contact_id=contact.id) if mode=='edit' else url_for('contacts.contacts_list') }}">Cancel</a>
   </div>
 </form>
 {% endblock %}
