@@ -49,7 +49,7 @@
           Check <code>docker logs job-squire | grep worker</code>.
         </span>
       </div>
-      <a class="btn btn-sm btn-outline" href="{{ url_for('main.settings', _anchor='tab-history') }}">View history ↗</a>
+      <a class="btn btn-sm btn-outline" href="{{ url_for('settings.settings', _anchor='tab-history') }}">View history ↗</a>
     </div>
     {% endif %}
     {% if unscored_count > 0 %}
@@ -60,7 +60,7 @@
         <span class="muted small">New Job Triage routine will score these for fit</span>
       </div>
       {% if claude_buttons_enabled %}
-      <a class="btn btn-sm btn-outline" href="{{ url_for('main.settings', _anchor='feature-triage') }}">Run now ↗</a>
+      <a class="btn btn-sm btn-outline" href="{{ url_for('settings.settings', _anchor='feature-triage') }}">Run now ↗</a>
       {% endif %}
     </div>
     {% endif %}
@@ -72,7 +72,7 @@
         <span class="muted small">Follow-Up Drafts routine will write emails for these</span>
       </div>
       {% if claude_buttons_enabled %}
-      <a class="btn btn-sm btn-outline" href="{{ url_for('main.settings', _anchor='feature-followup') }}">Run now ↗</a>
+      <a class="btn btn-sm btn-outline" href="{{ url_for('settings.settings', _anchor='feature-followup') }}">Run now ↗</a>
       {% endif %}
     </div>
     {% endif %}

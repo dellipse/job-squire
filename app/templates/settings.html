@@ -3,7 +3,7 @@
 {% block content %}
 <div class="card-head">
   <h1>Settings</h1>
-  <form method="post" action="{{ url_for('main.settings_run') }}">
+  <form method="post" action="{{ url_for('settings.settings_run') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <button class="btn btn-primary" type="submit">Run search now</button>
   </form>
@@ -24,7 +24,7 @@
 <div id="tab-search" class="tab-panel">
   <section class="card">
     <h2>What to search for</h2>
-    <form method="post" action="{{ url_for('main.settings_search') }}" class="form">
+    <form method="post" action="{{ url_for('settings.settings_search') }}" class="form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-grid">
         <div class="field field-wide">
@@ -88,7 +88,7 @@
       Secrets are encrypted at rest; leave a secret field blank to keep the saved value.</p>
     {% for p in providers %}
     <div class="provider" data-provider="{{ p.key }}">
-      <form method="post" action="{{ url_for('main.settings_provider', provider=p.key) }}" class="form">
+      <form method="post" action="{{ url_for('settings.settings_provider', provider=p.key) }}" class="form">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="provider-head">
           <strong>{{ p.label }}</strong>
@@ -129,11 +129,11 @@
         </div>
       </form>
       <div class="provider-actions">
-        <form method="post" action="{{ url_for('main.settings_provider_test', provider=p.key) }}">
+        <form method="post" action="{{ url_for('settings.settings_provider_test', provider=p.key) }}">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button class="btn btn-outline" type="submit">Test connection</button>
         </form>
-        <form method="post" action="{{ url_for('main.settings_provider_pull', provider=p.key) }}">
+        <form method="post" action="{{ url_for('settings.settings_provider_pull', provider=p.key) }}">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button class="btn btn-primary" type="submit">Pull now</button>
         </form>
@@ -165,7 +165,7 @@
       account email. For <strong>Brevo</strong>, use the dedicated SMTP login shown on the
       SMTP &amp; API page (not your Brevo account email). <strong>Password</strong> is the SMTP key /
       app password, not your account password.</p>
-    <form method="post" action="{{ url_for('main.settings_smtp') }}" class="form">
+    <form method="post" action="{{ url_for('settings.settings_smtp') }}" class="form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-grid">
         <div class="field"><label>SMTP host</label><input type="text" name="host" value="{{ smtp.host }}"></div>
@@ -185,7 +185,7 @@
       <div class="actions"><button class="btn btn-primary" type="submit">Save email settings</button></div>
     </form>
     <div class="test-email">
-      <form method="post" action="{{ url_for('main.settings_test_email') }}">
+      <form method="post" action="{{ url_for('settings.settings_test_email') }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button class="btn btn-outline" type="submit">Send test email</button>
       </form>
@@ -215,7 +215,7 @@
       Run scheduled AI tasks in the background using a configured provider. Independent of
       the MCP Connector — you can use one, the other, or both.
     </p>
-    <form method="post" action="{{ url_for('main.settings_ai_mode') }}" class="form">
+    <form method="post" action="{{ url_for('settings.settings_ai_mode') }}" class="form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-grid">
         <div class="field field-wide">
@@ -253,7 +253,7 @@
       reach employers (health details, age signals, marital status) is removed and flagged
       for your review. Applies to automatic features, manual exports, and the MCP connector.
     </p>
-    <form method="post" action="{{ url_for('main.settings_ai_privacy') }}" class="form">
+    <form method="post" action="{{ url_for('settings.settings_ai_privacy') }}" class="form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-grid">
         <div class="field field-wide">
@@ -343,7 +343,7 @@
           </td>
           <td><span class="chip chip-sm">{{ p.capability_label }}</span></td>
           <td>
-            <form method="post" action="{{ url_for('main.ai_provider_toggle', pid=p.id) }}" style="display:inline">
+            <form method="post" action="{{ url_for('settings.ai_provider_toggle', pid=p.id) }}" style="display:inline">
               {{ confirm_form.hidden_tag() }}
               <button class="btn btn-xs {{ 'btn-success' if p.enabled else 'btn-outline' }}" type="submit">
                 {{ 'On' if p.enabled else 'Off' }}
@@ -354,15 +354,15 @@
             <form class="provider-row-actions" method="post">
               {{ confirm_form.hidden_tag() }}
               <button class="btn btn-xs btn-outline" type="submit"
-                      formaction="{{ url_for('main.ai_provider_move_up', pid=p.id) }}"
+                      formaction="{{ url_for('settings.ai_provider_move_up', pid=p.id) }}"
                       title="Move up"{% if loop.first %} style="visibility:hidden"{% endif %}>▲</button>
               <button class="btn btn-xs btn-outline" type="submit"
-                      formaction="{{ url_for('main.ai_provider_move_down', pid=p.id) }}"
+                      formaction="{{ url_for('settings.ai_provider_move_down', pid=p.id) }}"
                       title="Move down"{% if loop.last %} style="visibility:hidden"{% endif %}>▼</button>
               <button class="btn btn-xs btn-outline provider-edit-btn" type="button"
                       data-pid="{{ p.id }}">Edit</button>
               <button class="btn btn-xs btn-danger provider-delete-btn" type="submit"
-                      formaction="{{ url_for('main.ai_provider_delete', pid=p.id) }}"
+                      formaction="{{ url_for('settings.ai_provider_delete', pid=p.id) }}"
                       data-name="{{ p.display_name }}" title="Remove">✕</button>
             </form>
           </td>
@@ -377,12 +377,12 @@
                 <div style="display:flex;gap:.5rem;align-items:center">
                   <button class="btn btn-sm btn-outline" type="submit"
                           form="provider-edit-form-{{ p.id }}"
-                          formaction="{{ url_for('main.ai_provider_test', pid=p.id) }}"
+                          formaction="{{ url_for('settings.ai_provider_test', pid=p.id) }}"
                           title="Test whatever is currently in this form, including unsaved changes">Test connection</button>
                   <button class="btn btn-sm btn-outline provider-close-btn" type="button" data-pid="{{ p.id }}">Close</button>
                 </div>
               </div>
-              <form id="provider-edit-form-{{ p.id }}" method="post" action="{{ url_for('main.ai_provider_edit', pid=p.id) }}" class="form">
+              <form id="provider-edit-form-{{ p.id }}" method="post" action="{{ url_for('settings.ai_provider_edit', pid=p.id) }}" class="form">
                 {{ confirm_form.hidden_tag() }}
                 <div class="form-grid" style="grid-template-columns:1fr 1fr">
                   <div class="field">
@@ -455,7 +455,7 @@
     <details id="add-provider-details">
       <summary class="btn btn-sm btn-outline" style="list-style:none;cursor:pointer;display:inline-block">+ Add provider</summary>
       <div style="margin-top:1rem;padding:1rem;background:var(--surface-alt,#f9fafb);border-radius:6px;border:1px solid var(--border,#e5e7eb)">
-        <form method="post" action="{{ url_for('main.ai_provider_add') }}" class="form">
+        <form method="post" action="{{ url_for('settings.ai_provider_add') }}" class="form">
           {{ confirm_form.hidden_tag() }}
           <div class="form-grid">
             <div class="field">
@@ -570,7 +570,7 @@
       Setting a provider to "Ranked chain" means the app tries providers in rank order.
     </p>
 
-    <form id="ai-tasks-form" method="post" action="{{ url_for('main.settings_ai_tasks') }}" class="form">
+    <form id="ai-tasks-form" method="post" action="{{ url_for('settings.settings_ai_tasks') }}" class="form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
       {% set task_meta = {
@@ -730,7 +730,7 @@
     </p>
 
     {# ── Enable toggle + connector name — one combined form ── #}
-    <form method="post" action="{{ url_for('main.settings_claude_pro') }}" class="form" id="connector-settings-form">
+    <form method="post" action="{{ url_for('settings.settings_claude_pro') }}" class="form" id="connector-settings-form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       {# carry claude_buttons_enabled through so toggling MCP doesn't uncheck it #}
       {% if ai_cfg.claude_buttons_enabled %}<input type="hidden" name="claude_buttons_enabled" value="on">{% endif %}
@@ -746,7 +746,7 @@
     </form>
 
     {# ── Connector name (separate route — just saves the label) ── #}
-    <form method="post" action="{{ url_for('main.settings_ai') }}" class="form" style="margin-top:.75rem">
+    <form method="post" action="{{ url_for('settings.settings_ai') }}" class="form" style="margin-top:.75rem">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-grid">
         <div class="field">
@@ -783,7 +783,7 @@
     <div class="card-head">
       <h2>Connected clients</h2>
       {% if oauth_tokens %}
-      <form method="post" action="{{ url_for('main.settings_mcp_revoke_all') }}" style="display:inline">
+      <form method="post" action="{{ url_for('settings.settings_mcp_revoke_all') }}" style="display:inline">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button class="btn btn-sm btn-danger revoke-all-btn" type="submit"
                 data-confirm="Revoke all {{ oauth_tokens|length }} token{{ 's' if oauth_tokens|length != 1 else '' }}? Every connected client will need to re-authorize.">
@@ -821,7 +821,7 @@
           </td>
           <td class="muted small">{{ (tok.exp | int) | local_date }}</td>
           <td>
-            <form method="post" action="{{ url_for('main.settings_mcp_revoke_token') }}" style="display:inline">
+            <form method="post" action="{{ url_for('settings.settings_mcp_revoke_token') }}" style="display:inline">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <input type="hidden" name="token_id" value="{{ tok.token_id }}">
               <button class="btn btn-xs btn-danger" type="submit">Revoke</button>
@@ -855,7 +855,7 @@
     </p>
 
     {# ── Claude buttons toggle ── #}
-    <form method="post" action="{{ url_for('main.settings_claude_pro') }}" class="form" style="margin-bottom:1rem">
+    <form method="post" action="{{ url_for('settings.settings_claude_pro') }}" class="form" style="margin-bottom:1rem">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       {# carry mcp_enabled through so the route doesn't accidentally clear it #}
       {% if ai_cfg.mcp_enabled %}<input type="hidden" name="mcp_enabled" value="on">{% endif %}
@@ -1032,7 +1032,7 @@ openclaw mcp doctor {{ connector }} --probe{% endset %}
       {% endif %}
     </div>
     {% endif %}
-    <form method="post" action="{{ url_for('main.settings_mcp_api_key') }}"
+    <form method="post" action="{{ url_for('settings.settings_mcp_api_key') }}"
           style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
       {{ confirm_form.hidden_tag() }}
       <input type="hidden" name="action" value="generate">
@@ -1044,7 +1044,7 @@ openclaw mcp doctor {{ connector }} --probe{% endset %}
       </button>
     </form>
     {% if mcp_api_key_set %}
-    <form method="post" action="{{ url_for('main.settings_mcp_api_key') }}"
+    <form method="post" action="{{ url_for('settings.settings_mcp_api_key') }}"
           style="display:inline;margin-top:.5rem">
       {{ confirm_form.hidden_tag() }}
       <input type="hidden" name="action" value="revoke">
@@ -1056,7 +1056,7 @@ openclaw mcp doctor {{ connector }} --probe{% endset %}
     </p>
 
     {% if mcp_network_reachable %}
-    <form method="post" action="{{ url_for('main.settings_mcp_api_key') }}"
+    <form method="post" action="{{ url_for('settings.settings_mcp_api_key') }}"
           style="margin-top:.75rem;display:flex;gap:.5rem;align-items:center">
       {{ confirm_form.hidden_tag() }}
       <input type="hidden" name="action" value="set_network_override">
@@ -1234,7 +1234,7 @@ openclaw mcp doctor {{ connector }} --probe{% endset %}
     <p class="muted small">This profile is returned by <code>get_candidate_profile()</code>
       via the MCP connector and is the base for all application kits. Edit it directly below
       and save, or use the button to ask Claude to rebuild it from the uploaded documents.</p>
-    <form method="post" action="{{ url_for('main.settings_profile') }}" class="form">
+    <form method="post" action="{{ url_for('settings.settings_profile') }}" class="form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <textarea name="candidate_profile" rows="22" class="mono" style="font-size:.8rem">{{ candidate_profile }}</textarea>
       <div class="actions" style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-top:.6rem">
@@ -1265,7 +1265,7 @@ openclaw mcp doctor {{ connector }} --probe{% endset %}
 
     <div style="margin-top:1rem;padding-top:1rem;border-top:1px solid var(--border)">
       <p class="muted small" style="margin:0 0 .4rem">Or upload a <code>.md</code> file to replace the profile directly:</p>
-      <form method="post" action="{{ url_for('main.settings_profile_upload') }}"
+      <form method="post" action="{{ url_for('settings.settings_profile_upload') }}"
             enctype="multipart/form-data"
             style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -1282,7 +1282,7 @@ openclaw mcp doctor {{ connector }} --probe{% endset %}
       candidate profile from uploaded documents. Edit them to tune what Claude looks for or
       how it structures the output. The connector name and current profile are appended
       automatically when the "Regenerate" button is used.</p>
-    <form method="post" action="{{ url_for('main.settings_profile_prompt') }}" class="form">
+    <form method="post" action="{{ url_for('settings.settings_profile_prompt') }}" class="form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <textarea name="profile_prompt" rows="9">{{ profile_prompt }}</textarea>
       <div class="actions" style="margin-top:.6rem">
@@ -1298,7 +1298,7 @@ openclaw mcp doctor {{ connector }} --probe{% endset %}
       other reference files here. These are stored once and available to Claude when building
       application kits, and via the MCP connector's <code>get_candidate_assets</code> tool.</p>
 
-    <form method="post" action="{{ url_for('main.settings_asset_upload') }}"
+    <form method="post" action="{{ url_for('settings.settings_asset_upload') }}"
           enctype="multipart/form-data" class="form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-grid">
@@ -1367,12 +1367,12 @@ openclaw mcp doctor {{ connector }} --probe{% endset %}
           <td class="muted small mob-hide">{{ asset.uploaded_at | local_date }}</td>
           <td>
             <div class="row-actions">
-              <a class="btn btn-sm btn-outline" href="{{ url_for('main.asset_download', asset_id=asset.id) }}">Download</a>
+              <a class="btn btn-sm btn-outline" href="{{ url_for('settings.asset_download', asset_id=asset.id) }}">Download</a>
               {% if asset.kind == 'Resume' and asset.source_stored_name %}
-              <a class="btn btn-sm btn-outline" href="{{ url_for('main.asset_download_source', asset_id=asset.id) }}">Download original</a>
+              <a class="btn btn-sm btn-outline" href="{{ url_for('settings.asset_download_source', asset_id=asset.id) }}">Download original</a>
               {% endif %}
               {% if asset.kind == 'Resume' and not asset.is_base %}
-              <form method="post" action="{{ url_for('main.asset_set_base', asset_id=asset.id) }}" style="display:inline">
+              <form method="post" action="{{ url_for('settings.asset_set_base', asset_id=asset.id) }}" style="display:inline">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button class="btn btn-sm btn-outline" type="submit">Make base</button>
               </form>
@@ -1381,7 +1381,7 @@ openclaw mcp doctor {{ connector }} --probe{% endset %}
               {# Inline edit form #}
               <details class="inline-edit">
                 <summary class="btn btn-sm btn-outline">Edit</summary>
-                <form method="post" action="{{ url_for('main.asset_edit', asset_id=asset.id) }}"
+                <form method="post" action="{{ url_for('settings.asset_edit', asset_id=asset.id) }}"
                       class="form inline-edit-form">
                   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                   <div class="form-grid">
@@ -1408,7 +1408,7 @@ openclaw mcp doctor {{ connector }} --probe{% endset %}
                 </form>
               </details>
 
-              <form method="post" action="{{ url_for('main.asset_delete', asset_id=asset.id) }}"
+              <form method="post" action="{{ url_for('settings.asset_delete', asset_id=asset.id) }}"
                     style="display:inline"
                     onsubmit="return confirm('Remove this document? This cannot be undone.')">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -1433,7 +1433,7 @@ openclaw mcp doctor {{ connector }} --probe{% endset %}
 <div id="tab-kit" class="tab-panel">
   <section class="card">
     <h2>Fit assessment</h2>
-    <form method="post" action="{{ url_for('main.settings_kit') }}" class="form">
+    <form method="post" action="{{ url_for('settings.settings_kit') }}" class="form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-grid">
         <div class="field">
@@ -1602,7 +1602,7 @@ openclaw mcp doctor {{ connector }} --probe{% endset %}
       format <code>scripts/backup.sh</code> produces. Safe to run anytime; it
       does not interrupt search or the app.
     </p>
-    <form method="get" action="{{ url_for('main.backup_download') }}">
+    <form method="get" action="{{ url_for('settings.backup_download') }}">
       <div class="field">
         <label>
           <input type="checkbox" name="include_env" value="1" checked>

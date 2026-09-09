@@ -424,7 +424,7 @@ def get_kit_instructions() -> str:
     Call this first when the user asks you to build an application kit for a job.
     Follow every step in the returned instructions exactly, in order.
     """
-    from .main import KIT_PROMPT
+    from .kits import KIT_PROMPT
     return KIT_PROMPT
 
 
