@@ -700,7 +700,7 @@ def resume_interview():
     back_url = url_for("onboarding.step", step="profile")
 
     import threading
-    from .main import _StatusLogHandler, _TaskStatus
+    from .task_status import _StatusLogHandler, _TaskStatus
 
     run_id = uuid.uuid4().hex
     data_dir = current_app.config["DATA_DIR"]
