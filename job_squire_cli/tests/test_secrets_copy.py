@@ -19,8 +19,10 @@ test_fernet_derivation_matches_app_crypto -- it is the one guarantee that
 `copy_keys=True` actually produces something the app can decrypt.
 """
 import importlib.util
+import json
 import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -163,6 +165,134 @@ def _make_db(path: Path) -> sqlite3.Connection:
     return conn
 
 
+# ── faking `docker/podman exec ... python -m app.secrets_copy_cli` ───────
+#
+# `/data` is a named Docker volume, not a host bind mount (ops/compose.py),
+# so ops/secrets_copy.py's `copy_db_settings` no longer opens either
+# instance's `job-squire.db` directly -- it execs `app/secrets_copy_cli.py`
+# inside each instance's own running container instead (a `dump` request
+# against the source, an `apply` request against the destination). This
+# package never imports the app package (module docstring), so the
+# dump/apply logic below is duplicated from app/secrets_copy_cli.py against
+# a real sqlite file standing in for "whatever the container's volume
+# contains" -- the same convention test_ollama_assist.py's
+# `container_fake_run` and test_lifecycle.py's FakeRuntime already
+# established for their own exec-based writes.
+
+_SOURCE_CONTAINER = "job-squire-source"
+_DEST_CONTAINER = "job-squire-dest"
+
+
+def _dump_like_container_cli(db_path, tables):
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        result = {}
+        for spec in tables:
+            table, columns = spec["table"], spec["columns"]
+            try:
+                rows = conn.execute(f"SELECT {', '.join(columns)} FROM {table}").fetchall()  # noqa: S608
+            except sqlite3.OperationalError:
+                result[table] = None
+                continue
+            result[table] = [dict(row) for row in rows]
+        return {"tables": result}
+    finally:
+        conn.close()
+
+
+def _apply_like_container_cli(db_path, tables):
+    conn = sqlite3.connect(str(db_path))
+    try:
+        applied = []
+        for spec in tables:
+            table, strategy, key_col, rows = spec["table"], spec["strategy"], spec.get("key_col"), spec["rows"]
+            if strategy == "full_replace":
+                conn.execute(f"DELETE FROM {table}")  # noqa: S608
+                for values in rows:
+                    cols = list(values)
+                    placeholders = ", ".join(["?"] * len(cols))
+                    conn.execute(
+                        f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({placeholders})",  # noqa: S608
+                        [values[c] for c in cols],
+                    )
+            else:
+                for values in rows:
+                    key_val = values[key_col] if key_col is not None else None
+                    write_values = {k: v for k, v in values.items() if k != key_col}
+                    cols = list(write_values)
+                    assignments = ", ".join(f"{c} = ?" for c in cols)
+                    if strategy == "singleton":
+                        cur = conn.execute(
+                            f"UPDATE {table} SET {assignments} WHERE id = 1",  # noqa: S608
+                            [write_values[c] for c in cols],
+                        )
+                        if cur.rowcount == 0:
+                            placeholders = ", ".join(["?"] * len(cols))
+                            conn.execute(
+                                f"INSERT INTO {table} (id, {', '.join(cols)}) VALUES (1, {placeholders})",  # noqa: S608
+                                [write_values[c] for c in cols],
+                            )
+                    else:
+                        cur = conn.execute(
+                            f"UPDATE {table} SET {assignments} WHERE {key_col} = ?",  # noqa: S608
+                            [write_values[c] for c in cols] + [key_val],
+                        )
+                        if cur.rowcount == 0 and strategy == "by_key":
+                            all_cols = [key_col] + cols
+                            placeholders = ", ".join(["?"] * len(all_cols))
+                            conn.execute(
+                                f"INSERT INTO {table} ({', '.join(all_cols)}) VALUES ({placeholders})",  # noqa: S608
+                                [key_val] + [write_values[c] for c in cols],
+                            )
+            applied.append(table)
+        conn.commit()
+        return {"applied": applied}
+    finally:
+        conn.close()
+
+
+def container_fake_run(source_db_path, dest_db_path, *, source_running=True, dest_running=True):
+    """Fakes `inspect` (is each container up?) and `exec ... python -m
+    app.secrets_copy_cli` (dump against the source, apply against the
+    destination) for both instances involved in a `copy_db_settings` call."""
+    calls = []
+
+    def _run(args, **kwargs):
+        args = list(args)
+        calls.append(tuple(args))
+        if len(args) >= 2 and args[1] == "inspect":
+            container_name = args[-1]
+            running = source_running if container_name == _SOURCE_CONTAINER else dest_running
+            if not running:
+                return SimpleNamespace(returncode=1, stdout="", stderr="no such container")
+            return SimpleNamespace(returncode=0, stdout=json.dumps({"Status": "running"}), stderr="")
+        if len(args) >= 4 and args[1] == "exec":
+            container_name = args[3] if args[2] == "-i" else args[2]
+            payload = json.loads(kwargs["input"])
+            db_path = source_db_path if container_name == _SOURCE_CONTAINER else dest_db_path
+            if payload["op"] == "dump":
+                response = _dump_like_container_cli(db_path, payload["tables"])
+            elif payload["op"] == "apply":
+                response = _apply_like_container_cli(db_path, payload["tables"])
+            else:
+                raise AssertionError(f"unexpected op in test: {payload}")
+            return SimpleNamespace(returncode=0, stdout=json.dumps(response), stderr="")
+        raise AssertionError(f"unexpected call in test: {args}")
+
+    _run.calls = calls
+    return _run
+
+
+def _copy_kwargs(run, **overrides):
+    kwargs = dict(
+        source_runtime="docker", source_container_name=_SOURCE_CONTAINER,
+        dest_runtime="docker", dest_container_name=_DEST_CONTAINER, run=run,
+    )
+    kwargs.update(overrides)
+    return kwargs
+
+
 def _seed_source(conn: sqlite3.Connection, secret_key: str) -> None:
     conn.execute(
         "INSERT INTO search_config (id, titles, location, country, radius_miles, min_salary, "
@@ -245,9 +375,11 @@ def dest_root(tmp_path):
 
 
 def test_copy_without_keys_copies_nonsecret_fields_only(source_root, dest_root):
+    run = container_fake_run(paths.sqlite_db_path(source_root), paths.sqlite_db_path(dest_root))
     summary = sc.copy_db_settings(
         source_root=source_root, dest_root=dest_root,
         source_secret_key="source-secret-key", dest_secret_key="dest-secret-key", copy_keys=False,
+        **_copy_kwargs(run),
     )
     assert not summary.warnings
     assert set(summary.tables_copied) == {
@@ -296,9 +428,11 @@ def test_copy_without_keys_copies_nonsecret_fields_only(source_root, dest_root):
 
 
 def test_copy_with_keys_reencrypts_for_destination(source_root, dest_root):
+    run = container_fake_run(paths.sqlite_db_path(source_root), paths.sqlite_db_path(dest_root))
     sc.copy_db_settings(
         source_root=source_root, dest_root=dest_root,
         source_secret_key="source-secret-key", dest_secret_key="dest-secret-key", copy_keys=True,
+        **_copy_kwargs(run),
     )
     conn = sqlite3.connect(str(paths.sqlite_db_path(dest_root)))
     conn.row_factory = sqlite3.Row
@@ -318,21 +452,33 @@ def test_copy_with_keys_reencrypts_for_destination(source_root, dest_root):
     conn.close()
 
 
-def test_copy_missing_dest_database_raises(source_root, tmp_path):
-    with pytest.raises(sc.SecretsCopyError):
+def test_copy_dest_container_not_running_raises(source_root, dest_root):
+    """The destination is the instance this call is actually supposed to
+    modify, so an unreachable destination container is a hard error --
+    same as the old "destination database not found" case it replaces."""
+    run = container_fake_run(
+        paths.sqlite_db_path(source_root), paths.sqlite_db_path(dest_root), dest_running=False,
+    )
+    with pytest.raises(sc.SecretsCopyError, match="must be running"):
         sc.copy_db_settings(
-            source_root=source_root, dest_root=tmp_path / "nowhere",
-            source_secret_key="a", dest_secret_key="b", copy_keys=False,
+            source_root=source_root, dest_root=dest_root,
+            source_secret_key="a", dest_secret_key="b", copy_keys=False, **_copy_kwargs(run),
         )
 
 
-def test_copy_missing_source_database_warns_without_raising(tmp_path, dest_root):
+def test_copy_source_container_not_running_warns_without_raising(source_root, dest_root):
+    """An operator who simply hasn't started the source instance yet gets a
+    warning and an empty import, not a hard failure -- same leniency the
+    old "source database not found" case had."""
+    run = container_fake_run(
+        paths.sqlite_db_path(source_root), paths.sqlite_db_path(dest_root), source_running=False,
+    )
     summary = sc.copy_db_settings(
-        source_root=tmp_path / "nowhere", dest_root=dest_root,
-        source_secret_key="a", dest_secret_key="b", copy_keys=False,
+        source_root=source_root, dest_root=dest_root,
+        source_secret_key="a", dest_secret_key="b", copy_keys=False, **_copy_kwargs(run),
     )
     assert not summary.tables_copied
-    assert "nothing imported" in summary.warnings[0]
+    assert "isn't running" in summary.warnings[0]
 
 
 def test_copy_warns_and_continues_when_a_table_is_missing(tmp_path):
@@ -357,9 +503,10 @@ def test_copy_warns_and_continues_when_a_table_is_missing(tmp_path):
     _seed_dest_defaults(dconn)
     dconn.close()
 
+    run = container_fake_run(paths.sqlite_db_path(source), paths.sqlite_db_path(dest))
     summary = sc.copy_db_settings(
         source_root=source, dest_root=dest,
-        source_secret_key="a", dest_secret_key="b", copy_keys=False,
+        source_secret_key="a", dest_secret_key="b", copy_keys=False, **_copy_kwargs(run),
     )
     assert "search_config" in summary.tables_copied
     assert any("smtp_config" in w for w in summary.warnings)

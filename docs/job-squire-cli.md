@@ -190,14 +190,16 @@ compared, loopback-only unless explicitly enabled. `app/mcp_auth.py` and
 `app/main.py`'s `settings_mcp_api_key()` route implement the app side,
 reachable only from an authenticated, CSRF-protected browser session -- there is no Flask CLI
 command or admin API route to call into instead. So `job_squire_cli/ops/
-mcp_token.py` writes the same `AIConfig` columns directly with the stdlib
-`sqlite3` module, mirroring the app's token shape and its HKDF-SHA256 ->
-Fernet derivation (`ops/crypto_mirror.py`, shared with `ops/
-secrets_copy.py`) rather than importing the app package -- exactly the
-precedent `ops/secrets_copy.py` already established for the app's other
-Fernet-encrypted columns. A write lands on the very next MCP request with
-no restart needed, since `app/mcp_server.py` re-fetches `AIConfig` fresh
-on every call.
+mcp_token.py` writes the same `AIConfig` columns, mirroring the app's token
+shape and its HKDF-SHA256 -> Fernet derivation (`ops/crypto_mirror.py`,
+shared with `ops/secrets_copy.py`) rather than importing the app package.
+`/data` is a named Docker volume, not a host bind mount, so the actual
+read/write runs inside the instance's own running container via
+`docker/podman exec` (`app/mcp_token_cli.py`, fed a JSON request on
+stdin) -- the same pattern `ops/secrets_copy.py` and `ops/ollama_assist.py`
+use for their own container-side reads/writes. A write lands on the very
+next MCP request with no restart needed, since `app/mcp_server.py`
+re-fetches `AIConfig` fresh on every call.
 
 ```
 job-squire configure NAME --mcp-token generate [--ttl-hours N] [--allow-network]
@@ -369,19 +371,26 @@ data` instead of `job-squire-testdb-data`).
 same two config layers the app itself uses: schedule hours/timezone are
 `data/.env` variables, read as plain text before the new instance's first
 boot; everything else (search targets, enabled providers, SMTP host/port,
-AI provider selection, interface preferences) lives in the database, read
-and written directly with the stdlib `sqlite3` module against a
-hand-maintained column allowlist (this package does not depend on
-Flask/SQLAlchemy/the app package at all). Secrets are excluded by default;
-`--copy-keys` decrypts each secret column with the *source* instance's
-`SECRET_KEY` and re-encrypts it with the destination's, using an
-HKDF-SHA256 -> Fernet derivation mirrored byte-for-byte from
-`app/crypto.py` (verified in `tests/test_secrets_copy.py` by loading the
-real `app/crypto.py` file directly, bypassing `app/__init__.py`'s
-Flask-only imports). The database copy runs *after* the new instance's
-first boot (so the app's own schema creation/seeding has already run),
-bracketed by a compose `stop`/`start` so it never races the app's own
-writes to the same SQLite file.
+AI provider selection, interface preferences) lives in the database,
+against a hand-maintained column allowlist (this package does not depend
+on Flask/SQLAlchemy/the app package at all). `/data` is a named Docker
+volume, not a host bind mount, so the actual read (from the source
+instance) and write (to the destination instance) each run via
+`docker/podman exec` into that instance's own running container
+(`app/secrets_copy_cli.py`) -- both instances' containers must be running
+for the import to proceed. Secrets are excluded by default; `--copy-keys`
+decrypts each secret column with the *source* instance's `SECRET_KEY` and
+re-encrypts it with the destination's, using an HKDF-SHA256 -> Fernet
+derivation mirrored byte-for-byte from `app/crypto.py` (verified in
+`tests/test_secrets_copy.py` by loading the real `app/crypto.py` file
+directly, bypassing `app/__init__.py`'s Flask-only imports) -- this
+re-encryption always happens on the host, in `ops/secrets_copy.py`, since
+neither container needs to know the other's `SECRET_KEY`. The database
+copy runs *after* the new instance's first boot (so the app's own schema
+creation/seeding has already run); it no longer needs a compose
+`stop`/`start` bracket around it now that the write is a single exec'd
+sqlite transaction (with a busy_timeout) rather than a direct write to a
+host-visible file.
 
 **Surfacing the startup guard.** When `app/deploy.py`'s
 startup safety guard refuses to boot (an unsafe `DEPLOY_MODE`/`PUBLIC_URL`/

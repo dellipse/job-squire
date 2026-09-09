@@ -1025,7 +1025,9 @@ def _print_mcp_config(instance: Instance) -> None:
     root = Path(instance.data_dir)
     click.echo(f"Instance: {instance.name}  (mode={instance.mode})")
     try:
-        state = mcp_token.read_state(root)
+        state = mcp_token.read_state(
+            root, runtime=instance.runtime, container_name=derive_compose_project(instance.name),
+        )
     except mcp_token.McpTokenError as exc:
         click.echo(f"  Static MCP token: unavailable -- {exc}")
         state = None
@@ -1092,10 +1094,11 @@ def configure(name, mcp_token_action, ttl_hours, allow_network, manual_token, ma
     # instance actually lives, rather than re-deriving the default path and
     # assuming it matches.
     root = Path(instance.data_dir)
+    container_name = derive_compose_project(instance.name)
 
     if allow_network is not None and mcp_token_action is None:
         try:
-            mcp_token.set_allow_network(root, allow_network)
+            mcp_token.set_allow_network(root, allow_network, runtime=instance.runtime, container_name=container_name)
         except mcp_token.McpTokenError as exc:
             _fail(str(exc))
         click.echo(
@@ -1105,7 +1108,7 @@ def configure(name, mcp_token_action, ttl_hours, allow_network, manual_token, ma
 
     if mcp_token_action is not None:
         try:
-            state = mcp_token.read_state(root)
+            state = mcp_token.read_state(root, runtime=instance.runtime, container_name=container_name)
         except mcp_token.McpTokenError as exc:
             _fail(str(exc))
 
@@ -1118,7 +1121,7 @@ def configure(name, mcp_token_action, ttl_hours, allow_network, manual_token, ma
             _fail(f"No active MCP token for {instance.name!r} yet. Use --mcp-token generate.")
 
         if mcp_token_action == "revoke":
-            mcp_token.revoke(root)
+            mcp_token.revoke(root, runtime=instance.runtime, container_name=container_name)
             if manual_endpoint is not None or set_default is not None:
                 query_config.set_instance(
                     instance.name, endpoint=(manual_endpoint or _existing_or_derived_endpoint(instance)),
@@ -1152,7 +1155,7 @@ def configure(name, mcp_token_action, ttl_hours, allow_network, manual_token, ma
             )
         if allow_network is not None:
             try:
-                mcp_token.set_allow_network(root, allow_network)
+                mcp_token.set_allow_network(root, allow_network, runtime=instance.runtime, container_name=container_name)
             except mcp_token.McpTokenError as exc:
                 _fail(str(exc))
 
@@ -1161,7 +1164,9 @@ def configure(name, mcp_token_action, ttl_hours, allow_network, manual_token, ma
         except secrets_copy.SecretsCopyError as exc:
             _fail(str(exc))
 
-        token = mcp_token.write_new_token(root, secret_key, ttl_hours=ttl_hours)
+        token = mcp_token.write_new_token(
+            root, secret_key, ttl_hours=ttl_hours, runtime=instance.runtime, container_name=container_name,
+        )
         endpoint = manual_endpoint or _derive_mcp_endpoint(instance)
         query_config.set_instance(instance.name, endpoint=endpoint, token=token, make_default=set_default)
 

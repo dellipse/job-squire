@@ -350,7 +350,7 @@ def create_instance(
     if source is not None:
         import_summary = _import_settings(
             source=source, dest=instance, data_root=data_root, copy_keys=copy_keys,
-            runtime=chosen_runtime, container_name=container_name, run=run, sleep=sleep,
+            runtime=chosen_runtime, container_name=container_name, run=run,
         )
 
     return CreateResult(
@@ -361,29 +361,37 @@ def create_instance(
 
 def _import_settings(
     *, source: Instance, dest: Instance, data_root: Path | None, copy_keys: bool,
-    runtime: str, container_name: str, run: Runner, sleep: Sleep,
+    runtime: str, container_name: str, run: Runner,
 ) -> secrets_copy.ImportSummary:
-    """Stop the freshly-created instance, copy database settings directly
-    into its (now schema-initialized) sqlite file, and start it back up.
-    Stopping first is what keeps this from racing the app's own writes to
-    the same file -- the same WAL-safety concern the plan's backup design
-    calls out for touching a live instance's database directly."""
+    """Copy database settings from the source instance into the freshly-
+    created (and already running) destination instance.
+
+    `/data` is a named Docker volume, not a host bind mount (ops/compose.py)
+    -- neither instance's database is a path this process can open
+    directly, or a file `compose_stop`/`compose_start` around this call
+    would make any more or less reachable. `secrets_copy.copy_db_settings`
+    instead reads the source and writes the destination each via
+    `docker exec`/`podman exec` into that instance's own running container
+    (app/secrets_copy_cli.py), so both must be running -- the destination
+    already is (`create_instance` brought it up just before calling this),
+    and this no longer needs to stop and restart it around the copy: the
+    exec'd write is a single sqlite transaction with a busy_timeout, the
+    same concurrency posture ops/mcp_token.py's writes already rely on
+    against a live instance (see that module's docstring) rather than the
+    older host-file design's compose stop/start bracket.
+    """
     dest_root = _instance_root(dest, data_root)
     source_root = _instance_root(source, data_root)
 
-    compose.compose_stop(runtime, dest_root, container_name, run=run)
-    try:
-        source_secret_key = secrets_copy.read_secret_key(source_root) if copy_keys else ""
-        dest_secret_key = secrets_copy.read_secret_key(dest_root)
-        summary = secrets_copy.copy_db_settings(
-            source_root=source_root, dest_root=dest_root,
-            source_secret_key=source_secret_key, dest_secret_key=dest_secret_key,
-            copy_keys=copy_keys,
-        )
-    finally:
-        compose.compose_start(runtime, dest_root, container_name, run=run)
-        wait_for_state(runtime, container_name, run=run, sleep=sleep)
-    return summary
+    source_secret_key = secrets_copy.read_secret_key(source_root) if copy_keys else ""
+    dest_secret_key = secrets_copy.read_secret_key(dest_root)
+    return secrets_copy.copy_db_settings(
+        source_root=source_root, dest_root=dest_root,
+        source_secret_key=source_secret_key, dest_secret_key=dest_secret_key,
+        source_runtime=source.runtime, source_container_name=derive_compose_project(source.name),
+        dest_runtime=runtime, dest_container_name=container_name,
+        copy_keys=copy_keys, run=run,
+    )
 
 
 # ── start / stop / restart ───────────────────────────────────────────────

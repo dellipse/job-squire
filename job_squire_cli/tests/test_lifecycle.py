@@ -23,17 +23,23 @@ check on `create` and cleanup sweep on `remove`, both against that same
 container state back), `docker logs` (a per-container log buffer, the
 channel the startup guard's FATAL lines travel through), and -- since
 /data is a named Docker volume, not a host bind mount (ops/compose.py) --
-`docker exec ... python -m app.backup_cli` and `docker cp` (ops/backup.py's
-backup/restore path). Since there's no real container to hold a real
-volume's file contents,
-FakeRuntime keeps using the instance's own `data/` directory on the tmp_path
-filesystem as its stand-in for "whatever the named volume contains": `exec`
-tars up whatever's there (minus `.env`, mirroring app/backup_cli.py's
-`include_env=False`) instead of talking to a real container, and `cp`
-copies into it directly instead of shelling out. On a successful `up`, it
-also creates a minimal sqlite database there -- standing in for the app's
-own first-boot schema creation -- so the `--import-from` tests can exercise
-the real ops/secrets_copy.py path against actual files, not a mock.
+`docker exec ... python -m app.backup_cli` (ops/backup.py's backup path),
+`docker exec ... python -m app.secrets_copy_cli` (ops/secrets_copy.py's
+`copy_db_settings`, dispatched to `_dump_like_container_cli`/
+`_apply_like_container_cli` from tests/test_secrets_copy.py -- the same
+fakes that module's own tests use), and `docker cp` (ops/backup.py's
+restore path). Since there's no real container to hold a real volume's
+file contents, FakeRuntime keeps using the instance's own `data/`
+directory on the tmp_path filesystem as its stand-in for "whatever the
+named volume contains": `exec app.backup_cli` tars up whatever's there
+(minus `.env`, mirroring app/backup_cli.py's `include_env=False`) instead
+of talking to a real container, `exec app.secrets_copy_cli` reads/writes
+that same fake volume's `job-squire.db` instead of a real container's, and
+`cp` copies into it directly instead of shelling out. On a successful
+`up`, it also creates a minimal sqlite database there -- standing in for
+the app's own first-boot schema creation -- so the `--import-from` tests
+can exercise the real ops/secrets_copy.py path against actual files, not a
+mock.
 
 No test here touches a real container runtime, a real socket bind (see
 ops/ports.py -- `port_free` isn't injectable through create_instance, so
@@ -56,7 +62,13 @@ from job_squire_cli.ops import compose, lifecycle as lc, paths
 from job_squire_cli.ops import registry as reg
 from job_squire_cli.query import config as query_config_module
 
-from tests.test_secrets_copy import _SCHEMA, _seed_dest_defaults, _seed_source
+from tests.test_secrets_copy import (
+    _SCHEMA,
+    _apply_like_container_cli,
+    _dump_like_container_cli,
+    _seed_dest_defaults,
+    _seed_source,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -189,16 +201,30 @@ class FakeRuntime:
             return SimpleNamespace(returncode=0, stdout="", stderr=self.logs.get(args[-1], ""))
 
         if len(args) >= 4 and args[1] == "exec":
-            # [runtime, "exec", "-T", container_name, "python3", "-m", "app.backup_cli"]
-            container_name = args[3] if args[2] == "-T" else args[2]
+            # [runtime, "exec", "-T"|"-i", container_name, "python3", "-m", "app.<whatever>_cli"]
+            container_name = args[3] if args[2] in ("-T", "-i") else args[2]
+            module = args[-1]
             state = self.containers.get(container_name)
             if state is None or state.get("Status") != "running":
                 return SimpleNamespace(
                     returncode=1, stdout=b"", stderr=b"container not running -- cannot exec"
                 )
-            return SimpleNamespace(
-                returncode=0, stdout=self._fake_volume_snapshot(container_name), stderr=b"",
-            )
+            if module == "app.backup_cli":
+                return SimpleNamespace(
+                    returncode=0, stdout=self._fake_volume_snapshot(container_name), stderr=b"",
+                )
+            if module == "app.secrets_copy_cli":
+                # Fake dump/apply the same way test_secrets_copy.py's own
+                # container_fake_run does, against this container's fake
+                # volume contents (self.data_dirs).
+                db_path = self.data_dirs[container_name] / paths.DB_FILENAME
+                payload = json.loads(kwargs["input"])
+                if payload["op"] == "dump":
+                    response = _dump_like_container_cli(db_path, payload["tables"])
+                else:
+                    response = _apply_like_container_cli(db_path, payload["tables"])
+                return SimpleNamespace(returncode=0, stdout=json.dumps(response), stderr="")
+            raise AssertionError(f"unexpected exec module in test: {module}")
 
         if len(args) >= 4 and args[1] == "cp":
             # [runtime, "cp", "<staging_dir>/.", "<container_name>:/data"]
@@ -781,8 +807,9 @@ def test_create_import_from_copies_schedule_env_and_db_settings(fake, data_root)
     assert "search_config" in dest_result.import_summary.tables_copied
     assert dest_result.import_summary.secrets_copied is False
 
-    # The instance was stopped and restarted around the direct db write,
-    # and ends up running again.
+    # The copy runs via docker/podman exec against both instances' already-
+    # running containers now (CLI-01/TEST-03) -- no more stop/restart
+    # bracket around it, so the destination just stays running throughout.
     assert fake.containers["job-squire-dest"]["Status"] == "running"
 
 

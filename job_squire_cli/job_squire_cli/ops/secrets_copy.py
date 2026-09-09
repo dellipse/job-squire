@@ -24,15 +24,22 @@ running app can change on the fly.
     *new* instance's env before it ever boots.
   - Search titles/location/radius, enabled providers, SMTP host/port, AI
     provider selection, and interface preferences live in the database
-    (app/models.py) -- `copy_db_settings` reads and writes these directly
-    with the stdlib `sqlite3` module. This package intentionally does not
-    depend on Flask/SQLAlchemy/the app package at all (an operator running
-    the CLI has not necessarily cloned the app repo, and the app's stack is
-    meant to live inside the container, not on the host) -- so the column
-    allowlists below are hand-maintained against app/models.py rather than
-    imported from it. Every table is read defensively (a missing table or
-    column produces a warning in ImportSummary, not a crash), consistent
-    with "additive, never assumed" migrations elsewhere in this project.
+    (app/models.py). `/data` is a named Docker volume, not a host bind
+    mount (ops/compose.py), so `copy_db_settings` can no longer open either
+    instance's `job-squire.db` directly from the host -- the actual reads
+    (from the source instance) and writes (to the destination instance)
+    each run inside that instance's own running container via
+    `docker exec`/`podman exec` (`app/secrets_copy_cli.py`, fed a JSON
+    request on stdin), mirroring ops/backup.py's `_snapshot_container_data`
+    and ops/mcp_token.py's `_exec`. This package still intentionally does
+    not depend on Flask/SQLAlchemy/the app package at all (an operator
+    running the CLI has not necessarily cloned the app repo, and the app's
+    stack is meant to live inside the container, not on the host) -- so the
+    column allowlists below, and their mirror in app/secrets_copy_cli.py,
+    are hand-maintained against app/models.py rather than imported from it.
+    Every table is read defensively (a missing table or column produces a
+    warning in ImportSummary, not a crash), consistent with "additive,
+    never assumed" migrations elsewhere in this project.
 
 Secrets are excluded by default (CLAUDE.md: "ALL stored secrets encrypted
 ... never plaintext"). `copy_db_settings(..., copy_keys=True)` is the
@@ -47,12 +54,16 @@ for why it isn't imported from app/crypto.py directly).
 """
 from __future__ import annotations
 
-import sqlite3
+import json
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
-from . import paths
+from . import compose, paths
 from .crypto_mirror import decrypt as _mirror_decrypt, encrypt as _mirror_encrypt
+
+Runner = Callable[..., "subprocess.CompletedProcess[str]"]
 
 _SCHEDULE_ENV_KEYS = (
     "SCHEDULE_TZ", "SCHEDULE_WEEKDAY_HOURS", "SCHEDULE_WEEKEND_HOURS", "SCHEDULE_MINUTE",
@@ -159,20 +170,41 @@ def read_secret_key(instance_root: Path) -> str:
 
 
 # ── Database settings ────────────────────────────────────────────────────
+#
+# Since the 2026-07-17 volume migration, `/data` is a named Docker volume,
+# not a host bind mount (ops/compose.py) -- `paths.sqlite_db_path(root)` has
+# not pointed at a real host file since then. The actual reads/writes below
+# run inside each instance's own running container via `docker exec`/`podman
+# exec` (`app/secrets_copy_cli.py`, fed a JSON request on stdin), mirroring
+# ops/backup.py's `_snapshot_container_data` and ops/mcp_token.py's `_exec`:
+# a `dump` request against the *source* container returns each table's raw
+# rows (still-encrypted secret columns included, verbatim), and an `apply`
+# request against the *destination* container performs the same
+# INSERT/UPDATE/DELETE upsert logic that used to run directly against a
+# local `conn_dst`. All re-encryption (`reencrypt`, above) and the resulting
+# per-column warnings stay right here on the host -- `app/secrets_copy_cli.py`
+# only ever sees values already finalized for its column, never either
+# instance's SECRET_KEY.
+
+_SECRETS_COPY_CLI_ARGV = ["python3", "-m", "app.secrets_copy_cli"]
+
+# (spec, insert_new) -- insert_new mirrors the old _copy_table's own
+# parameter: False only for `users`, whose rows are only ever created by
+# the app's own account seeding, never by this import.
+_UPSERT_SPECS = (
+    (_SEARCH_CONFIG, True),
+    (_SMTP_CONFIG, True),
+    (_AI_CONFIG, True),
+    (_PROVIDER_CREDENTIALS, True),
+    (_USER_PREFS, False),
+)
 
 
 def _columns_for(cols: tuple[str, ...], secret_cols: tuple[str, ...], copy_keys: bool) -> tuple[str, ...]:
     return cols + (secret_cols if copy_keys else ())
 
 
-def _fetch_rows(conn: sqlite3.Connection, table: str, columns: tuple[str, ...]) -> list[sqlite3.Row] | None:
-    try:
-        return conn.execute(f"SELECT {', '.join(columns)} FROM {table}").fetchall()  # noqa: S608 (fixed allowlist)
-    except sqlite3.OperationalError:
-        return None  # table or column doesn't exist in this schema version
-
-
-def _row_values(row: sqlite3.Row, cols: tuple[str, ...], secret_cols: tuple[str, ...], *,
+def _row_values(row: dict, cols: tuple[str, ...], secret_cols: tuple[str, ...], *,
                  copy_keys: bool, source_secret_key: str, dest_secret_key: str,
                  summary: ImportSummary, table: str) -> dict[str, object]:
     values = {c: row[c] for c in cols}
@@ -188,143 +220,114 @@ def _row_values(row: sqlite3.Row, cols: tuple[str, ...], secret_cols: tuple[str,
     return values
 
 
-def _upsert_singleton(conn: sqlite3.Connection, table: str, values: dict[str, object]) -> None:
-    cols = list(values)
-    assignments = ", ".join(f"{c} = ?" for c in cols)
-    cur = conn.execute(f"UPDATE {table} SET {assignments} WHERE id = 1", [values[c] for c in cols])  # noqa: S608
-    if cur.rowcount == 0:
-        placeholders = ", ".join(["?"] * len(cols))
-        conn.execute(
-            f"INSERT INTO {table} (id, {', '.join(cols)}) VALUES (1, {placeholders})",  # noqa: S608
-            [values[c] for c in cols],
-        )
-
-
-def _upsert_by_key(conn: sqlite3.Connection, table: str, key_col: str, key_val: object,
-                    values: dict[str, object]) -> None:
-    cols = list(values)
-    assignments = ", ".join(f"{c} = ?" for c in cols)
-    cur = conn.execute(
-        f"UPDATE {table} SET {assignments} WHERE {key_col} = ?",  # noqa: S608
-        [values[c] for c in cols] + [key_val],
-    )
-    if cur.rowcount == 0:
-        all_cols = [key_col] + cols
-        placeholders = ", ".join(["?"] * len(all_cols))
-        conn.execute(
-            f"INSERT INTO {table} ({', '.join(all_cols)}) VALUES ({placeholders})",  # noqa: S608
-            [key_val] + [values[c] for c in cols],
-        )
-
-
-def _update_only_by_key(conn: sqlite3.Connection, table: str, key_col: str, key_val: object,
-                         values: dict[str, object]) -> None:
-    """Like _upsert_by_key but never inserts -- for `users`, whose rows are
-    only ever created by the app's own account seeding, never by this."""
-    cols = list(values)
-    assignments = ", ".join(f"{c} = ?" for c in cols)
-    conn.execute(
-        f"UPDATE {table} SET {assignments} WHERE {key_col} = ?",  # noqa: S608
-        [values[c] for c in cols] + [key_val],
-    )
-
-
-def _copy_table(conn_src: sqlite3.Connection, conn_dst: sqlite3.Connection, spec, *,
-                 copy_keys: bool, source_secret_key: str, dest_secret_key: str,
-                 summary: ImportSummary, insert_new: bool) -> None:
-    table, key_col, cols, secret_cols = spec
-    columns = _columns_for(cols, secret_cols, copy_keys)
-    read_cols = columns if key_col is None else (key_col,) + columns
-    rows = _fetch_rows(conn_src, table, read_cols)
-    if rows is None:
-        summary.warnings.append(f"{table}: not found in the source database (skipped).")
-        return
-    for row in rows:
-        values = _row_values(
-            row, cols, secret_cols, copy_keys=copy_keys,
-            source_secret_key=source_secret_key, dest_secret_key=dest_secret_key,
-            summary=summary, table=table,
-        )
-        if key_col is None:
-            _upsert_singleton(conn_dst, table, values)
-        elif insert_new:
-            _upsert_by_key(conn_dst, table, key_col, row[key_col], values)
-        else:
-            _update_only_by_key(conn_dst, table, key_col, row[key_col], values)
-    summary.tables_copied.append(table)
-
-
-def _copy_full_replace(conn_src: sqlite3.Connection, conn_dst: sqlite3.Connection, spec, *,
-                        copy_keys: bool, source_secret_key: str, dest_secret_key: str,
-                        summary: ImportSummary) -> None:
-    table, _key_col, cols, secret_cols = spec
-    columns = _columns_for(cols, secret_cols, copy_keys)
-    rows = _fetch_rows(conn_src, table, columns)
-    if rows is None:
-        summary.warnings.append(f"{table}: not found in the source database (skipped).")
-        return
-    conn_dst.execute(f"DELETE FROM {table}")  # noqa: S608 (fixed table name)
-    for row in rows:
-        values = _row_values(
-            row, cols, secret_cols, copy_keys=copy_keys,
-            source_secret_key=source_secret_key, dest_secret_key=dest_secret_key,
-            summary=summary, table=table,
-        )
-        insert_cols = list(values)
-        placeholders = ", ".join(["?"] * len(insert_cols))
-        conn_dst.execute(
-            f"INSERT INTO {table} ({', '.join(insert_cols)}) VALUES ({placeholders})",  # noqa: S608
-            [values[c] for c in insert_cols],
-        )
-    summary.tables_copied.append(table)
+def _exec(runtime: str, container_name: str, payload: dict, run: Runner) -> dict:
+    """`docker/podman exec -i <container> python -m app.secrets_copy_cli`,
+    fed `payload` as JSON on stdin -- see app/secrets_copy_cli.py's module
+    docstring for the "dump"/"apply" protocol."""
+    argv = [compose.runtime_binary(runtime), "exec", "-i", container_name, *_SECRETS_COPY_CLI_ARGV]
+    try:
+        result = run(argv, input=json.dumps(payload), capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise SecretsCopyError(f"Failed to reach the settings store inside {container_name!r}: {exc}") from exc
+    if result.returncode != 0:
+        stderr = (result.stderr or "").strip()
+        raise SecretsCopyError(f"Settings copy operation inside {container_name!r} failed: {stderr}")
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise SecretsCopyError(
+            f"Settings copy operation inside {container_name!r} returned an unexpected response: "
+            f"{result.stdout!r}"
+        ) from exc
 
 
 def copy_db_settings(*, source_root: Path, dest_root: Path, source_secret_key: str,
-                      dest_secret_key: str, copy_keys: bool = False) -> ImportSummary:
+                      dest_secret_key: str, source_runtime: str, source_container_name: str,
+                      dest_runtime: str, dest_container_name: str, copy_keys: bool = False,
+                      run: Runner = subprocess.run) -> ImportSummary:
     """Copy basic (and, opt-in, secret) settings from one instance's
-    database into another's. The destination database must already exist
-    -- i.e. the destination instance has booted at least once so the app's
-    own schema creation and seeding have run (lifecycle.create_instance
-    brings the new instance up before calling this). The caller is
-    responsible for the container being stopped for the duration, so this
-    never races the app's own writes to the same file.
+    database into another's.
+
+    Both instances' containers must be running -- `/data` is a named
+    Docker volume, only reachable via `docker/podman exec` while the
+    container is up (see this module's docstring above), so there is no
+    more "stopped but still readable" case a host path used to allow.
+    A source that isn't running is treated the same as the old "database
+    not found" case (warn, import nothing) since it's the more common,
+    less surprising failure mode for a source instance the operator simply
+    hasn't started; a destination that isn't running is a hard error, same
+    as the old "destination database not found" -- the destination is the
+    instance this call is actually supposed to modify.
     """
     summary = ImportSummary()
-    source_db = paths.sqlite_db_path(source_root)
-    dest_db = paths.sqlite_db_path(dest_root)
-    if not source_db.exists():
-        summary.warnings.append(f"Source database not found at {source_db} -- nothing imported.")
+
+    source_state = compose.inspect_state(source_runtime, source_container_name, run=run)
+    if source_state is None or source_state.get("Status") != "running":
+        summary.warnings.append(
+            f"Source instance's container ({source_container_name!r}) isn't running -- nothing imported. "
+            f"Start it first (`job-squire start`) to import from it."
+        )
         return summary
-    if not dest_db.exists():
+
+    dest_state = compose.inspect_state(dest_runtime, dest_container_name, run=run)
+    if dest_state is None or dest_state.get("Status") != "running":
         raise SecretsCopyError(
-            f"Destination database not found at {dest_db}. The new instance must be brought up "
-            f"at least once (so the app creates its schema) before settings can be imported."
+            f"Destination instance's container ({dest_container_name!r}) must be running to import "
+            f"settings into it -- its database now lives in a Docker volume, only reachable while the "
+            f"container is up."
         )
 
-    # as_uri() percent-encodes the path so this is safe even if the data
-    # root ever contains spaces or other characters sqlite's URI parser
-    # would otherwise choke on.
-    conn_src = sqlite3.connect(f"{source_db.resolve().as_uri()}?mode=ro", uri=True)
-    conn_src.row_factory = sqlite3.Row
-    conn_dst = sqlite3.connect(str(dest_db))
-    conn_dst.row_factory = sqlite3.Row
-    try:
-        kwargs = dict(
-            copy_keys=copy_keys, source_secret_key=source_secret_key,
-            dest_secret_key=dest_secret_key, summary=summary,
-        )
-        _copy_table(conn_src, conn_dst, _SEARCH_CONFIG, insert_new=True, **kwargs)
-        _copy_table(conn_src, conn_dst, _SMTP_CONFIG, insert_new=True, **kwargs)
-        _copy_table(conn_src, conn_dst, _AI_CONFIG, insert_new=True, **kwargs)
-        _copy_table(conn_src, conn_dst, _PROVIDER_CREDENTIALS, insert_new=True, **kwargs)
-        _copy_table(conn_src, conn_dst, _USER_PREFS, insert_new=False, **kwargs)
-        _copy_full_replace(conn_src, conn_dst, _AI_PROVIDER_CONFIGS,
-                            copy_keys=copy_keys, source_secret_key=source_secret_key,
-                            dest_secret_key=dest_secret_key, summary=summary)
-        conn_dst.commit()
-    finally:
-        conn_src.close()
-        conn_dst.close()
+    all_specs = (*(spec for spec, _ in _UPSERT_SPECS), _AI_PROVIDER_CONFIGS)
+    dump_tables = []
+    for table, key_col, cols, secret_cols in all_specs:
+        columns = _columns_for(cols, secret_cols, copy_keys)
+        read_cols = columns if key_col is None else (key_col, *columns)
+        dump_tables.append({"table": table, "columns": list(read_cols)})
+
+    dump_response = _exec(source_runtime, source_container_name, {"op": "dump", "tables": dump_tables}, run)
+    dumped = dump_response.get("tables", {})
+
+    apply_tables = []
+    for (table, key_col, cols, secret_cols), insert_new in _UPSERT_SPECS:
+        rows = dumped.get(table)
+        if rows is None:
+            summary.warnings.append(f"{table}: not found in the source database (skipped).")
+            continue
+        applied_rows = []
+        for raw_row in rows:
+            values = _row_values(
+                raw_row, cols, secret_cols, copy_keys=copy_keys,
+                source_secret_key=source_secret_key, dest_secret_key=dest_secret_key,
+                summary=summary, table=table,
+            )
+            if key_col is not None:
+                values[key_col] = raw_row[key_col]
+            applied_rows.append(values)
+        strategy = "singleton" if key_col is None else ("by_key" if insert_new else "update_only_by_key")
+        apply_tables.append({"table": table, "strategy": strategy, "key_col": key_col, "rows": applied_rows})
+        summary.tables_copied.append(table)
+
+    # ai_provider_configs: full replace, no natural unique key across a
+    # provider chain (the same provider type can appear twice at different
+    # ranks) -- see _AI_PROVIDER_CONFIGS's own comment above.
+    table, _key_col, cols, secret_cols = _AI_PROVIDER_CONFIGS
+    rows = dumped.get(table)
+    if rows is None:
+        summary.warnings.append(f"{table}: not found in the source database (skipped).")
+    else:
+        applied_rows = [
+            _row_values(
+                raw_row, cols, secret_cols, copy_keys=copy_keys,
+                source_secret_key=source_secret_key, dest_secret_key=dest_secret_key,
+                summary=summary, table=table,
+            )
+            for raw_row in rows
+        ]
+        apply_tables.append({"table": table, "strategy": "full_replace", "key_col": None, "rows": applied_rows})
+        summary.tables_copied.append(table)
+
+    if apply_tables:
+        _exec(dest_runtime, dest_container_name, {"op": "apply", "tables": apply_tables}, run)
 
     summary.secrets_copied = copy_keys
     return summary

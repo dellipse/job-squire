@@ -18,37 +18,57 @@ settings_mcp_api_key() route, which writes AIConfig.mcp_api_key_enc and
 its lifecycle-metadata columns) is reachable *only* from an authenticated,
 CSRF-protected browser session against the running app's Settings page --
 there is no Flask CLI command, admin API route, or management script this
-package can call into instead. So, following the exact precedent
-ops/secrets_copy.py already established for the app's other Fernet-
-encrypted columns, this module writes the `ai_config` row directly with
-the stdlib sqlite3 module: the same HKDF-SHA256 -> Fernet derivation as
-app/crypto.py (via ops/crypto_mirror.py, shared with secrets_copy.py), and
-the exact same token shape as app/mcp_auth.py's generate_token() /
+package can call into instead. So this module writes the `ai_config` row
+with the exact same HKDF-SHA256 -> Fernet derivation as app/crypto.py (via
+ops/crypto_mirror.py, shared with ops/secrets_copy.py) and the exact same
+token shape as app/mcp_auth.py's generate_token() /
 expires_at_from_ttl_hours() (mirrored, not imported, for the same
 host/container dependency-boundary reason documented in
 ops/secrets_copy.py's module docstring -- this package does not depend on
 Flask/SQLAlchemy/the app package at all).
 
-Writing here is safe with the instance's container still running, not
-just tolerated as a fallback for a stopped one: app/mcp_server.py
-re-fetches AIConfig fresh inside a new Flask app context on every MCP
-request (see its asgi_app dispatcher), so a change lands on the very next
-call with no restart needed -- exactly like the in-app Settings-page flow
-it mirrors. `_connect` sets a busy_timeout as the one concession to
-touching a database the app might be writing to concurrently, rather than
-bracketing every write in a compose stop/start the way the heavier,
-multi-table `create --import-from` copy does in ops/lifecycle.py.
+**The actual write no longer touches a host path.** Since the
+2026-07-17 volume migration, `/data` is a named Docker volume, not a host
+bind mount (see ops/compose.py) -- `<instance_root>/data/job-squire.db`
+(what `paths.sqlite_db_path` used to point `_connect`'s `sqlite3.connect()`
+at) has not existed on the host since that migration; that path only ever
+holds `data/.env` now. Mirrors ops/backup.py's `_snapshot_container_data`
+and ops/ollama_assist.py's `write_provider_config`: the actual read/write
+runs inside the instance's own running container via
+`docker exec`/`podman exec` (`app/mcp_token_cli.py`, fed a JSON request on
+stdin), where `DATA_DIR` correctly resolves to the volume's mount point.
+Token generation, TTL math, and the Fernet encryption of the token itself
+stay here on the host -- only the raw row read/write crosses the exec
+boundary, so `app/mcp_token_cli.py` never needs this instance's
+SECRET_KEY at all.
+
+Writing is safe with the instance's container still running, not just
+tolerated as a fallback for a stopped one: app/mcp_server.py re-fetches
+AIConfig fresh inside a new Flask app context on every MCP request (see
+its asgi_app dispatcher), so a change lands on the very next call with no
+restart needed -- exactly like the in-app Settings-page flow it mirrors.
+`app/mcp_token_cli.py`'s connection sets a busy_timeout as the one
+concession to touching a database the app might be writing to
+concurrently, rather than bracketing every write in a compose stop/start
+the way the heavier, multi-table `create --import-from` copy does in
+ops/lifecycle.py. Since the container must now be running for exec to
+reach it at all, every function here raises McpTokenError up front if it
+isn't -- there is no more "stopped but still readable" case a host path
+used to allow.
 """
 from __future__ import annotations
 
+import json
 import secrets
-import sqlite3
+import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Callable
 
-from . import paths
-from .crypto_mirror import encrypt as _encrypt
+from . import compose
+
+Runner = Callable[..., "subprocess.CompletedProcess[str]"]
 
 # Must stay byte-for-byte identical to app/mcp_auth.py's TOKEN_PREFIX /
 # TOKEN_ENTROPY_BYTES -- these values, not the code, are the compatibility
@@ -61,9 +81,12 @@ TOKEN_ENTROPY_BYTES = 32  # 256 bits
 # written here reads back correctly through the app's own ORM later.
 _DT_FORMAT = "%Y-%m-%d %H:%M:%S.%f"
 
+_MCP_TOKEN_CLI_ARGV = ["python3", "-m", "app.mcp_token_cli"]
+
 
 class McpTokenError(RuntimeError):
-    """Raised for a missing instance database or a sqlite-level failure."""
+    """Raised for a missing/not-running instance container or a
+    container-side sqlite failure."""
 
 
 def generate_token() -> str:
@@ -105,36 +128,6 @@ class TokenState:
     allow_network: bool
 
 
-# Full AIConfig column defaults (app/models.py), hand-maintained the same
-# way ops/secrets_copy.py hand-maintains its column allowlists, and for the
-# same reason: this package has no SQLAlchemy model to introspect. Used
-# only to seed a brand new row when one doesn't exist yet -- db.create_all()
-# does not emit SQL-level DEFAULTs for plain Column(default=...) fields
-# (only server_default= would), so a bare `INSERT INTO ai_config (id)`
-# would otherwise leave every other AI setting NULL instead of matching
-# what the app's own _singleton() helper (app/main.py) would have created
-# the first time anyone visited the Settings page.
-_FRESH_ROW_DEFAULTS: dict[str, object] = {
-    "mode": "manual",
-    "api_enabled": 0,
-    "mcp_enabled": 0,
-    "claude_buttons_enabled": 0,
-    "api_key_enc": "",
-    "model": "claude-sonnet-4-6",
-    "mcp_token_enc": "",
-    "mcp_api_key_enc": "",
-    "connector_name": "job-squire",
-    "thinking_mode": "disabled",
-    "auto_triage_enabled": 0,
-    "triage_model": "claude-haiku-4-5",
-    "auto_followup_enabled": 0,
-    "auto_weekly_review_enabled": 0,
-    "rejection_alert_threshold": 5,
-    "fallback_to_anthropic": 1,
-    "mcp_api_key_allow_network": 0,
-}
-
-
 def _fmt(dt: datetime) -> str:
     if dt.tzinfo is not None:
         dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
@@ -154,55 +147,63 @@ def _is_expired(expires_at: str | None, now: datetime | None = None) -> bool:
     return now > parsed
 
 
-def _connect(instance_root: Path) -> sqlite3.Connection:
-    db_path = paths.sqlite_db_path(instance_root)
-    if not db_path.exists():
-        raise McpTokenError(
-            f"No database found at {db_path} -- this instance hasn't booted yet. "
-            f"Run `job-squire start <name>` (or `create`) first."
-        )
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout = 5000")  # tolerate a brief lock from the running app
-    return conn
-
-
-def _ensure_row(conn: sqlite3.Connection) -> None:
-    try:
-        exists = conn.execute("SELECT 1 FROM ai_config WHERE id = 1").fetchone() is not None
-    except sqlite3.OperationalError as exc:
-        raise McpTokenError(f"ai_config table not found in this instance's database: {exc}") from exc
-    if exists:
-        return
-    columns = ["id", *_FRESH_ROW_DEFAULTS.keys()]
-    placeholders = ", ".join(["?"] * len(columns))
-    values = [1, *_FRESH_ROW_DEFAULTS.values()]
-    conn.execute(f"INSERT INTO ai_config ({', '.join(columns)}) VALUES ({placeholders})", values)  # noqa: S608
-
-
-def read_state(instance_root: Path) -> TokenState:
-    conn = _connect(instance_root)
-    try:
-        _ensure_row(conn)
-        conn.commit()
-        row = conn.execute(
-            "SELECT mcp_api_key_enc, mcp_api_key_created_at, mcp_api_key_last_used_at, "
-            "mcp_api_key_expires_at, mcp_api_key_allow_network FROM ai_config WHERE id = 1"
-        ).fetchone()
-    finally:
-        conn.close()
-    active = bool(row["mcp_api_key_enc"])
+def _state_from_response(response: dict) -> TokenState:
+    active = bool(response["active"])
     return TokenState(
         active=active,
-        usable=active and not _is_expired(row["mcp_api_key_expires_at"]),
-        created_at=row["mcp_api_key_created_at"],
-        last_used_at=row["mcp_api_key_last_used_at"],
-        expires_at=row["mcp_api_key_expires_at"],
-        allow_network=bool(row["mcp_api_key_allow_network"]),
+        usable=active and not _is_expired(response["expires_at"]),
+        created_at=response["created_at"],
+        last_used_at=response["last_used_at"],
+        expires_at=response["expires_at"],
+        allow_network=bool(response["allow_network"]),
     )
 
 
-def write_new_token(instance_root: Path, secret_key: str, *, ttl_hours: float | None = None) -> str:
+def _exec(
+    instance_root: Path, *, runtime: str, container_name: str, payload: dict, run: Runner,
+) -> TokenState:
+    """`docker/podman exec -i <container> python -m app.mcp_token_cli`, fed
+    `payload` as JSON on stdin -- see app/mcp_token_cli.py's module
+    docstring for the protocol. Mirrors ops/ollama_assist.py's
+    `write_provider_config`: an up-front `inspect` to give a clear,
+    actionable error rather than a raw non-zero exit from exec when the
+    container isn't running.
+    """
+    state = compose.inspect_state(runtime, container_name, run=run)
+    if state is None or state.get("Status") != "running":
+        raise McpTokenError(
+            f"The {container_name!r} container must be running to manage its MCP token -- its "
+            f"database now lives in a Docker volume, only reachable while the container is up. "
+            f"Start it first (`job-squire start`)."
+        )
+    argv = [compose.runtime_binary(runtime), "exec", "-i", container_name, *_MCP_TOKEN_CLI_ARGV]
+    try:
+        result = run(argv, input=json.dumps(payload), capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise McpTokenError(f"Failed to reach the MCP token store inside {container_name!r}: {exc}") from exc
+    if result.returncode != 0:
+        stderr = (result.stderr or "").strip()
+        raise McpTokenError(f"MCP token operation inside {container_name!r} failed: {stderr}")
+    try:
+        response = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise McpTokenError(
+            f"MCP token operation inside {container_name!r} returned an unexpected response: "
+            f"{result.stdout!r}"
+        ) from exc
+    return _state_from_response(response)
+
+
+def read_state(
+    instance_root: Path, *, runtime: str, container_name: str, run: Runner = subprocess.run,
+) -> TokenState:
+    return _exec(instance_root, runtime=runtime, container_name=container_name, payload={"op": "read_state"}, run=run)
+
+
+def write_new_token(
+    instance_root: Path, secret_key: str, *, runtime: str, container_name: str,
+    ttl_hours: float | None = None, run: Runner = subprocess.run,
+) -> str:
     """Generate a fresh token, store it Fernet-encrypted, and return the
     plaintext -- the caller shows it once, exactly like the app's own
     settings-page flash message never shows it again either.
@@ -211,42 +212,34 @@ def write_new_token(instance_root: Path, secret_key: str, *, ttl_hours: float | 
     `mcp_api_key_enc` column, so overwriting it already invalidates
     whatever was there before (app/mcp_auth.py's module docstring makes
     the same point) -- there's no separate rotate code path to mirror.
+    Encryption happens here, host-side, with `secret_key` (read from this
+    instance's still-host-resident `data/.env` by the caller -- see
+    ops/secrets_copy.py's `read_secret_key`) -- `app/mcp_token_cli.py`
+    only ever receives the already-encrypted blob, never the key.
     """
+    from .crypto_mirror import encrypt as _encrypt  # local import: only this function needs it
+
     token = generate_token()
     now = datetime.now(timezone.utc)
     expires_at = expires_at_from_ttl_hours(ttl_hours, now=now)
-    conn = _connect(instance_root)
-    try:
-        _ensure_row(conn)
-        conn.execute(
-            "UPDATE ai_config SET mcp_api_key_enc = ?, mcp_api_key_created_at = ?, "
-            "mcp_api_key_last_used_at = NULL, mcp_api_key_expires_at = ? WHERE id = 1",
-            (_encrypt(secret_key, token), _fmt(now), _fmt(expires_at) if expires_at else None),
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    payload = {
+        "op": "write_token",
+        "mcp_api_key_enc": _encrypt(secret_key, token),
+        "created_at": _fmt(now),
+        "expires_at": _fmt(expires_at) if expires_at else None,
+    }
+    _exec(instance_root, runtime=runtime, container_name=container_name, payload=payload, run=run)
     return token
 
 
-def revoke(instance_root: Path) -> None:
-    conn = _connect(instance_root)
-    try:
-        _ensure_row(conn)
-        conn.execute(
-            "UPDATE ai_config SET mcp_api_key_enc = '', mcp_api_key_created_at = NULL, "
-            "mcp_api_key_last_used_at = NULL, mcp_api_key_expires_at = NULL WHERE id = 1"
-        )
-        conn.commit()
-    finally:
-        conn.close()
+def revoke(instance_root: Path, *, runtime: str, container_name: str, run: Runner = subprocess.run) -> None:
+    _exec(instance_root, runtime=runtime, container_name=container_name, payload={"op": "revoke"}, run=run)
 
 
-def set_allow_network(instance_root: Path, allow: bool) -> None:
-    conn = _connect(instance_root)
-    try:
-        _ensure_row(conn)
-        conn.execute("UPDATE ai_config SET mcp_api_key_allow_network = ? WHERE id = 1", (1 if allow else 0,))
-        conn.commit()
-    finally:
-        conn.close()
+def set_allow_network(
+    instance_root: Path, allow: bool, *, runtime: str, container_name: str, run: Runner = subprocess.run,
+) -> None:
+    _exec(
+        instance_root, runtime=runtime, container_name=container_name,
+        payload={"op": "set_allow_network", "allow": allow}, run=run,
+    )

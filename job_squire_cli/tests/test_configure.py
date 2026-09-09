@@ -15,7 +15,22 @@ query-group token-config plumbing, end to end through the CLI (no real
 container runtime involved -- the instance's data directory and database
 are built by hand, the same way tests/test_lifecycle.py's FakeRuntime does
 for its --import-from tests).
+
+ops/mcp_token.py's actual read/write now runs via `docker/podman exec`
+inside the instance's own running container (CLI-01/TEST-03) rather than
+opening `<instance_root>/data/job-squire.db` directly -- see
+tests/test_mcp_token.py for unit coverage of that exec plumbing itself
+(container-not-running, malformed responses, etc). This file is only
+interested in the `configure` command's own argument handling and error
+messages, so `fake_mcp_token_ops` below replaces ops/mcp_token.py's four
+public functions wholesale with fakes that operate directly on the fixture
+database -- the same "fake the whole ops-layer function for a CLI-level
+test" convention tests/test_ollama_cli.py already uses for
+`ollama_assist.run_setup` (rather than trying to fake `docker exec` itself,
+which would require intercepting `subprocess.run` after ops/mcp_token.py's
+functions already bound their `run` defaults at import time).
 """
+import datetime as _dt
 import sqlite3
 
 import click.testing
@@ -26,6 +41,7 @@ from job_squire_cli.ops import mcp_token as mt
 from job_squire_cli.ops import paths
 from job_squire_cli.ops import registry as reg
 from job_squire_cli.ops import tailscale as tailscale_ops
+from job_squire_cli.ops.crypto_mirror import encrypt as _encrypt
 from job_squire_cli.query import config as query_config_module
 
 # Not tests/test_secrets_copy.py's _SCHEMA: that one is intentionally
@@ -33,6 +49,65 @@ from job_squire_cli.query import config as query_config_module
 # the mcp_api_key_created_at/last_used_at/expires_at columns ops/mcp_token.py
 # needs. tests/test_mcp_token.py's schema has the full set.
 from tests.test_mcp_token import _AI_CONFIG_SCHEMA
+
+
+def _fake_read_state(root, *, runtime=None, container_name=None, run=None):
+    conn = sqlite3.connect(str(paths.sqlite_db_path(root)))
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT mcp_api_key_enc, mcp_api_key_created_at, mcp_api_key_last_used_at, "
+        "mcp_api_key_expires_at, mcp_api_key_allow_network FROM ai_config WHERE id = 1"
+    ).fetchone()
+    conn.close()
+    active = bool(row["mcp_api_key_enc"])
+    return mt.TokenState(
+        active=active,
+        usable=active and not mt._is_expired(row["mcp_api_key_expires_at"]),
+        created_at=row["mcp_api_key_created_at"],
+        last_used_at=row["mcp_api_key_last_used_at"],
+        expires_at=row["mcp_api_key_expires_at"],
+        allow_network=bool(row["mcp_api_key_allow_network"]),
+    )
+
+
+def _fake_write_new_token(root, secret_key, *, runtime=None, container_name=None, ttl_hours=None, run=None):
+    token = mt.generate_token()
+    now = _dt.datetime.now(_dt.timezone.utc)
+    expires_at = mt.expires_at_from_ttl_hours(ttl_hours, now=now)
+    conn = sqlite3.connect(str(paths.sqlite_db_path(root)))
+    conn.execute(
+        "UPDATE ai_config SET mcp_api_key_enc = ?, mcp_api_key_created_at = ?, "
+        "mcp_api_key_last_used_at = NULL, mcp_api_key_expires_at = ? WHERE id = 1",
+        (_encrypt(secret_key, token), mt._fmt(now), mt._fmt(expires_at) if expires_at else None),
+    )
+    conn.commit()
+    conn.close()
+    return token
+
+
+def _fake_revoke(root, *, runtime=None, container_name=None, run=None):
+    conn = sqlite3.connect(str(paths.sqlite_db_path(root)))
+    conn.execute(
+        "UPDATE ai_config SET mcp_api_key_enc = '', mcp_api_key_created_at = NULL, "
+        "mcp_api_key_last_used_at = NULL, mcp_api_key_expires_at = NULL WHERE id = 1"
+    )
+    conn.commit()
+    conn.close()
+
+
+def _fake_set_allow_network(root, allow, *, runtime=None, container_name=None, run=None):
+    conn = sqlite3.connect(str(paths.sqlite_db_path(root)))
+    conn.execute("UPDATE ai_config SET mcp_api_key_allow_network = ? WHERE id = 1", (1 if allow else 0,))
+    conn.commit()
+    conn.close()
+
+
+@pytest.fixture(autouse=True)
+def fake_mcp_token_ops(monkeypatch):
+    monkeypatch.setattr(mt, "read_state", _fake_read_state)
+    monkeypatch.setattr(mt, "write_new_token", _fake_write_new_token)
+    monkeypatch.setattr(mt, "revoke", _fake_revoke)
+    monkeypatch.setattr(mt, "set_allow_network", _fake_set_allow_network)
 
 
 @pytest.fixture(autouse=True)
