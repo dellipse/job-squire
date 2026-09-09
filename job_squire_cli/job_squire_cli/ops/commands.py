@@ -30,6 +30,7 @@ unit-testable on their own.
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import NoReturn
 from urllib.parse import urlparse
@@ -78,6 +79,80 @@ def _handle_lifecycle_error(exc: lifecycle.LifecycleError) -> NoReturn:
     raise SystemExit(1)
 
 
+# ── Input validation (SEC-08) ────────────────────────────────────────────
+# `sanitize_slug` (ops/registry.py) is the good example these follow:
+# reject early, at the click command body, with a clear message -- before
+# anything is prompted, derived, or written to disk. Applied to every
+# free-text CLI value that later gets f-string-interpolated (no quoting or
+# escaping of its own) into a generated file: `data/.env`
+# (ops/compose.py's `render_data_env`), a proxy nginx conf's comment lines
+# (ops/proxy.py's render_web_conf), or the CLI-installed SWAG's compose
+# YAML / Cloudflare DNS-01 credentials INI (ops/proxy.py's
+# render_swag_compose, ops/dns.py's _write_cloudflare_credentials).
+
+_CONTROL_CHARS_RE = re.compile(r"[\r\n\x00]")
+
+
+def _reject_control_chars(value: str, flag: str) -> str:
+    """Raise a clean CLI error if `value` contains a carriage return, line
+    feed, or NUL byte -- any of which would let it smuggle extra lines into
+    a file this CLI writes as plain, unquoted KEY=VALUE or comment text
+    (e.g. a password containing a newline injecting an extra `data/.env`
+    line such as `ALLOW_INSECURE=1`). A legitimate value never needs any of
+    these three bytes, so nothing real gets rejected.
+    """
+    if _CONTROL_CHARS_RE.search(value):
+        _fail(f"{flag} cannot contain a newline, carriage return, or NUL byte.")
+    return value
+
+
+_HOSTNAME_LABEL_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
+
+
+def _validate_hostname(value: str, flag: str) -> str:
+    """RFC-1123 hostname validation -- the same label rules DNS, SWAG, and
+    nginx themselves enforce: each dot-separated label is 1-63 characters,
+    letters/digits/hyphens only, never starting or ending with a hyphen;
+    the whole name is at most 253 characters. Applied to every
+    hostname-shaped value this CLI later templates into a generated nginx
+    server block (ops/proxy.py's render_web_conf/render_mcp_conf, by way of
+    derive_subdomains, which reads back exactly what `create` validated and
+    wrote) or the SWAG compose file (render_swag_compose's URL) -- catching
+    a bad one here, before it's ever written to disk, is what keeps it from
+    breaking out of those templates.
+    """
+    candidate = value.strip().rstrip(".")
+    if not candidate or len(candidate) > 253:
+        _fail(f"{flag} {value!r} is not a valid hostname (1-253 characters).")
+    for label in candidate.split("."):
+        if not _HOSTNAME_LABEL_RE.match(label):
+            _fail(
+                f"{flag} {value!r} is not a valid hostname -- each label must be 1-63 characters "
+                f"(letters, digits, hyphens only) and cannot start or end with a hyphen."
+            )
+    return value
+
+
+_YAML_UNSAFE_RE = re.compile(r'["\\\r\n\x00]')
+
+
+def _reject_yaml_unsafe(value: str, flag: str) -> str:
+    """Reject a double quote, backslash, carriage return, line feed, or NUL
+    byte -- the characters that would let `value` break out of the
+    double-quoted YAML scalars `render_swag_compose` templates a DNS
+    provider token into (a bare `"` ends the scalar early, letting
+    arbitrary YAML follow the rest of `value`; an unescaped `\\` corrupts
+    the scalar's own escaping) or smuggle an extra line into the unquoted
+    INI value `ops/dns.py`'s `_write_cloudflare_credentials` writes for the
+    same token. A real DuckDNS account token or Cloudflare API token is
+    always a plain hex/base64url-ish string and never legitimately contains
+    any of these, so this never rejects a real one.
+    """
+    if _YAML_UNSAFE_RE.search(value):
+        _fail(f"{flag} cannot contain a double quote, backslash, newline, carriage return, or NUL byte.")
+    return value
+
+
 # ── create ────────────────────────────────────────────────────────────────
 
 
@@ -108,12 +183,26 @@ def _handle_lifecycle_error(exc: lifecycle.LifecycleError) -> NoReturn:
 def create(name, mode, hostname, mcp_hostname, import_from, copy_keys, admin_username, admin_password,
            user_password, image, prefer_orbstack, prefer_docker_desktop, assume_yes, skip_ollama_check,
            skip_proxy_setup):
+    # Validated before any prompting or disk I/O -- see the SEC-08 helpers
+    # above. These are the free-text values that end up f-string-
+    # interpolated into data/.env (ops/compose.py's render_data_env) with
+    # no quoting of their own, so a newline here would otherwise smuggle in
+    # an extra .env line.
+    _reject_control_chars(admin_username, "--admin-username")
+    if admin_password is not None:
+        _reject_control_chars(admin_password, "--admin-password")
+    _reject_control_chars(user_password, "--user-password")
+
     if not name:
         name = click.prompt("Instance name")
     if not mode:
         mode = click.prompt("Deployment mode", type=click.Choice(lifecycle.VALID_MODES), default="local")
     if mode == "network" and not hostname:
         hostname = click.prompt("Public hostname (e.g. squire.example.com)")
+    if hostname:
+        hostname = _validate_hostname(hostname, "--hostname")
+    if mcp_hostname:
+        mcp_hostname = _validate_hostname(mcp_hostname, "--mcp-hostname")
 
     # Fail fast on a colliding name before asking anything else --
     # lifecycle.create_instance() would also catch this, but only after
@@ -1365,6 +1454,15 @@ def proxy_cmd(name, proxy_container, config_dir, network, no_install, swag_timez
             f"applies to network-mode instances (local modes use loopback only)."
         )
 
+    # --container ends up in a generated nginx conf's comment lines
+    # (ops/proxy.py's render_web_conf); --url ends up in the SWAG compose
+    # file's URL (render_swag_compose) if a fresh SWAG install is needed --
+    # see the SEC-08 helpers above.
+    if proxy_container:
+        _reject_control_chars(proxy_container, "--container")
+    if swag_url:
+        swag_url = _validate_hostname(swag_url, "--url")
+
     confirm = (lambda _msg: True) if assume_yes else click.confirm
     # Path(instance.data_dir), not paths.instance_root(instance.name): same
     # reason as _print_mcp_config above -- an adopted instance's data_dir
@@ -1455,6 +1553,11 @@ def _print_dns_result(result: dns_ops.DnsProvisionResult, *, runtime: str) -> No
               help="Seconds to wait for the certificate before giving up (with --no-wait, ignored).")
 def dns_duckdns_cmd(name, subdomain, token, wildcard, network, timezone, no_wait, timeout_seconds):
     instance = _require_network_instance(name)
+    # subdomain ends up in the SWAG compose file's URL; token is templated
+    # into a double-quoted DUCKDNSTOKEN YAML scalar there
+    # (ops/proxy.py's render_swag_compose) -- see the SEC-08 helpers above.
+    subdomain = _validate_hostname(subdomain, "--subdomain")
+    token = _reject_yaml_unsafe(token, "--token")
     try:
         result = dns_ops.configure_duckdns(
             subdomain=subdomain, token=token, wildcard=wildcard, runtime=instance.runtime,
@@ -1480,6 +1583,11 @@ def dns_duckdns_cmd(name, subdomain, token, wildcard, network, timezone, no_wait
               help="Seconds to wait for the certificate before giving up (with --no-wait, ignored).")
 def dns_cloudflare_cmd(name, domain, api_token, network, timezone, no_wait, timeout_seconds):
     instance = _require_network_instance(name)
+    # domain ends up in the SWAG compose file's URL; api_token is written
+    # unquoted into dns-conf/cloudflare.ini (ops/dns.py's
+    # _write_cloudflare_credentials) -- see the SEC-08 helpers above.
+    domain = _validate_hostname(domain, "--domain")
+    api_token = _reject_yaml_unsafe(api_token, "--token")
     try:
         result = dns_ops.configure_cloudflare(
             domain=domain, api_token=api_token, runtime=instance.runtime,

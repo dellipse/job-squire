@@ -2479,3 +2479,217 @@ def test_tailscale_enable_resuming_incomplete_setup_prints_notice(runner, monkey
     assert "Resuming a previously incomplete Tailscale Serve setup" in result.output
     assert "stage: ports_on" in result.output
     assert "daemon lost connection" in result.output
+
+
+# ── SEC-08: config injection at the CLI boundary ─────────────────────────
+# `create`'s admin/user credentials and hostnames, `dns duckdns`/`dns
+# cloudflare`'s subdomain/domain/token, and `proxy`'s --container/--url all
+# get f-string-interpolated -- with no quoting of their own -- into a
+# generated file: data/.env (ops/compose.py's render_data_env), a proxy
+# nginx conf's comment lines (ops/proxy.py's render_web_conf), or the
+# CLI-installed SWAG's compose YAML / Cloudflare credentials INI
+# (ops/proxy.py's render_swag_compose, ops/dns.py's
+# _write_cloudflare_credentials). Each test below proves the corresponding
+# injection-shaped value is rejected right at the CLI boundary -- before
+# lifecycle.create_instance/dns_ops.configure_*/proxy_ops.
+# provision_instance_proxy is ever reached -- rather than silently
+# producing a broken file, same style as test_registry.py's own
+# sanitize_slug tests.
+
+
+def _fail_if_called(*_args, **_kwargs):
+    raise AssertionError("this ops-layer function should not have been reached -- validation should "
+                          "have rejected the input first")
+
+
+def test_create_rejects_admin_username_with_newline(runner, monkeypatch):
+    monkeypatch.setattr(lc, "create_instance", _fail_if_called)
+    result = runner.invoke(
+        main, ["create", "castelo", "--mode", "local", "--admin-username", "admin\nALLOW_INSECURE=1"],
+    )
+    assert result.exit_code == 1
+    assert "--admin-username" in result.output
+    assert "newline" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_create_rejects_admin_password_with_newline(runner, monkeypatch):
+    monkeypatch.setattr(lc, "create_instance", _fail_if_called)
+    result = runner.invoke(
+        main, ["create", "castelo", "--mode", "local", "--admin-password", "hunter2\nALLOW_INSECURE=1"],
+    )
+    assert result.exit_code == 1
+    assert "--admin-password" in result.output
+    assert "newline" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_create_rejects_user_password_with_carriage_return(runner, monkeypatch):
+    monkeypatch.setattr(lc, "create_instance", _fail_if_called)
+    result = runner.invoke(main, ["create", "castelo", "--mode", "local", "--user-password", "hunter2\rEVIL=1"])
+    assert result.exit_code == 1
+    assert "--user-password" in result.output
+
+
+def test_create_rejects_admin_password_with_nul_byte(runner, monkeypatch):
+    monkeypatch.setattr(lc, "create_instance", _fail_if_called)
+    result = runner.invoke(main, ["create", "castelo", "--mode", "local", "--admin-password", "hunter2\x00evil"])
+    assert result.exit_code == 1
+    assert "NUL" in result.output
+
+
+def test_create_allows_password_with_ordinary_special_characters(runner, monkeypatch):
+    """A password may contain quotes, `$`, backslashes, unicode, etc. --
+    only the control characters that actually enable a data/.env line
+    injection are rejected."""
+    captured = {}
+
+    def fake_create_instance(**kwargs):
+        captured.update(kwargs)
+        raise lc.LifecycleError("stub: stopped after validation, before touching a runtime")
+
+    monkeypatch.setattr(lc, "create_instance", fake_create_instance)
+    result = runner.invoke(main, ["create", "castelo", "--mode", "local", "--admin-password", 'hunter2"$`\\'])
+    assert result.exit_code == 1
+    assert captured["admin_password"] == 'hunter2"$`\\'
+
+
+@pytest.mark.parametrize("bad_hostname", [
+    "squire.example.com/evil",
+    "-squire.example.com",
+    "squire-.example.com",
+    "a" * 64 + ".example.com",
+    "squire example.com",
+])
+def test_create_network_mode_rejects_invalid_hostname(runner, monkeypatch, bad_hostname):
+    monkeypatch.setattr(lc, "create_instance", _fail_if_called)
+    result = runner.invoke(main, ["create", "castelo", "--mode", "network", "--hostname", bad_hostname])
+    assert result.exit_code == 1
+    assert "--hostname" in result.output
+    assert "not a valid hostname" in result.output
+
+
+def test_create_network_mode_rejects_invalid_mcp_hostname(runner, monkeypatch):
+    monkeypatch.setattr(lc, "create_instance", _fail_if_called)
+    result = runner.invoke(
+        main, ["create", "castelo", "--mode", "network", "--hostname", "squire.example.com",
+               "--mcp-hostname", "mcp squire.example.com"],
+    )
+    assert result.exit_code == 1
+    assert "--mcp-hostname" in result.output
+    assert "not a valid hostname" in result.output
+
+
+def test_create_network_mode_accepts_valid_hostname(runner, monkeypatch):
+    captured = {}
+
+    def fake_create_instance(**kwargs):
+        captured.update(kwargs)
+        raise lc.LifecycleError("stub: stopped after validation, before touching a runtime")
+
+    monkeypatch.setattr(lc, "create_instance", fake_create_instance)
+    result = runner.invoke(main, ["create", "castelo", "--mode", "network", "--hostname", "squire.example.com"])
+    assert result.exit_code == 1
+    assert captured["hostname"] == "squire.example.com"
+
+
+def test_dns_duckdns_rejects_invalid_subdomain(runner, monkeypatch, tmp_path):
+    _register_network_instance(tmp_path)
+    monkeypatch.setattr(dns_ops, "configure_duckdns", _fail_if_called)
+    result = runner.invoke(
+        main, ["dns", "duckdns", "castelo", "--subdomain", "bad subdomain!", "--token", "tok123"],
+    )
+    assert result.exit_code == 1
+    assert "--subdomain" in result.output
+    assert "not a valid hostname" in result.output
+
+
+def test_dns_duckdns_rejects_token_with_double_quote(runner, monkeypatch, tmp_path):
+    """A `"` in the token would otherwise close render_swag_compose's
+    `DUCKDNSTOKEN: "..."` YAML scalar early, letting the rest of the value
+    be parsed as arbitrary YAML."""
+    _register_network_instance(tmp_path)
+    monkeypatch.setattr(dns_ops, "configure_duckdns", _fail_if_called)
+    result = runner.invoke(
+        main, ["dns", "duckdns", "castelo", "--subdomain", "castelo",
+               "--token", 'abc"\n      EVIL: "true'],
+    )
+    assert result.exit_code == 1
+    assert "--token" in result.output
+    assert "double quote" in result.output
+
+
+def test_dns_duckdns_rejects_token_with_backslash(runner, monkeypatch, tmp_path):
+    _register_network_instance(tmp_path)
+    monkeypatch.setattr(dns_ops, "configure_duckdns", _fail_if_called)
+    result = runner.invoke(main, ["dns", "duckdns", "castelo", "--subdomain", "castelo", "--token", "abc\\def"])
+    assert result.exit_code == 1
+    assert "--token" in result.output
+    assert "backslash" in result.output
+
+
+def test_dns_duckdns_accepts_ordinary_token(runner, monkeypatch, tmp_path):
+    _register_network_instance(tmp_path)
+    captured = {}
+
+    def fake_configure(*, subdomain, token, wildcard, runtime, network, timezone, wait_for_cert, timeout_seconds):
+        captured.update(subdomain=subdomain, token=token)
+        target = proxy_ops.ProxyTarget(config_dir=tmp_path / "swag-config", container_name="swag", kind="swag")
+        return dns_ops.DnsProvisionResult(
+            mode="duckdns-wildcard", url="castelo.duckdns.org", subdomains="wildcard",
+            proxy=target, cert=dns_ops.CertResult(issued=True, log_tail="Congratulations!"),
+        )
+
+    monkeypatch.setattr(dns_ops, "configure_duckdns", fake_configure)
+    result = runner.invoke(
+        main, ["dns", "duckdns", "castelo", "--subdomain", "castelo.duckdns.org", "--token", "a1b2c3d4"],
+    )
+    assert result.exit_code == 0
+    assert captured == {"subdomain": "castelo.duckdns.org", "token": "a1b2c3d4"}
+
+
+def test_dns_cloudflare_rejects_invalid_domain(runner, monkeypatch, tmp_path):
+    _register_network_instance(tmp_path)
+    monkeypatch.setattr(dns_ops, "configure_cloudflare", _fail_if_called)
+    result = runner.invoke(main, ["dns", "cloudflare", "castelo", "--domain", "-example.com", "--token", "cf-tok"])
+    assert result.exit_code == 1
+    assert "--domain" in result.output
+    assert "not a valid hostname" in result.output
+
+
+def test_dns_cloudflare_rejects_token_with_newline(runner, monkeypatch, tmp_path):
+    """A newline in the API token would otherwise smuggle an extra line
+    into the unquoted dns-conf/cloudflare.ini value
+    (ops/dns.py's _write_cloudflare_credentials)."""
+    _register_network_instance(tmp_path)
+    monkeypatch.setattr(dns_ops, "configure_cloudflare", _fail_if_called)
+    result = runner.invoke(
+        main, ["dns", "cloudflare", "castelo", "--domain", "example.com",
+               "--token", "cf-tok\ndns_cloudflare_api_token = evil"],
+    )
+    assert result.exit_code == 1
+    assert "--token" in result.output
+    assert "newline" in result.output
+
+
+def test_proxy_rejects_container_with_newline(runner, monkeypatch, tmp_path):
+    """A newline in --container would otherwise break out of the comment
+    line it's templated into in the generated nginx conf
+    (ops/proxy.py's render_web_conf)."""
+    _register_network_instance(tmp_path)
+    monkeypatch.setattr(proxy_ops, "provision_instance_proxy", _fail_if_called)
+    result = runner.invoke(
+        main, ["proxy", "castelo", "--container", "swag\n}server{listen 1;", "--config-dir", str(tmp_path)],
+    )
+    assert result.exit_code == 1
+    assert "--container" in result.output
+    assert "newline" in result.output
+
+
+def test_proxy_rejects_invalid_url(runner, monkeypatch, tmp_path):
+    _register_network_instance(tmp_path)
+    monkeypatch.setattr(proxy_ops, "provision_instance_proxy", _fail_if_called)
+    result = runner.invoke(main, ["proxy", "castelo", "--url", 'evil" \n INJECTED: "true'])
+    assert result.exit_code == 1
+    assert "--url" in result.output
+    assert "not a valid hostname" in result.output
