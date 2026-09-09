@@ -49,6 +49,9 @@ def mcp(app):
     m._tokens.clear()
     m._login_failures.clear()
     m._register_attempts.clear()
+    # Force the /mcp bearer path's token-store cache to reload on next use
+    # (SEC-06) so each test starts from a known, unstale state.
+    m._tokens_cache_time = 0.0
 
     # Start each test with an empty on-disk token store.
     try:
@@ -742,4 +745,171 @@ def test_mcp_disabled_returns_404_for_mcp_path_even_with_valid_static_key(mcp, m
                          headers=[(b"authorization", b"Bearer s3cr3t-static-key")])
 
     assert status == 404
-    assert hits["count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# 11. SEC-06: OAuth endpoints run outside FastMCP's TransportSecuritySettings
+#     middleware, so they need their own hardening -- body-size cap on the
+#     hand-rolled /oauth/* POST handlers, no spoofable X-Forwarded-For
+#     fallback for the rate-limit key, and a bounded-staleness cache instead
+#     of decrypting the token store on literally every /mcp request.
+# ---------------------------------------------------------------------------
+
+def test_oversized_oauth_body_rejected(mcp):
+    """A body over _MAX_OAUTH_BODY_BYTES must not be accumulated forever --
+    _read_body raises and the handler responds 413, matching the file's
+    JSON-error house style."""
+    oversized = b"a" * (mcp._MAX_OAUTH_BODY_BYTES + 1)
+
+    status, _, out = _call(mcp, "POST", "/oauth/revoke", body=oversized)
+
+    assert status == 413
+    assert json.loads(out)["error"] == "payload_too_large"
+
+
+def test_body_exactly_at_cap_still_works(mcp):
+    """A body right at the cap is normal-sized and must not be rejected --
+    the happy path for OAuth POSTs (e.g. revoke) keeps working."""
+    body = b"token=" + b"x" * (mcp._MAX_OAUTH_BODY_BYTES - len(b"token="))
+    assert len(body) == mcp._MAX_OAUTH_BODY_BYTES
+
+    status, _, out = _call(mcp, "POST", "/oauth/revoke", body=body)
+
+    assert status == 200
+    assert json.loads(out) == {}
+
+
+def test_get_client_ip_ignores_spoofed_xff(mcp):
+    """A private/loopback direct peer with only X-Forwarded-For (no
+    X-Real-IP) must not have that header trusted as the client IP -- SWAG
+    always sets X-Real-IP, so XFF is unnecessary, spoofable attack surface
+    for the login/registration rate-limit key."""
+    scope = {
+        "client": ("192.168.1.50", 12345),
+        "headers": [(b"x-forwarded-for", b"1.2.3.4, 192.168.1.50")],
+    }
+
+    ip = mcp._get_client_ip(scope)
+
+    assert ip != "1.2.3.4"
+    assert ip == "192.168.1.50"  # falls back to the direct TCP peer
+
+
+def test_get_client_ip_still_trusts_x_real_ip(mcp):
+    """X-Real-IP (set by SWAG) is still trusted -- only the XFF fallback was
+    removed."""
+    scope = {
+        "client": ("192.168.1.50", 12345),
+        "headers": [(b"x-real-ip", b"9.9.9.9"),
+                    (b"x-forwarded-for", b"1.2.3.4, 192.168.1.50")],
+    }
+
+    assert mcp._get_client_ip(scope) == "9.9.9.9"
+
+
+def test_get_client_ip_public_peer_ignores_headers(mcp):
+    """A public direct peer is used as-is -- headers are only consulted for
+    private/loopback peers (i.e. behind a proxy)."""
+    scope = {
+        "client": ("203.0.113.5", 12345),
+        "headers": [(b"x-forwarded-for", b"1.2.3.4"), (b"x-real-ip", b"6.6.6.6")],
+    }
+
+    assert mcp._get_client_ip(scope) == "203.0.113.5"
+
+
+def test_bearer_token_store_not_reloaded_on_every_request(mcp, monkeypatch):
+    """The /mcp bearer path must not re-decrypt oauth_tokens.json on every
+    request -- only when the short cache window has elapsed."""
+    inner, hits = _sentinel_inner()
+    monkeypatch.setattr(mcp, "_inner", inner)
+
+    now = time.time()
+    mcp._tokens["good"] = {"client_id": "c", "exp": now + 3600}
+    mcp._save_tokens(mcp._tokens)
+
+    real_load = mcp._load_tokens
+    calls = {"count": 0}
+
+    def counting_load():
+        calls["count"] += 1
+        return real_load()
+
+    monkeypatch.setattr(mcp, "_load_tokens", counting_load)
+
+    for _ in range(5):
+        status, _, _ = _call(mcp, "POST", "/mcp",
+                             headers=[(b"authorization", b"Bearer good")])
+        assert status == 200
+
+    assert calls["count"] == 1, "token store was re-decrypted more than once within the cache TTL"
+    assert hits["count"] == 5
+
+
+def test_bearer_revocation_still_takes_effect_once_cache_is_stale(mcp, monkeypatch):
+    """Caching the token store (SEC-06) must not break the property the
+    reload exists for: a revocation made by the main Flask web process --
+    which edits oauth_tokens.json directly, not through this module's
+    in-memory _tokens dict -- still takes effect without an MCP restart, once
+    the cache goes stale."""
+    inner, hits = _sentinel_inner()
+    monkeypatch.setattr(mcp, "_inner", inner)
+
+    now = time.time()
+    mcp._tokens["good"] = {"client_id": "c", "exp": now + 3600}
+    mcp._save_tokens(mcp._tokens)
+
+    # First call populates the cache.
+    status, _, _ = _call(mcp, "POST", "/mcp",
+                         headers=[(b"authorization", b"Bearer good")])
+    assert status == 200
+
+    # Simulate the main web process revoking by editing the on-disk store
+    # directly, bypassing this module's in-memory _tokens dict entirely.
+    on_disk = mcp._load_tokens()
+    del on_disk["good"]
+    mcp._save_tokens(on_disk)
+
+    # Still within the cache TTL: the (now stale relative to disk) in-memory
+    # cache still accepts it -- this is the documented, bounded tradeoff.
+    status, _, _ = _call(mcp, "POST", "/mcp",
+                         headers=[(b"authorization", b"Bearer good")])
+    assert status == 200
+
+    # Force the cache stale (equivalent to waiting past _TOKENS_CACHE_TTL).
+    mcp._tokens_cache_time = 0.0
+
+    status, _, out = _call(mcp, "POST", "/mcp",
+                           headers=[(b"authorization", b"Bearer good")])
+    assert status == 401
+    assert json.loads(out)["error"] == "unauthorized"
+
+
+def test_bearer_revocation_via_own_endpoint_is_immediate_despite_cache(mcp, monkeypatch):
+    """Revocation through this process's own /oauth/revoke handler mutates
+    _tokens directly, so it must be visible immediately even while the
+    reload cache is still fresh -- the cache must never clobber that
+    in-memory mutation with stale disk data."""
+    from urllib.parse import urlencode
+    inner, hits = _sentinel_inner()
+    monkeypatch.setattr(mcp, "_inner", inner)
+
+    now = time.time()
+    mcp._tokens["revoke-me"] = {"client_id": "c", "exp": now + 3600}
+    mcp._save_tokens(mcp._tokens)
+
+    # Populate the cache.
+    before, _, _ = _call(mcp, "POST", "/mcp",
+                         headers=[(b"authorization", b"Bearer revoke-me")])
+    assert before == 200
+
+    rev, _, _ = _call(mcp, "POST", "/oauth/revoke",
+                      body=urlencode({"token": "revoke-me"}).encode())
+    assert rev == 200
+
+    # Immediately after, still well within the cache TTL.
+    after, _, out = _call(mcp, "POST", "/mcp",
+                          headers=[(b"authorization", b"Bearer revoke-me")])
+    assert after == 401
+    assert json.loads(out)["error"] == "unauthorized"
+    assert hits["count"] == 1, "only the pre-revocation call should have reached the inner app"

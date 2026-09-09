@@ -191,6 +191,30 @@ def _save_tokens(tokens: dict) -> None:
 with flask_app.app_context():
     _tokens: dict = _load_tokens()
 
+# SEC-06: the /mcp bearer-token path used to unconditionally _load_tokens()
+# (decrypting oauth_tokens.json from disk) on every single request, so that a
+# revocation made by the main Flask web process -- which edits
+# oauth_tokens.json directly -- takes effect on this process without a
+# restart. That property is worth keeping, but re-reading and decrypting on
+# every request is wasteful. Cache the reload for a couple of seconds instead;
+# a revocation made on disk by another process still lands within that
+# window. Revocations made through this process's own _handle_revoke mutate
+# _tokens directly and are visible immediately regardless of this cache --
+# _refresh_tokens_cache only *skips* a reload when the cache is fresh, it
+# never overwrites _tokens with stale data.
+_TOKENS_CACHE_TTL = 2.0  # seconds
+_tokens_cache_time = 0.0
+
+
+def _refresh_tokens_cache() -> None:
+    global _tokens_cache_time
+    now = time.time()
+    if (now - _tokens_cache_time) < _TOKENS_CACHE_TTL:
+        return
+    _tokens.clear()
+    _tokens.update(_load_tokens())
+    _tokens_cache_time = now
+
 
 # ---------------------------------------------------------------------------
 # MCP tools
@@ -937,14 +961,41 @@ def _render_auth_page(*, client_id, redirect_uri, state, code_challenge,
     )
 
 
-async def _read_body(receive) -> bytes:
+# SEC-06: none of the /oauth/* POST handlers below capped how much of a
+# request body _read_body would accumulate in memory. 64 KiB matches the
+# SWAG client_max_body_size posture documented elsewhere for this surface and
+# comfortably covers every legitimate payload here (DCR JSON, a login form,
+# or a token/revoke form).
+_MAX_OAUTH_BODY_BYTES = 64 * 1024
+
+
+class _BodyTooLarge(Exception):
+    """Raised by _read_body when a request body exceeds _MAX_OAUTH_BODY_BYTES."""
+
+
+async def _read_body(receive, max_bytes: int = _MAX_OAUTH_BODY_BYTES) -> bytes:
     body = b""
     while True:
         ev = await receive()
         body += ev.get("body", b"")
+        if len(body) > max_bytes:
+            raise _BodyTooLarge()
         if not ev.get("more_body"):
             break
     return body
+
+
+async def _read_body_or_413(receive, send):
+    """``_read_body``, but on overflow send a 413 response and return ``None``.
+
+    Callers must ``return`` immediately when this returns ``None`` — the
+    response has already been sent.
+    """
+    try:
+        return await _read_body(receive)
+    except _BodyTooLarge:
+        await _respond(send, 413, {"error": "payload_too_large"})
+        return None
 
 
 _SECURITY_HEADERS = [
@@ -987,7 +1038,9 @@ async def _handle_revoke(scope, receive, send):
     Accepts token= in the POST body. Always returns 200 per the spec — the
     caller shouldn't be able to probe whether a given token existed.
     """
-    raw = await _read_body(receive)
+    raw = await _read_body_or_413(receive, send)
+    if raw is None:
+        return
     params = {k: v[0] for k, v in parse_qs(raw.decode()).items()} if raw.strip() else {}
     token = params.get("token", "").strip()
     if token and token in _tokens:
@@ -1023,7 +1076,9 @@ async def _handle_register(scope, receive, send):
     if len(_clients) >= _MAX_CLIENTS:
         await _respond(send, 503, {"error": "registration_temporarily_unavailable"})
         return
-    raw = await _read_body(receive)
+    raw = await _read_body_or_413(receive, send)
+    if raw is None:
+        return
     try:
         data = json.loads(raw)
     except Exception:
@@ -1079,14 +1134,19 @@ async def _handle_authorize_get(scope, receive, send):
 
 
 def _get_client_ip(scope: dict) -> str:
-    """Return the real client IP, reading forwarded headers when the direct
+    """Return the real client IP, reading X-Real-IP when the direct
     connection comes from a private/loopback address (i.e. a reverse proxy).
 
-    Trusts X-Real-IP set by nginx (proxy_set_header X-Real-IP $remote_addr) and
-    falls back to the leftmost entry of X-Forwarded-For, which represents the
-    original client before any proxies touched the chain.  Only acts on headers
-    when the TCP peer is in a private range — public-IP direct connections are
-    used as-is so a malicious client cannot spoof its address by injecting headers.
+    Trusts X-Real-IP set by nginx/SWAG (proxy_set_header X-Real-IP $remote_addr)
+    only. X-Forwarded-For is deliberately NOT consulted (SEC-06): SWAG, this
+    project's documented reverse-proxy topology, always sets X-Real-IP, so the
+    XFF fallback was unnecessary attack surface -- a proxy that *appends*
+    rather than *replaces* X-Forwarded-For (or a request that reaches this app
+    directly, bypassing the proxy, from an internal-looking address) would let
+    a client spoof the rate-limit key that header feeds. Only acts on headers
+    when the TCP peer is in a private range -- public-IP direct connections are
+    used as-is so a malicious client cannot spoof its address by injecting
+    headers.
     """
     direct_ip = scope.get("client", ("unknown", 0))[0]
     _PRIVATE_PREFIXES = ("10.", "172.", "192.168.", "127.", "::1", "fc", "fd")
@@ -1095,14 +1155,13 @@ def _get_client_ip(scope: dict) -> str:
         real_ip = headers.get(b"x-real-ip", b"").decode().strip()
         if real_ip:
             return real_ip
-        forwarded_for = headers.get(b"x-forwarded-for", b"").decode().strip()
-        if forwarded_for:
-            return forwarded_for.split(",")[0].strip()
     return direct_ip
 
 
 async def _handle_authorize_post(scope, receive, send):
-    raw = await _read_body(receive)
+    raw = await _read_body_or_413(receive, send)
+    if raw is None:
+        return
     params = {k: v[0] for k, v in parse_qs(raw.decode()).items()}
 
     username = params.get("username", "").strip()
@@ -1173,7 +1232,9 @@ async def _handle_token(scope, receive, send):
     # Claude.ai may send token params in the query string rather than the body.
     # Merge both; body takes precedence so form submissions still win.
     qs_params = _parse_qs(scope)
-    raw = await _read_body(receive)
+    raw = await _read_body_or_413(receive, send)
+    if raw is None:
+        return
     body_params = {k: v[0] for k, v in parse_qs(raw.decode()).items()} if raw.strip() else {}
     params = {**qs_params, **body_params}
 
@@ -1341,11 +1402,11 @@ async def asgi_app(scope, receive, send):
             return
 
     # OAuth Bearer token (issued by /oauth/token above).
-    # Reload from disk on every check so that revocations made by the main-app
-    # web process (which edits oauth_tokens.json directly) take effect immediately
-    # without requiring an MCP server restart.
-    _tokens.clear()
-    _tokens.update(_load_tokens())
+    # Reload from disk (at most every _TOKENS_CACHE_TTL seconds -- see
+    # _refresh_tokens_cache) so that revocations made by the main-app web
+    # process (which edits oauth_tokens.json directly) take effect without
+    # requiring an MCP server restart.
+    _refresh_tokens_cache()
     if bearer and bearer in _tokens and _tokens[bearer]["exp"] > time.time():
         await _inner(_scope_for_inner(scope, "/mcp"), receive, send)
         return
