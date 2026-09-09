@@ -50,6 +50,15 @@ from . import dotenv, paths
 
 DEFAULT_IMAGE = "ghcr.io/dellipse/job-squire:latest"
 
+# The identity every job-squire image is keylessly signed with in CI (see
+# .github/workflows/ci.yml's "Sign published image" step) -- proves the
+# pulled image was actually built and pushed by this repo's own GitHub
+# Actions workflow, not a substituted or compromised one sitting at the
+# same tag (this matters more than usual since DEFAULT_IMAGE's tag,
+# `:latest`, is mutable by design).
+_COSIGN_CERT_IDENTITY_REGEXP = "github.com/dellipse/job-squire"
+_COSIGN_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
+
 Runner = Callable[..., "subprocess.CompletedProcess[str]"]
 
 # Runtimes that speak the `docker` CLI directly -- OrbStack and Colima both
@@ -515,12 +524,50 @@ def pull_image(runtime: str, image: str, *, run: Runner = subprocess.run,
     """`docker/podman pull <image>` directly (not via compose), so `update`
     can download the target version *before* touching the running
     container -- if the pull fails, nothing about the instance has changed
-    yet."""
+    yet.
+
+    Once the pull itself succeeds, verifies the image's cosign signature
+    (SEC-09, 2026-09-08 audit) before returning -- update_instance (the
+    only caller) stops and recreates the running container right after a
+    successful pull_image, so this is the last checkpoint before an
+    unverified image would ever actually run. Signature verification
+    failure -- including cosign itself being missing -- raises ComposeError
+    rather than returning a non-zero CompletedProcess, so it fails closed
+    even for a caller that only checks the pull's own returncode.
+    """
     argv = [runtime_binary(runtime), "pull", image]
     try:
-        return run(argv, capture_output=True, text=True, timeout=timeout)
+        result = run(argv, capture_output=True, text=True, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise ComposeError(f"Failed to pull {image}: {exc}") from exc
+    if result.returncode != 0:
+        return result
+
+    verify_argv = [
+        "cosign", "verify",
+        "--certificate-identity-regexp", _COSIGN_CERT_IDENTITY_REGEXP,
+        "--certificate-oidc-issuer", _COSIGN_OIDC_ISSUER,
+        image,
+    ]
+    try:
+        verify_result = run(verify_argv, capture_output=True, text=True, timeout=60.0)
+    except FileNotFoundError as exc:
+        raise ComposeError(
+            f"Pulled {image!r}, but cannot verify its signature -- cosign is not "
+            "installed. Install it from "
+            "https://docs.sigstore.dev/cosign/system_config/installation/ and try "
+            "again; refusing to use an unverified image."
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise ComposeError(f"cosign verify timed out for {image!r}: {exc}") from exc
+    if verify_result.returncode != 0:
+        raise ComposeError(
+            f"Signature verification failed for {image!r} -- refusing to use an "
+            "unverified image. cosign said:\n"
+            f"{(verify_result.stderr or verify_result.stdout or '').strip()}"
+        )
+
+    return result
 
 
 def remove_image(runtime: str, image: str, *, run: Runner = subprocess.run,

@@ -391,6 +391,67 @@ def test_pull_image_uses_podman_binary():
     assert run.calls[0]["args"][0] == "podman"
 
 
+# ── SEC-09: cosign signature verification after a successful pull ─────────
+
+def _fake_run_by_binary(**returns):
+    """Like fake_run(), but the returncode/stdout/stderr can differ per
+    argv[0] (e.g. "docker" vs "cosign") -- needed here because a single
+    pull_image() call now shells out to two different binaries."""
+    calls = []
+
+    def _run(args, **kwargs):
+        calls.append({"args": tuple(args), "kwargs": kwargs})
+        rc, out, err = returns.get(args[0], (0, "", ""))
+        return SimpleNamespace(returncode=rc, stdout=out, stderr=err)
+
+    _run.calls = calls
+    return _run
+
+
+def test_pull_image_runs_cosign_verify_after_a_successful_pull():
+    run = fake_run()
+    image = "ghcr.io/dellipse/job-squire:0.7.0"
+    compose.pull_image("docker", image, run=run)
+
+    assert len(run.calls) == 2
+    assert run.calls[0]["args"] == ("docker", "pull", image)
+    verify_args = run.calls[1]["args"]
+    assert verify_args[:2] == ("cosign", "verify")
+    assert "--certificate-identity-regexp" in verify_args
+    assert verify_args[verify_args.index("--certificate-identity-regexp") + 1] == (
+        "github.com/dellipse/job-squire"
+    )
+    assert "--certificate-oidc-issuer" in verify_args
+    assert verify_args[verify_args.index("--certificate-oidc-issuer") + 1] == (
+        "https://token.actions.githubusercontent.com"
+    )
+    assert verify_args[-1] == image
+
+
+def test_pull_image_skips_cosign_verify_when_the_pull_itself_fails():
+    run = _fake_run_by_binary(docker=(1, "", "manifest unknown"))
+    result = compose.pull_image("docker", "ghcr.io/dellipse/job-squire:bad-tag", run=run)
+    assert result.returncode == 1
+    assert len(run.calls) == 1, "cosign should never run against an image that never pulled"
+
+
+def test_pull_image_raises_when_cosign_verify_fails():
+    run = _fake_run_by_binary(cosign=(1, "", "no matching signatures"))
+    image = "ghcr.io/dellipse/job-squire:0.7.0"
+    with pytest.raises(compose.ComposeError, match="[Ss]ignature verification failed"):
+        compose.pull_image("docker", image, run=run)
+
+
+def test_pull_image_raises_clear_error_when_cosign_is_not_installed():
+    def _run(args, **kwargs):
+        if args[0] == "cosign":
+            raise FileNotFoundError("cosign")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    with pytest.raises(compose.ComposeError, match="cosign is not installed"):
+        compose.pull_image("docker", "ghcr.io/dellipse/job-squire:0.7.0", run=_run)
+
+
 def test_remove_image_invokes_runtime_rmi():
     run = fake_run()
     compose.remove_image("docker", "ghcr.io/dellipse/job-squire:latest", run=run)
