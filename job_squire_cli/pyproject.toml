@@ -11,6 +11,14 @@ name = "job-squire-cli"
 version = "0.7.27+f29fd96"
 description = "job-squire deployment CLI and MCP query client"
 readme = "README.md"
+# Deliberately lower than the app's container runtime (Python 3.14, per the
+# root Dockerfile). This package is installed by bootstrap.sh onto a user's
+# own host (e.g. via `pipx install`), not run inside the container, so its
+# floor is a product decision about how old a host Python we still support,
+# not something that should track the containerized app's runtime version.
+# .github/workflows/cli.yml's CI tests against this same 3.11 floor, and
+# [tool.ruff] target-version below matches it too -- keep all three in sync
+# if this floor ever moves (audit CI-04, 2026-09-08 follow-up).
 requires-python = ">=3.11"
 license = "AGPL-3.0-or-later"
 dependencies = [
@@ -50,6 +58,7 @@ jobsquire = "job_squire_cli.cli:main"
 packages = ["job_squire_cli"]
 
 [tool.ruff]
+# Matches requires-python above, not the app's py314 (see the comment there).
 target-version = "py311"
 line-length = 110
 

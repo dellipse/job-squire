@@ -7,6 +7,23 @@ name: CLI
 # job_squire_cli/pyproject.toml's [tool.ruff] table for files under that
 # directory even when invoked from the repo root, so linting isn't
 # duplicated here.
+#
+# python-version below is intentionally pinned to 3.11, not the 3.14 that
+# ci.yml and the app's container runtime use (see the Dockerfile's FROM
+# comment). job_squire_cli is a pip-distributed *host* CLI (installed by
+# bootstrap.sh onto a user's own machine, e.g. via `pipx install`), not code
+# that runs inside the container, so its compatibility floor is a product
+# decision, not CI drift: job_squire_cli/pyproject.toml declares
+# `requires-python = ">=3.11"` so users who haven't upgraded their host
+# Python can still install and run it, and its own [tool.ruff] table sets
+# target-version = "py311" to match. This job tests against that same 3.11
+# floor -- the actual minimum this package promises to support -- rather
+# than an arbitrary version in between (audit CI-04, 2026-09-08 follow-up:
+# the previous "3.12" here matched neither the declared floor nor the app
+# runtime and had no documented reason). ruff's *version* (not its
+# target-version) is still kept in lockstep with requirements-dev.txt's pin
+# below -- there's no compatibility reason for the linter tool itself to
+# drift between workflows, only for the Python floor it's checking against.
 on:
   push:
     branches: [main]
@@ -28,18 +45,18 @@ jobs:
       contents: read
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.12"
+          python-version: "3.11"
           cache: pip
 
       - name: Install job-squire-cli with the query extra, plus dev tools
         run: |
           pip install -e "./job_squire_cli[query]"
-          pip install pytest==9.1.1 pytest-cov==7.1.0 ruff==0.15.20 pip-audit==2.10.1
+          pip install pytest==9.1.1 pytest-cov==7.1.0 ruff==0.16.6 pip-audit==2.10.1
 
       - name: Ruff check
         run: ruff check job_squire_cli
@@ -59,12 +76,12 @@ jobs:
       contents: read
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.12"
+          python-version: "3.11"
           cache: pip
 
       - name: Install job-squire-cli without the query extra
@@ -91,12 +108,12 @@ jobs:
       contents: read
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.12"
+          python-version: "3.11"
 
       - name: Stamp CLI version from VERSION + short SHA
         run: python scripts/stamp_cli_version.py
@@ -121,7 +138,7 @@ jobs:
       # the run that produced it, rather than a copy hand-committed back
       # to a branch. See job_squire_cli/sbom/README.md.
       - name: Upload SBOM as a build artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: job-squire-cli-sbom
           path: job_squire_cli/sbom/job-squire-cli.cdx.json
