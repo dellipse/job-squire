@@ -58,6 +58,17 @@ jobs:
           pip install -e "./job_squire_cli[query]"
           pip install pytest==9.1.1 pytest-cov==7.1.0 ruff==0.16.6 pip-audit==2.10.1
 
+      # actions/setup-python's cached 3.11.16 build bundles an old setuptools
+      # (79.0.1) via ensurepip, vulnerable to PYSEC-2026-3447 (fixed 83.0.0).
+      # The 3.14 build ci.yml uses doesn't carry this -- only surfaced here
+      # once this job actually started testing against the 3.11 floor (see
+      # the header comment above; audit CI-04 follow-up, 2026-09-09). Same
+      # fix the root Dockerfile already applies to its own venv for the same
+      # class of stale-bundled-setuptools CVE: upgrade it explicitly rather
+      # than leaving whatever ensurepip shipped.
+      - name: Upgrade setuptools (bundled build is CVE-flagged on 3.11)
+        run: pip install --upgrade setuptools
+
       - name: Ruff check
         run: ruff check job_squire_cli
 
