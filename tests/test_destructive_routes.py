@@ -44,27 +44,8 @@ from app.models import (
     AIProviderConfig, AITaskConfig, Attachment, CandidateAsset, Contact,
     Interview, Job, Submission,
 )
-from tests.conftest import ADMIN_PASSWORD, ADMIN_USERNAME, USER_PASSWORD, USER_USERNAME
-
-
-def _login(client, username, password):
-    return client.post(
-        "/login", data={"username": username, "password": password}, follow_redirects=False,
-    )
-
-
-def _login_admin(client, app):
-    from app import _seed_users
-    with app.app_context():
-        _seed_users(app)
-    return _login(client, ADMIN_USERNAME, ADMIN_PASSWORD)
-
-
-def _login_user(client, app):
-    from app import _seed_users
-    with app.app_context():
-        _seed_users(app)
-    return _login(client, USER_USERNAME, USER_PASSWORD)
+from tests.conftest import login_admin as _login_admin
+from tests.conftest import login_user as _login_user
 
 
 @pytest.fixture
@@ -88,7 +69,7 @@ def test_job_delete_happy_path_removes_job_and_unlinks_submissions(client, app, 
     db.session.commit()
     job_id, sub_id = j.id, sub.id
 
-    _login_admin(client, app)
+    _login_admin(client)
     resp = client.post(f"/jobs/{job_id}/delete", data={}, follow_redirects=False)
     assert resp.status_code == 302
 
@@ -112,7 +93,7 @@ def test_jobs_bulk_update_requires_login(client, job):
 
 
 def test_jobs_bulk_update_happy_path_non_admin_can_update(client, app, job):
-    _login_user(client, app)
+    _login_user(client)
     resp = client.post("/jobs/bulk-update",
                        data={"job_ids": [str(job.id)], "action": "withdrawn"},
                        follow_redirects=False)
@@ -122,7 +103,7 @@ def test_jobs_bulk_update_happy_path_non_admin_can_update(client, app, job):
 
 
 def test_jobs_bulk_update_set_status_rejects_invalid_status(client, app, job):
-    _login_user(client, app)
+    _login_user(client)
     resp = client.post("/jobs/bulk-update",
                        data={"job_ids": [str(job.id)], "action": "set_status",
                              "status": "Not-A-Real-Status"},
@@ -152,7 +133,7 @@ def test_interview_delete_happy_path(client, app, job):
     db.session.commit()
     iv_id = iv.id
 
-    _login_user(client, app)
+    _login_user(client)
     resp = client.post(f"/interviews/{iv_id}/delete", data={}, follow_redirects=False)
     assert resp.status_code == 302
     assert db.session.get(Interview, iv_id) is None
@@ -178,7 +159,7 @@ def test_contact_delete_happy_path(client, app, app_context):
     db.session.commit()
     contact_id = c.id
 
-    _login_user(client, app)
+    _login_user(client)
     resp = client.post(f"/contacts/{contact_id}/delete", data={}, follow_redirects=False)
     assert resp.status_code == 302
     assert db.session.get(Contact, contact_id) is None
@@ -210,7 +191,7 @@ def test_submission_delete_happy_path(client, app, app_context):
     db.session.commit()
     sub_id = sub.id
 
-    _login_user(client, app)
+    _login_user(client)
     resp = client.post(f"/submissions/{sub_id}/delete", data={}, follow_redirects=False)
     assert resp.status_code == 302
     assert db.session.get(Submission, sub_id) is None
@@ -246,7 +227,7 @@ def test_attachment_delete_happy_path_removes_row_and_file(client, app, app_cont
     path_on_disk = os.path.join(app.config["UPLOAD_DIR"], att.stored_name)
     assert os.path.exists(path_on_disk)
 
-    _login_user(client, app)
+    _login_user(client)
     resp = client.post(f"/attachments/{att_id}/delete", data={}, follow_redirects=False)
     assert resp.status_code == 302
     assert db.session.get(Attachment, att_id) is None
@@ -277,7 +258,7 @@ def test_mcp_revoke_token_requires_login(client, app):
 
 
 def test_mcp_revoke_token_forbids_non_admin(client, app):
-    _login_user(client, app)
+    _login_user(client)
     resp = client.post("/settings/mcp-revoke-token", data={"token_id": "whatever"},
                        follow_redirects=False)
     assert resp.status_code == 403
@@ -289,7 +270,7 @@ def test_mcp_revoke_token_happy_path(client, app):
     token_id = hashlib.sha256(raw.encode()).hexdigest()
     _seed_tokens(app, {raw: {"client_name": "Claude", "issued_at": now, "exp": now + 3600}})
 
-    _login_admin(client, app)
+    _login_admin(client)
     resp = client.post("/settings/mcp-revoke-token", data={"token_id": token_id},
                        follow_redirects=True)
     assert resp.status_code == 200
@@ -306,7 +287,7 @@ def test_mcp_revoke_all_requires_login(client, app):
 
 
 def test_mcp_revoke_all_forbids_non_admin(client, app):
-    _login_user(client, app)
+    _login_user(client)
     resp = client.post("/settings/mcp-revoke-all", data={}, follow_redirects=False)
     assert resp.status_code == 403
 
@@ -318,7 +299,7 @@ def test_mcp_revoke_all_happy_path_clears_every_token(client, app):
         "raw-2": {"client_name": "B", "issued_at": now, "exp": now + 3600},
     })
 
-    _login_admin(client, app)
+    _login_admin(client)
     resp = client.post("/settings/mcp-revoke-all", data={}, follow_redirects=True)
     assert resp.status_code == 200
     assert b"Revoked 2 token" in resp.data
@@ -353,7 +334,7 @@ def test_ai_provider_delete_forbids_non_admin(app_context, client, app):
     db.session.add(p)
     db.session.commit()
     pid = p.id
-    _login_user(client, app)
+    _login_user(client)
     resp = client.post(f"/settings/ai/providers/{pid}/delete", data={}, follow_redirects=False)
     assert resp.status_code == 403
     assert db.session.get(AIProviderConfig, pid) is not None
@@ -381,7 +362,7 @@ def test_ai_provider_delete_happy_path_nulls_fks_and_resequences_ranks(client, a
     db.session.commit()
     p1_id, p2_id = p1.id, p2.id
 
-    _login_admin(client, app)
+    _login_admin(client)
     resp = client.post(f"/settings/ai/providers/{p1_id}/delete", data={}, follow_redirects=False)
     assert resp.status_code == 302
 
@@ -422,7 +403,7 @@ def test_asset_delete_requires_login(app_context, client):
 
 def test_asset_delete_forbids_non_admin(app_context, client, app):
     asset = _make_asset(app_context)
-    _login_user(client, app)
+    _login_user(client)
     resp = client.post(f"/assets/{asset.id}/delete", data={}, follow_redirects=False)
     assert resp.status_code == 403
     assert db.session.get(CandidateAsset, asset.id) is not None

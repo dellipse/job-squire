@@ -15,16 +15,11 @@ import os
 import time
 
 from app.main import _worker_heartbeat_status
+from tests.conftest import login_admin as _login
 
 
 def _heartbeat_path(app):
     return os.path.join(app.config["DATA_DIR"], ".worker_heartbeat")
-
-
-def _login(client, username="admin", password="admin-test-pw"):
-    return client.post(
-        "/login", data={"username": username, "password": password}, follow_redirects=False,
-    )
 
 
 def test_touch_heartbeat_writes_readable_timestamp(app_context, monkeypatch):
@@ -101,16 +96,9 @@ def test_dashboard_and_settings_render_worker_status(client, app):
     (new Jinja blocks) render without a template error, both when the worker
     looks stale and when it looks healthy.
     """
-    # test_migrations.py's `mdb` fixture intentionally drop_all()/create_all()s
-    # the shared session-scoped DB as part of exercising the migration path,
-    # which wipes the seeded accounts if this test runs later in the same
-    # session. Re-seed from the same env vars conftest.py used originally so
-    # this test doesn't depend on suite ordering.
-    from app import _seed_users
     from app.extensions import db
     from app.models import OnboardingState
     with app.app_context():
-        _seed_users(app)
         # This test checks the worker-status banner on "/", not the Getting
         # Started walkthrough — dismiss it so a fresh checklist doesn't
         # force-redirect "/" away from the dashboard (see app/onboarding.py).

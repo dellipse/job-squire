@@ -15,26 +15,8 @@ import pytest
 from app.extensions import db
 from app.models import (CandidateAsset, OnboardingState, ProviderCredential,
                         SearchConfig, SearchRun, User)
-from tests.conftest import ADMIN_PASSWORD, ADMIN_USERNAME
-
-
-def _login_admin(client, app):
-    from app import _seed_users
-    with app.app_context():
-        _seed_users(app)
-    return client.post("/login",
-                       data={"username": ADMIN_USERNAME, "password": ADMIN_PASSWORD},
-                       follow_redirects=False)
-
-
-def _login_user(client, app):
-    from app import _seed_users
-    from tests.conftest import USER_USERNAME, USER_PASSWORD
-    with app.app_context():
-        _seed_users(app)
-    return client.post("/login",
-                       data={"username": USER_USERNAME, "password": USER_PASSWORD},
-                       follow_redirects=False)
+from tests.conftest import login_admin as _login_admin
+from tests.conftest import login_user as _login_user
 
 
 @pytest.fixture
@@ -109,14 +91,14 @@ class TestChecklistDerivation:
     def test_visit_alone_is_not_enough_without_data(self, clean_state, client, app):
         """Loading a step's page shouldn't complete it if nothing was actually
         filled in — both conditions are required."""
-        _login_admin(client, app)
+        _login_admin(client)
         assert client.get("/getting-started/search").status_code == 200
         from app.onboarding import build_checklist
         status = {i["key"]: i["status"] for i in build_checklist()}
         assert status["search"] == "todo"
 
     def test_skip_persists_and_revisit_allowed(self, clean_state, client, app):
-        _login_admin(client, app)
+        _login_admin(client)
         r = client.post("/getting-started/ai/skip", follow_redirects=False)
         assert r.status_code == 302
         from app.onboarding import build_checklist
@@ -139,7 +121,7 @@ class TestChecklistDerivation:
 
 class TestDashboardCard:
     def test_card_shows_then_hides_on_dismiss(self, clean_state, client, app):
-        _login_admin(client, app)
+        _login_admin(client)
         # Incomplete + not dismissed: "/" force-redirects into the walkthrough
         # (persona first) rather than rendering the dashboard card.
         r = client.get("/", follow_redirects=False)
@@ -157,8 +139,16 @@ class TestDashboardCard:
 
 class TestAccountsStep:
     def test_create_second_account(self, clean_state, client, app):
-        _login_admin(client, app)
-        User.query.filter(User.role != "admin").delete()
+        _login_admin(client)
+        # Only clear out the account this test itself creates. The route
+        # (app/onboarding.py:save_accounts) only rejects a duplicate of the
+        # exact username being submitted -- nothing anywhere requires "no
+        # other non-admin user exists" -- and the assertions below only
+        # inspect the "jordan" row, so there's no need to touch any other
+        # user. In particular, wiping every non-admin user here used to also
+        # delete the shared session-scoped seeded "seeker" account, which
+        # other tests (including outside this file) need to log in as.
+        User.query.filter_by(username="jordan").delete()
         db.session.commit()
         r = client.post("/getting-started/accounts",
                         data={"username": "jordan", "display_name": "Jordan",
@@ -180,13 +170,13 @@ class TestAccountsStep:
          "do not match"),
     ])
     def test_validation_rejects(self, clean_state, client, app, data, fragment):
-        _login_admin(client, app)
+        _login_admin(client)
         r = client.post("/getting-started/accounts", data=data, follow_redirects=True)
         assert fragment.encode() in r.data
         assert User.query.filter_by(username=data["username"]).first() is None
 
     def test_non_admin_blocked(self, clean_state, client, app):
-        _login_user(client, app)
+        _login_user(client)
         assert client.get("/getting-started").status_code == 403
         r = client.post("/getting-started/accounts",
                         data={"username": "sneaky", "password": "hunter2hunter2",
@@ -197,7 +187,7 @@ class TestAccountsStep:
 
 class TestAiStep:
     def test_no_ai_marks_done_and_warns(self, clean_state, client, app):
-        _login_admin(client, app)
+        _login_admin(client)
         assert client.get("/getting-started/ai").status_code == 200  # marks it visited
         r = client.post("/getting-started/ai", data={"action": "no_ai"},
                         follow_redirects=True)
@@ -209,7 +199,7 @@ class TestAiStep:
 
 class TestNotificationsStep:
     def test_page_renders_both_provider_options(self, clean_state, client, app):
-        _login_admin(client, app)
+        _login_admin(client)
         r = client.get("/getting-started/notifications")
         assert r.status_code == 200
         assert b"SMTP2GO" in r.data
@@ -217,7 +207,7 @@ class TestNotificationsStep:
         assert b"Continue without email notifications" in r.data
 
     def test_no_email_marks_done_and_warns(self, clean_state, client, app):
-        _login_admin(client, app)
+        _login_admin(client)
         assert client.get("/getting-started/notifications").status_code == 200  # marks visited
         r = client.post("/getting-started/notifications", data={"action": "no_email"},
                         follow_redirects=True)
@@ -230,7 +220,7 @@ class TestNotificationsStep:
         """Mirrors the ai step's has_provider check: real, working configuration
         satisfies the step without an explicit "answered"/"no_email" flag, but
         only once the step's own page has been visited (see _step_done)."""
-        _login_admin(client, app)
+        _login_admin(client)
         client.post("/settings/smtp", data={
             "enabled": "on", "host": "mail.smtp2go.com", "port": "587",
             "username": "smtp2go-user", "password": "secret", "from_addr": "me@example.com",
@@ -244,7 +234,7 @@ class TestNotificationsStep:
         assert status["notifications"] == "done"
 
     def test_settings_smtp_from_onboarding_returns_to_onboarding(self, clean_state, client, app):
-        _login_admin(client, app)
+        _login_admin(client)
         r = client.post("/settings/smtp", data={
             "enabled": "on", "host": "mail.smtp2go.com", "port": "587",
             "to_addr": "me@example.com", "next": "/getting-started/notifications",
@@ -255,7 +245,7 @@ class TestNotificationsStep:
 class TestProfileStep:
     def test_profile_links_append_to_candidate_profile(self, clean_state, client, app):
         from flask import current_app
-        _login_admin(client, app)
+        _login_admin(client)
         path = os.path.join(current_app.config["DATA_DIR"], "candidate_profile.md")
         with open(path, "w", encoding="utf-8") as f:
             f.write("# Existing profile")
@@ -279,7 +269,7 @@ class TestProfileStep:
         one-time flash message, so a user reloading the step had no way to
         tell it had actually been saved.
         """
-        _login_admin(client, app)
+        _login_admin(client)
         client.post("/getting-started/profile-links",
                     data={"links": "https://www.linkedin.com/in/jordan"},
                     follow_redirects=True)
@@ -295,7 +285,7 @@ class TestProfileStep:
             path = os.path.join(current_app.config["DATA_DIR"], "candidate_profile.md")
             try:
                 with app.test_client() as client:
-                    _login_admin(client, app)
+                    _login_admin(client)
                     client.post("/getting-started/profile-links",
                                 data={"links": "https://www.linkedin.com/in/jordan"})
                     client.post("/getting-started/profile-links",
@@ -355,7 +345,7 @@ class TestResumeInterview:
         assert "error" in save_resume_draft("   ")
 
     def test_save_resume_route_persists(self, clean_state, client, app):
-        _login_admin(client, app)
+        _login_admin(client)
         r = client.post("/getting-started/profile/resume-draft",
                         data={"resume_markdown": "# Test Resume\n\nContent."},
                         follow_redirects=True)
@@ -363,11 +353,11 @@ class TestResumeInterview:
         assert CandidateAsset.query.filter_by(kind="Resume").count() == 1
 
     def test_resume_interview_non_admin_blocked(self, clean_state, client, app):
-        _login_user(client, app)
+        _login_user(client)
         assert client.get("/getting-started/profile/interview").status_code == 403
 
     def test_resume_interview_redirects_without_provider(self, clean_state, client, app):
-        _login_admin(client, app)
+        _login_admin(client)
         r = client.get("/getting-started/profile/interview", follow_redirects=False)
         assert r.status_code == 302
         assert "/getting-started/profile" in r.headers["Location"]
@@ -412,7 +402,7 @@ class TestResumeInterview:
         """REL-01 regression: the AI turn must run off the request thread —
         assert the route responds long before a stalled provider would, and
         renders the wait/poll page rather than the finished question."""
-        _login_admin(client, app)
+        _login_admin(client)
         self._configure_provider(app)
 
         import time as _time
@@ -434,7 +424,7 @@ class TestResumeInterview:
 
     def test_resume_interview_continue_renders_next_question(self, clean_state, client, app):
         import json
-        _login_admin(client, app)
+        _login_admin(client)
         r = client.post("/getting-started/profile/interview/continue", data={
             "payload": json.dumps({
                 "done": False,
@@ -447,7 +437,7 @@ class TestResumeInterview:
 
     def test_resume_interview_continue_renders_done(self, clean_state, client, app):
         import json
-        _login_admin(client, app)
+        _login_admin(client)
         r = client.post("/getting-started/profile/interview/continue", data={
             "payload": json.dumps({
                 "done": True,
@@ -479,7 +469,7 @@ class TestResumeUploadAutoConvert:
 
     def test_base_resume_docx_upload_creates_resume_draft(self, clean_state, client, app):
         import io
-        _login_admin(client, app)
+        _login_admin(client)
         r = client.post(
             "/settings/assets/upload",
             data={
@@ -503,7 +493,7 @@ class TestResumeUploadAutoConvert:
 
     def test_base_resume_upload_satisfies_profile_step(self, clean_state, client, app):
         import io
-        _login_admin(client, app)
+        _login_admin(client)
         client.post(
             "/settings/assets/upload",
             data={
@@ -524,7 +514,7 @@ class TestResumeUploadAutoConvert:
 
     def test_unsupported_extension_upload_warns_but_does_not_crash(self, clean_state, client, app):
         import io
-        _login_admin(client, app)
+        _login_admin(client)
         r = client.post(
             "/settings/assets/upload",
             data={
@@ -541,7 +531,7 @@ class TestResumeUploadAutoConvert:
 
     def test_non_base_resume_upload_does_not_trigger_conversion(self, clean_state, client, app):
         import io
-        _login_admin(client, app)
+        _login_admin(client)
         client.post(
             "/settings/assets/upload",
             data={
@@ -574,7 +564,7 @@ class TestCustomResumeUploadVariants:
 
     def test_custom_resume_upload_converts_and_keeps_source(self, clean_state, client, app):
         import io
-        _login_admin(client, app)
+        _login_admin(client)
         r = client.post(
             "/settings/assets/upload",
             data={
@@ -601,7 +591,7 @@ class TestCustomResumeUploadVariants:
 
     def test_custom_resume_upload_rejects_unconvertible_extension(self, clean_state, client, app):
         import io
-        _login_admin(client, app)
+        _login_admin(client)
         r = client.post(
             "/settings/assets/upload",
             data={
@@ -620,7 +610,7 @@ class TestCustomResumeUploadVariants:
 
     def test_second_custom_resume_upload_adds_variant_and_promotes(self, clean_state, client, app):
         import io
-        _login_admin(client, app)
+        _login_admin(client)
         from app.onboarding import save_resume_draft
         first = save_resume_draft("# Draft one")
 
@@ -655,7 +645,7 @@ class TestResumeSetBaseAndDelete:
         return asset
 
     def test_set_base_promotes_and_demotes(self, clean_state, client, app):
-        _login_admin(client, app)
+        _login_admin(client)
         a = self._make_variant("A", is_base=True)
         b = self._make_variant("B", is_base=False)
 
@@ -667,7 +657,7 @@ class TestResumeSetBaseAndDelete:
         assert b.is_base is True
 
     def test_set_base_rejects_non_resume_kind(self, clean_state, client, app):
-        _login_admin(client, app)
+        _login_admin(client)
         cert = CandidateAsset(kind="Certification", original_name="c.pdf", stored_name="c.pdf")
         db.session.add(cert)
         db.session.commit()
@@ -677,7 +667,7 @@ class TestResumeSetBaseAndDelete:
         assert cert.is_base is False
 
     def test_deleting_base_variant_promotes_newest_remaining(self, clean_state, client, app):
-        _login_admin(client, app)
+        _login_admin(client)
         a = self._make_variant("A", is_base=True)
         b = self._make_variant("B", is_base=False)
 
@@ -722,7 +712,7 @@ class TestRemoteGate:
 
 class TestSafeNext:
     def test_relative_honored_absolute_rejected(self, clean_state, client, app):
-        _login_admin(client, app)
+        _login_admin(client)
         r = client.post("/settings/search",
                         data={"titles": "Ops", "location": "Henderson, NV",
                               "country": "US", "next": "/getting-started/search"},

@@ -21,6 +21,7 @@ import tarfile
 import pytest
 
 from app.backup import build_backup_archive
+from tests.conftest import login as _login
 
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "admin-test-pw"
@@ -28,12 +29,6 @@ SEEKER_USERNAME = "seeker"
 SEEKER_PASSWORD = "user-test-pw"
 
 BACKUP_URL = "/settings/backup/download"
-
-
-def _login(client, username, password):
-    return client.post(
-        "/login", data={"username": username, "password": password}, follow_redirects=False
-    )
 
 
 # --------------------------------------------------------------------------- #

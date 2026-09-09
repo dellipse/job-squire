@@ -17,9 +17,7 @@ import pytest
 
 from app.extensions import db
 from app.models import SmtpConfig
-
-ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "admin-test-pw"
+from tests.conftest import login_admin as _login_admin
 
 SMTP_URL = "/settings/smtp"
 TEST_EMAIL_URL = "/settings/test-email"
@@ -41,19 +39,6 @@ def clean_smtp_config(app_context):
     _reset()
 
 
-def _login_admin(client, app):
-    # See test_search_settings.py's identical helper for why re-seeding is
-    # needed regardless of suite ordering.
-    from app import _seed_users
-    with app.app_context():
-        _seed_users(app)
-    return client.post(
-        "/login",
-        data={"username": ADMIN_USERNAME, "password": ADMIN_PASSWORD},
-        follow_redirects=False,
-    )
-
-
 def _post_smtp(client, **fields):
     data = {
         "enabled": "on", "host": "mail.smtp2go.com", "port": "587",
@@ -70,7 +55,7 @@ def _current_smtp(app):
 
 
 def test_save_persists_all_fields(client, app):
-    _login_admin(client, app)
+    _login_admin(client)
     r = _post_smtp(client)
     assert b"Email settings saved" in r.data
     row = _current_smtp(app)
@@ -84,7 +69,7 @@ def test_save_persists_all_fields(client, app):
 
 
 def test_blank_password_keeps_existing(client, app):
-    _login_admin(client, app)
+    _login_admin(client)
     _post_smtp(client, password="first-secret")
     first_enc = _current_smtp(app).password_enc
     _post_smtp(client, password="")
@@ -92,7 +77,7 @@ def test_blank_password_keeps_existing(client, app):
 
 
 def test_relative_next_honored_absolute_rejected(client, app):
-    _login_admin(client, app)
+    _login_admin(client)
     r = client.post(SMTP_URL, data={
         "enabled": "on", "host": "mail.smtp2go.com", "to_addr": "me@example.com",
         "next": "/getting-started/notifications",
@@ -107,13 +92,13 @@ def test_relative_next_honored_absolute_rejected(client, app):
 
 
 def test_test_email_warns_without_host_or_recipient(client, app):
-    _login_admin(client, app)
+    _login_admin(client)
     r = client.post(TEST_EMAIL_URL, data={}, follow_redirects=True)
     assert b"Save the SMTP host and recipient first" in r.data
 
 
 def test_test_email_success_reports_recipient(client, app, monkeypatch):
-    _login_admin(client, app)
+    _login_admin(client)
     _post_smtp(client)
     sent = []
     monkeypatch.setattr("app.main.send_email", lambda *a, **kw: sent.append(a))
@@ -123,7 +108,7 @@ def test_test_email_success_reports_recipient(client, app, monkeypatch):
 
 
 def test_test_email_failure_reports_error(client, app, monkeypatch):
-    _login_admin(client, app)
+    _login_admin(client)
     _post_smtp(client)
 
     def boom(*a, **kw):
@@ -135,7 +120,7 @@ def test_test_email_failure_reports_error(client, app, monkeypatch):
 
 
 def test_test_email_honors_next(client, app, monkeypatch):
-    _login_admin(client, app)
+    _login_admin(client)
     _post_smtp(client)
     monkeypatch.setattr("app.main.send_email", lambda *a, **kw: None)
     r = client.post(TEST_EMAIL_URL, data={"next": "/getting-started/notifications"},

@@ -17,6 +17,7 @@ schema and data end up correct — so these tests stay valid if the migration li
 is reordered or extended.
 """
 import pytest
+from flask import Flask
 from sqlalchemy import text
 
 from app import _run_migrations
@@ -53,22 +54,42 @@ def _columns(table):
 
 
 @pytest.fixture
-def mdb(app_context):
-    """Give each migration test a clean, full-schema database in its own context.
+def mdb():
+    """Give each migration test its own throwaway, full-schema database.
 
-    ``create_all()`` builds the current model schema; individual tests then
-    simulate an *older* database by dropping specific columns before calling
-    ``_run_migrations()``. Teardown restores the full schema so later tests are
-    unaffected.
+    Earlier this dropped and rebuilt tables on the shared session-scoped
+    ``app`` fixture's real database (see conftest.py), which made every other
+    test in the suite order-dependent on migration tests never running
+    in-between (test_smtp_settings.py, test_search_settings.py and
+    test_ops.py all used to carry a defensive re-seed to route around it).
+
+    Instead, build a private, function-scoped Flask app wired to an
+    in-memory SQLite database and push its app context for the duration of
+    the test. Flask-SQLAlchemy's models/metadata live on the shared ``db``
+    object (imported above), not on any one Flask app -- only the engine and
+    session are per-app -- so ``db.init_app()``ing this throwaway app and
+    entering its context is enough to point every ``db.session`` call in
+    ``_run_migrations()`` (and in the test bodies below) at this isolated
+    database instead of the shared one, while still running the exact same
+    real migration code path against a real schema.
     """
-    db.session.rollback()
-    db.drop_all()
-    db.create_all()
-    yield db
-    db.session.rollback()
-    db.drop_all()
-    db.create_all()
-    _run_migrations()
+    migration_app = Flask(f"{__name__}-migration-app")
+    migration_app.config.update(
+        SQLALCHEMY_DATABASE_URI="sqlite://",  # in-memory; Flask-SQLAlchemy
+                                               # applies StaticPool + check_same_thread=False automatically.
+        SQLALCHEMY_TRACK_MODIFICATIONS=False,
+        # _run_migrations()'s ProviderCredential integrity check reads this;
+        # never actually decrypts anything since a fresh DB has no rows.
+        SECRET_KEY="test-migration-secret-not-for-production-use",
+    )
+    db.init_app(migration_app)
+    with migration_app.app_context():
+        db.create_all()
+        try:
+            yield db
+        finally:
+            db.session.remove()
+            db.engine.dispose()
 
 
 def test_upgrade_adds_missing_columns(mdb):

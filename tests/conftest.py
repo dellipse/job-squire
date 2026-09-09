@@ -21,6 +21,36 @@ USER_USERNAME = "seeker"
 USER_PASSWORD = "user-test-pw"
 
 
+def login(client, username, password, next_url=None):
+    """POST credentials to /login and return the raw response (redirect not
+    followed), so callers can assert on status code and/or the redirect
+    target as well as post-login state.
+
+    This is the one shared login helper for the whole suite — every test
+    module used to carry its own copy (``_login``/``_login_admin``/
+    ``_login_user``, with inconsistent signatures). Use this directly when a
+    test needs explicit/invalid credentials or a ``next`` redirect target;
+    use ``login_admin``/``login_user`` below for the common "log in as the
+    seeded admin/user account" case.
+    """
+    url = "/login" + (f"?next={next_url}" if next_url else "")
+    return client.post(
+        url,
+        data={"username": username, "password": password},
+        follow_redirects=False,
+    )
+
+
+def login_admin(client):
+    """Log in as the seeded admin account (ADMIN_USERNAME/ADMIN_PASSWORD)."""
+    return login(client, ADMIN_USERNAME, ADMIN_PASSWORD)
+
+
+def login_user(client):
+    """Log in as the seeded non-admin account (USER_USERNAME/USER_PASSWORD)."""
+    return login(client, USER_USERNAME, USER_PASSWORD)
+
+
 @pytest.fixture(scope="session")
 def app():
     """A fully-initialised app on a temp SQLite DB.

@@ -17,6 +17,7 @@ POST the login form directly without scraping a token.
 import pytest
 
 from app.auth import _is_safe_next
+from tests.conftest import login as _login
 
 # Mirror the seeded test credentials from conftest.
 ADMIN_USERNAME = "admin"
@@ -25,15 +26,6 @@ SEEKER_USERNAME = "seeker"
 SEEKER_PASSWORD = "user-test-pw"
 
 ADMIN_ONLY_URL = "/jobs/1/delete"  # @login_required + @admin_required
-
-
-def _login(client, username, password, next_url=None):
-    url = "/login" + (f"?next={next_url}" if next_url else "")
-    return client.post(
-        url,
-        data={"username": username, "password": password},
-        follow_redirects=False,
-    )
 
 
 def _dismiss_onboarding(app):
