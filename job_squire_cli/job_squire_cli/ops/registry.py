@@ -281,20 +281,3 @@ def check_divergence(instance: Instance, observed: ObservedState) -> list[Drift]
         drifts.append(Drift("data_dir", instance.data_dir, "missing (directory or volume deleted)"))
 
     return drifts
-
-
-def reconcile_instance(name: str, observed: ObservedState) -> Instance:
-    """Sync the registry to observed reality for the fields that are safe
-    to reconcile automatically (port drift). A renamed or missing
-    container/volume is a decision for the operator, not something to
-    silently rewrite, so those stay reported by `check_divergence` for a
-    later CLI command (C5) to act on -- this only handles port drift.
-    """
-    changes = {}
-    if observed.app_port is not None:
-        changes["app_port"] = observed.app_port
-    if observed.mcp_port is not None:
-        changes["mcp_port"] = observed.mcp_port
-    if not changes:
-        raise RegistryError("Nothing reconcilable in the observed state (no port drift to sync).")
-    return update_instance(name, **changes)

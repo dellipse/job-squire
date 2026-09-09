@@ -280,20 +280,157 @@ read live each run.
   page). `thinking_mode` maps to the `effort` param on Opus 4.8 (`_ADAPTIVE_MODELS`) or
   `thinking.budget_tokens` on Sonnet/Haiku (`_THINKING_BUDGETS`).
 
+## `app/db_utils.py` — transient SQLite retry helper
+
+`with_db_retry(fn, attempts=3, base_delay=0.15)` and `commit(attempts=3, base_delay=0.15)` retry a
+DB operation a couple of times with backoff on a transient `disk I/O error` / `database is
+locked` `OperationalError` (`_is_transient()`), which can surface under WAL-mode concurrent access
+on some bind-mount filesystem bridges (e.g. OrbStack/Docker Desktop on macOS) with nothing
+actually wrong with the data. `commit()` is the drop-in replacement for `db.session.commit()` used
+throughout the app.
+
+## `app/deploy.py` — `DEPLOY_MODE` preset resolution
+
+`DEPLOY_MODE` is a convenience preset over the granular flags `create_app()` actually reads
+(`trust_proxy`, `secure_cookie`) — the app never branches on the mode string itself.
+`resolve_deploy_mode()` / `resolve_deploy_flags()` compute those flags (explicit env vars always
+win). `apply_proxy_trust(app, trust_proxy)` wires `ProxyFix`. `evaluate_startup_guard()` /
+`enforce_startup_guard()` refuse to boot in an unsafe combination (e.g. secure cookies without
+HTTPS in front); `format_issue()` renders one guard failure for the startup log.
+
+## `app/docgen.py` — Markdown → .docx
+
+`markdown_to_docx_bytes(markdown_text)` renders just the Markdown subset the kit prompts actually
+produce (`#`/`##`/`###` headings, `-`/`*`/numbered lists, `**bold**`) into a `.docx` via
+python-docx; anything else degrades to a plain paragraph rather than failing.
+
+## `app/kit_export.py` — ATS cleaning and PDF export for saved kits
+
+Runs whenever a kit is saved (MCP `save_kit` or an API build): `ats_clean(text)` replaces
+Unicode punctuation that ATS scanners choke on (smart quotes, em/en dashes, fancy bullets) with
+plain ASCII; `extract_sections(kit_markdown)` splits a kit into its Tailored Resume / Cover Letter
+sections; `render_pdf(title, body)` renders a dependency-free plain-text PDF (own minimal
+`_assemble_pdf`/`_content_stream`, no reportlab). `sync_kit_attachments(job)` runs both and attaches
+the PDF to the job record alongside the existing `.docx` kit attachment (`app/ai.py`).
+
+## `app/resume_convert.py` — deterministic resume upload → Markdown
+
+`convert_to_markdown(data, ext)` powers the "Base Resume" upload path
+(`app/main.py:settings_asset_upload`) without requiring any AI provider: `.docx` gets real
+structure (headings, bold/italic, lists, simple tables) via python-docx; `.pdf` gets plain
+extracted text only; `.txt`/`.md` pass through unchanged. Best-effort by design — meant to be
+reviewed and hand-edited on the Getting Started profile step, not a pixel-perfect round trip.
+
+## `app/onboarding.py` — Getting Started walkthrough
+
+A persistent, re-entrant checklist (docs/PLAN-onboarding.md, Phase 1) rather than a one-shot
+wizard: `build_checklist()` / `checklist_for_dashboard()` derive completion from real data (a
+resume exists, targets are set, a search has run) instead of a stored flag, so the checklist can't
+drift from reality. `get_onboarding_redirect()` sends a fresh admin to the next incomplete step.
+Step views mostly post to existing Settings routes (via their `next` field) so there's one save
+path per setting. `save_resume_draft(resume_markdown, profile_facts, created_by)` upserts the
+single "Resume" candidate asset from the resume-interview routine (also exposed as the MCP tool of
+the same name) and optionally folds `profile_facts` into the candidate profile.
+
+## `app/privacy.py` — PII/SPI redaction and rehydration
+
+Every AI transmission path routes through here. `redact(text, strict=None, strip_spi=True)`
+replaces identifiers (names, emails, phones, addresses, SSNs, work-authorization statements) with
+deterministic placeholders like `{{PII:EMAIL_3f2a1c8b}}` (`make_placeholder`) before anything
+reaches a provider; `rehydrate(text, mapping)` swaps them back in the results. `scan_spi(text)` /
+`_strip_spi(text)` remove SPI/PHI (health info, age, marital status) outright rather than
+tokenizing it, and surface it as coaching flags instead. Optional strict mode
+(`collect_known_values()`, `_strict_values()`) additionally pseudonymizes employer/org names and
+locations. `redact_obj`/`rehydrate_obj` recurse through dicts/lists for structured payloads.
+`should_redact_for(provider_row)` / `is_local_provider()` decide whether a given AI call needs
+redaction at all (local/Ollama providers can skip it per `redact_local()`).
+
+## `app/prompts.py` — Claude Pro routine prompts
+
+Generates the copy-ready prompt text for every routine slot and per-job action (morning briefing,
+triage, kit queue, follow-up drafts, weekly review, interview prep, rejection analysis, the resume
+interview/builder) for a user to paste into Claude Pro with the MCP connector active. Each prompt
+names every MCP tool to call, in order, and always specifies the write-back tool so results land
+back in Job Squire — no clarifying questions, no em-dashes or AI-tell phrasing.
+
+## `app/sample_locations.py` — placeholder location text
+
+`random_sample_city()` returns an illustrative "City, ST" example for empty-field/validation
+copy — never used for search logic. US-only for now, matching the app's strict location
+validation (`settings_search()` in `main.py`).
+
+## `app/websearch.py` — best-effort DuckDuckGo research
+
+`ddg_search(query, max_results=4, timeout=10)` scrapes `html.duckduckgo.com/html/` (the only free,
+keyless option — there's no official DuckDuckGo search API), and `research_company_and_salary(...)`
+builds on it for kit generation. Both are defensive: any failure (network error, layout change,
+rate limit, empty results) returns an empty result instead of raising, so a research hiccup never
+blocks kit generation — the kit just builds without that extra context.
+
+## `app/backup.py` — in-app backup download
+
+`build_backup_archive(data_dir, upload_dir, include_env=True)` builds the same WAL-safe `.tgz`
+(DB snapshot + `uploads/` + `candidate_profile.md` + `oauth_tokens.json` + optionally `.env`) that
+`scripts/backup.sh` produces, so a browser-downloaded archive restores with the existing
+`scripts/restore.sh` with no format differences. Restore is deliberately **not** an in-app HTTP
+action — a safe restore requires stopping the container before its data is replaced, which the
+container can't do to itself; that's `scripts/restore.sh`'s job (see docs/backup-restore.md).
+
+## `app/backup_cli.py` — container-side backup entrypoint
+
+`main()`, run as `python -m app.backup_cli` inside the running container (via `docker exec`/
+`podman exec`), for job_squire_cli's `job-squire backup` when `/data` is a named volume rather
+than a host bind mount and the CLI can't read a WAL-safe DB snapshot straight off the host
+filesystem. Not a Flask route — no request context or auth needed since the CLI already controls
+access via the exec itself. See `job_squire_cli/ops/backup.py`'s docstring for the full picture.
+
+## `app/mcp_auth.py` — static MCP bearer token
+
+The sanctioned escape hatch for MCP clients that can't complete OAuth's browser redirect (scripts,
+`jobsquire-cli`, `mcp-remote` bridges): `generate_token()` produces 256 bits of URL-safe base64,
+prefixed `jsq_mcp_`; `verify_static_token(bearer, stored_encrypted, secret_key, deploy_mode, ...)`
+constant-time compares it. Stored Fernet-encrypted in `AIConfig.mcp_api_key_enc`, never plaintext.
+`is_network_reachable(deploy_mode)` / `is_static_token_allowed(deploy_mode, allow_network)` enforce
+the loopback-only-by-default rule.
+
+## `app/mcp_token_cli.py` — container-side MCP token entrypoint
+
+`main()`, run as `python -m app.mcp_token_cli` inside the running container, fed a JSON request on
+stdin, for `job-squire configure NAME --mcp-token ...` (`job_squire_cli`'s `ops/mcp_token.py`) —
+same "named volume, not a host bind mount" reasoning as `app/backup_cli.py`. Hand-maintains its own
+copy of `AIConfig`'s column defaults (`_FRESH_ROW_DEFAULTS`) since this module has no SQLAlchemy
+model to introspect, kept in lockstep with `ops/mcp_token.py`'s own tests.
+
+## `app/ollama_provider_cli.py` — container-side Ollama provider entrypoint
+
+`main()`, run as `python -m app.ollama_provider_cli` inside the running container, for
+`job-squire ollama setup` (`job_squire_cli`'s `ops/ollama_assist.py`) — same reasoning as
+`app/backup_cli.py`. `write_provider_row(db_path, payload)` performs the actual
+`ai_provider_configs` write.
+
+## `app/secrets_copy_cli.py` — container-side settings-copy entrypoint
+
+`main()`, run as `python -m app.secrets_copy_cli` inside the running container, for
+`job-squire create --import-from` (`job_squire_cli`'s `ops/secrets_copy.py`). `handle_request()`
+dispatches `dump` (read-only SELECT, run against the *source* instance's container) and `apply`
+(run against the *destination*'s), letting `copy_db_settings` move settings between instances
+without either side reading the other's `/data` off the host.
+
 ## `app/mcp_server.py` — remote MCP server
 
 See [mcp-connector.md](mcp-connector.md) for the full picture. In brief: a `FastMCP` server
 (Streamable HTTP) wrapped by `asgi_app`, which handles the **OAuth 2.0** endpoints
 (`/.well-known/...`, `/oauth/register|authorize|token`), serves a login page as the authorization
 step, issues 30-day Bearer tokens (in-memory, PKCE-verified), and gates the `/mcp` endpoint on a
-valid token. The legacy token-in-path (`/mcp/<token>`, via `_legacy_token()`) still works as a
-fallback. `/health` is open. `main()` runs uvicorn on `MCP_PORT` (9000). Reuses the Flask app
-context for DB access; DNS-rebinding protection allowlists `PUBLIC_MCP_HOST`.
+valid token. A static API key (`Authorization: Bearer`, `app/mcp_auth.py`) is also accepted for
+non-browser clients, loopback-only by default -- there is no token-in-path route. `/health` is
+open. `main()` runs uvicorn on `MCP_PORT` (9000). Reuses the Flask app context for DB access;
+DNS-rebinding protection allowlists `PUBLIC_MCP_HOST`.
 
-The 23 tools span reads and writes. Core tools: `get_pipeline`, `list_jobs`, `get_job`,
-`get_candidate_profile`, `save_candidate_profile`, `get_candidate_assets`, `add_jobs`,
-`get_search_targets`, `save_analysis`, `get_kit_instructions`, `update_job_notes`, `save_kit`,
-`set_follow_up`, `list_contacts`, `get_contact`, `add_contact`, and `log_submission`.
+The 24 tools span reads and writes. Core tools: `get_pipeline`, `list_jobs`, `get_job`,
+`get_candidate_profile`, `save_candidate_profile`, `save_resume_draft`, `get_candidate_assets`,
+`add_jobs`, `get_search_targets`, `save_analysis`, `get_kit_instructions`, `update_job_notes`,
+`save_kit`, `set_follow_up`, `list_contacts`, `get_contact`, `add_contact`, and `log_submission`.
 Routine-support tools: `list_unanalyzed_jobs`, `set_job_fit`, `list_overdue_followups`,
 `save_followup_draft`, `save_interview_prep`, and `get_weekly_summary`.
 

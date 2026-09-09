@@ -30,10 +30,9 @@ writes the result into the instance's `data/` directory specifically (not
 the instance root). Historically that was also where the running app
 could read it from, since `data/` was bind-mounted into the container
 whole; now that /data is a named Docker volume and only `data/.env` is
-still a host file (ops/compose.py), this file is host-only -- CLI/host
-tooling can still read it via `read_host_capabilities`, but the app itself
-cannot see it without a separate `docker cp` into the volume. The web
-app's onboarding integration mentioned above was never actually built
+still a host file (ops/compose.py), this file is host-only and the app
+itself cannot see it without a separate `docker cp` into the volume. The
+web app's onboarding integration mentioned above was never actually built
 (nothing in app/ reads this file), so nothing regresses today; anyone
 picking that up later needs to route it through the volume instead.
 
@@ -337,20 +336,6 @@ def write_host_capabilities(root: Path, caps: HostCapabilities) -> Path:
     return path
 
 
-def read_host_capabilities(root: Path) -> HostCapabilities | None:
-    path = paths.data_dir(root) / HOST_CAPABILITIES_FILENAME
-    if not path.exists():
-        return None
-    try:
-        data = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError):
-        return None
-    try:
-        return HostCapabilities(**data)
-    except TypeError:
-        return None
-
-
 # ── Capability tiers -> model recommendations ────────────────────────────
 # Tags verified against https://ollama.com/library on 2026-07-16. This
 # table reflects the mid-2026 landscape and will age -- re-check before
@@ -562,20 +547,6 @@ def pull_model(tag: str, run: Runner = subprocess.run) -> None:
     result = run([OLLAMA_BINARY, "pull", tag], timeout=1800)
     if getattr(result, "returncode", 0) != 0:
         raise OllamaAssistError(f"`ollama pull {tag}` failed.")
-
-
-def pull_recommended_models(
-    rec: ModelRecommendation, run: Runner = subprocess.run, dry_run: bool = False,
-) -> list[str]:
-    tags = sorted({rec.triage_model, rec.analysis_model})  # dedupe if one tag covers both roles
-    pulled: list[str] = []
-    for tag in tags:
-        if dry_run:
-            click.echo(f"  (dry-run) ollama pull {tag}")
-            continue
-        pull_model(tag, run=run)
-        pulled.append(tag)
-    return pulled
 
 
 # ── Context-window derivation (docs/PLAN-ollama-assist.md) ───────────────

@@ -488,40 +488,9 @@ PROVIDER_DISPLAY_NAMES = {
     "custom":       "Custom",
 }
 
-# Task metadata used by the scheduler, AI dispatcher, and UI.
+# Task metadata used by the scheduler and AI dispatcher.
 AI_TASK_NAMES = ("triage", "followup", "weekly_review", "rejection_alert")
 AI_TRIAGE_TASKS = frozenset({"triage", "followup"})      # use triage model; small prompts
-AI_ANALYSIS_TASKS = frozenset({"weekly_review", "rejection_alert"})  # use analysis model; large prompts
-
-AI_TASK_LABELS = {
-    "triage":           "Auto-triage",
-    "followup":         "Follow-up drafts",
-    "weekly_review":    "Weekly review",
-    "rejection_alert":  "Rejection alert",
-}
-
-AI_TASK_DESCRIPTIONS = {
-    "triage": (
-        "Scores each new job for fit right after every search run. "
-        "Uses the <strong>triage model</strong> — short prompt, one job at a time, fast and cheap. "
-        "Providers marked 'triage only' (e.g. Cerebras free tier) are eligible here."
-    ),
-    "followup": (
-        "Drafts a follow-up email for every active job whose follow-up date has passed and "
-        "has no draft yet. Runs each morning at 6 AM. "
-        "Uses the <strong>triage model</strong> — short prompt per job."
-    ),
-    "weekly_review": (
-        "Generates a full strategy review every Monday at 6 AM and emails it to you. "
-        "Uses the <strong>analysis model</strong> — the entire pipeline is sent in one large prompt. "
-        "Providers marked 'triage only' are not eligible."
-    ),
-    "rejection_alert": (
-        "Analyzes rejection patterns when the configured threshold is reached within 14 days. "
-        "Uses the <strong>analysis model</strong> — full rejection history in one prompt. "
-        "Providers marked 'triage only' are not eligible."
-    ),
-}
 
 
 class AIProviderConfig(db.Model):
@@ -629,18 +598,6 @@ class AITaskConfig(db.Model):
     backup_provider = db.relationship(
         "AIProviderConfig", foreign_keys=[backup_provider_id], lazy="joined"
     )
-
-    @property
-    def is_triage_task(self):
-        return self.task_name in AI_TRIAGE_TASKS
-
-    @property
-    def task_label(self):
-        return AI_TASK_LABELS.get(self.task_name, self.task_name.replace("_", " ").title())
-
-    @property
-    def task_description(self):
-        return AI_TASK_DESCRIPTIONS.get(self.task_name, "")
 
 
 class SearchRun(db.Model):

@@ -56,7 +56,6 @@ REPO = "dellipse/job-squire"
 GIT_URL = f"https://github.com/{REPO}.git"
 API_BASE = f"https://api.github.com/repos/{REPO}"
 PACKAGE_NAME = "job-squire-cli"
-DIST_NAME = "job_squire_cli"
 
 
 class SelfUpdateError(RuntimeError):

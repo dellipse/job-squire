@@ -212,19 +212,17 @@ def test_is_ollama_running_false_on_connection_error(monkeypatch):
 # ── host_capabilities.json round-trip ──────────────────────────────────────
 
 
-def test_write_and_read_host_capabilities_round_trips(tmp_path):
+def test_write_host_capabilities_writes_valid_json_snapshot(tmp_path):
     root = tmp_path / "castelo"
     caps = _caps(ram_gb=16, apple_silicon=True)
     path = oa.write_host_capabilities(root, caps)
     assert path == paths.data_dir(root) / oa.HOST_CAPABILITIES_FILENAME
     assert path.exists()
 
-    loaded = oa.read_host_capabilities(root)
-    assert loaded == caps
-
-
-def test_read_host_capabilities_missing_file_returns_none(tmp_path):
-    assert oa.read_host_capabilities(tmp_path / "nope") is None
+    data = json.loads(path.read_text())
+    assert data["ram_gb"] == 16
+    assert data["apple_silicon"] is True
+    assert data["source"] == "cli-host"
 
 
 def test_write_host_capabilities_lands_in_data_dir_not_instance_root(tmp_path):
@@ -325,24 +323,6 @@ def test_pull_model_failure_raises():
     run = fake_run(fail_prefixes=[("ollama", "pull", "qwen3:8b")])
     with pytest.raises(oa.OllamaAssistError, match="qwen3:8b"):
         oa.pull_model("qwen3:8b", run=run)
-
-
-def test_pull_recommended_models_dedupes_and_pulls_both():
-    rec = oa.TIER_TABLE[oa.TIER_STRONG]
-    run = fake_run(
-        ok_prefixes=[("ollama", "pull", rec.triage_model), ("ollama", "pull", rec.analysis_model)],
-    )
-    pulled = oa.pull_recommended_models(rec, run=run)
-    assert set(pulled) == {rec.triage_model, rec.analysis_model}
-
-
-def test_pull_recommended_models_dry_run_pulls_nothing(capsys):
-    rec = oa.TIER_TABLE[oa.TIER_CAPABLE]
-    run = fake_run()
-    pulled = oa.pull_recommended_models(rec, run=run, dry_run=True)
-    assert pulled == []
-    assert run.calls == []
-    assert rec.triage_model in capsys.readouterr().out
 
 
 # ── Provider config (execs into the container -- see app/ollama_provider_cli.py) ─

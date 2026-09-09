@@ -42,21 +42,20 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 from werkzeug.security import check_password_hash
 
-import time as _time
 _login_failures: dict = {}   # ip -> list of failure timestamps
 _LOGIN_MAX_FAILURES = 5
 _LOGIN_FAILURE_WINDOW = 600  # seconds
 
 
 def _login_rate_ok(ip: str) -> bool:
-    now = _time.time()
+    now = time.time()
     recent = [t for t in _login_failures.get(ip, []) if now - t < _LOGIN_FAILURE_WINDOW]
     _login_failures[ip] = recent
     return len(recent) < _LOGIN_MAX_FAILURES
 
 
 def _record_login_failure(ip: str) -> None:
-    _login_failures.setdefault(ip, []).append(_time.time())
+    _login_failures.setdefault(ip, []).append(time.time())
 
 
 _log = logging.getLogger(__name__)
@@ -142,14 +141,14 @@ _REGISTER_WINDOW = 600  # seconds
 
 
 def _register_rate_ok(ip: str) -> bool:
-    now = _time.time()
+    now = time.time()
     recent = [t for t in _register_attempts.get(ip, []) if now - t < _REGISTER_WINDOW]
     _register_attempts[ip] = recent
     return len(recent) < _REGISTER_MAX_PER_WINDOW
 
 
 def _record_register_attempt(ip: str) -> None:
-    _register_attempts.setdefault(ip, []).append(_time.time())
+    _register_attempts.setdefault(ip, []).append(time.time())
 
 # Access tokens ARE persisted to DATA_DIR/oauth_tokens.json so they survive
 # container restarts (30-day TTL means a restart would otherwise force re-auth).

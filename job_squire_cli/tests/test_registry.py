@@ -294,24 +294,3 @@ def test_check_divergence_reports_nothing_when_everything_matches():
         data_dir_exists=True,
     )
     assert reg.check_divergence(instance, observed) == []
-
-
-def test_reconcile_instance_syncs_port_drift():
-    reg.add_instance(
-        name="castelo", mode="local", runtime="podman", data_dir="/data/castelo",
-        public_url="http://localhost:8000", app_port=8000, mcp_port=9000,
-    )
-    observed = reg.ObservedState(container_running=True, app_port=8123, mcp_port=9123)
-    reconciled = reg.reconcile_instance("castelo", observed)
-    assert reconciled.app_port == 8123
-    assert reconciled.mcp_port == 9123
-
-
-def test_reconcile_instance_with_nothing_to_sync_raises():
-    reg.add_instance(
-        name="castelo", mode="local", runtime="podman", data_dir="/data/castelo",
-        public_url="http://localhost:8000", app_port=8000, mcp_port=9000,
-    )
-    observed = reg.ObservedState(container_running=True)
-    with pytest.raises(reg.RegistryError):
-        reg.reconcile_instance("castelo", observed)

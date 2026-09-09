@@ -52,28 +52,3 @@ def test_set_line_creates_file_if_missing(tmp_path):
     assert dotenv.parse(path) == {"A": "1"}
 
 
-def test_append_if_absent_appends_and_reports_true(tmp_path):
-    path = tmp_path / ".env"
-    path.write_text("SECRET_KEY=abc\n")
-    appended = dotenv.append_if_absent(path, "TRUST_PROXY", "1", comment="# why")
-    assert appended is True
-    text = path.read_text()
-    assert "TRUST_PROXY=1" in text
-    assert "# why" in text
-    assert "SECRET_KEY=abc" in text  # untouched
-
-
-def test_append_if_absent_noop_when_already_set(tmp_path):
-    path = tmp_path / ".env"
-    path.write_text("TRUST_PROXY=0\n")
-    appended = dotenv.append_if_absent(path, "TRUST_PROXY", "1")
-    assert appended is False
-    assert dotenv.parse(path) == {"TRUST_PROXY": "0"}  # never overwritten
-
-
-def test_append_if_absent_on_missing_file_creates_it(tmp_path):
-    path = tmp_path / "data" / ".env"
-    path.parent.mkdir()
-    appended = dotenv.append_if_absent(path, "A", "1")
-    assert appended is True
-    assert dotenv.parse(path) == {"A": "1"}

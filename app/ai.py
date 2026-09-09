@@ -513,16 +513,6 @@ def _has_ranked_providers() -> bool:
     return AIProviderConfig.query.filter_by(enabled=True).count() > 0
 
 
-def _has_any_provider(task_name: str | None = None) -> bool:
-    """Return True if there is anything to try (task-specific or ranked)."""
-    from .models import AIProviderConfig, AITaskConfig
-    if task_name:
-        tc = AITaskConfig.query.filter_by(task_name=task_name).first()
-        if tc and (tc.provider_id or tc.backup_provider_id):
-            return True
-    return AIProviderConfig.query.filter_by(enabled=True).count() > 0
-
-
 def _call_no_thinking(system: str, content: str, max_tokens: int,
                        api_key: str = "",
                        model: str = "",
