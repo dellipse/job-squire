@@ -23,13 +23,7 @@ import pytest
 from app import ai
 from app.extensions import db
 from app.models import AIConfig, AIProviderConfig
-
-ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "admin-test-pw"  # mirrors conftest's seeded credentials
-
-
-def _login(client):
-    return client.post("/login", data={"username": ADMIN_USERNAME, "password": ADMIN_PASSWORD})
+from tests.conftest import login_admin as _login
 
 
 # ---------------------------------------------------------------------------

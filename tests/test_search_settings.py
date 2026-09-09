@@ -11,27 +11,9 @@ Behavior under test:
 """
 from app.extensions import db
 from app.models import SearchConfig
-
-ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "admin-test-pw"
+from tests.conftest import login_admin as _login_admin
 
 SEARCH_URL = "/settings/search"
-
-
-def _login_admin(client, app):
-    # test_migrations.py's `mdb` fixture intentionally drop_all()/create_all()s the
-    # shared session-scoped DB, which wipes the seeded accounts if this test runs
-    # later in the same session (see test_ops.py's test_dashboard_and_settings_
-    # render_worker_status for the same pattern). Re-seed so this doesn't depend
-    # on suite ordering.
-    from app import _seed_users
-    with app.app_context():
-        _seed_users(app)
-    return client.post(
-        "/login",
-        data={"username": ADMIN_USERNAME, "password": ADMIN_PASSWORD},
-        follow_redirects=False,
-    )
 
 
 def _post_search_settings(client, **fields):
@@ -54,7 +36,7 @@ def _current_cfg(app):
 
 
 def test_us_location_still_requires_city_state(client, app):
-    _login_admin(client, app)
+    _login_admin(client)
     resp = _post_search_settings(client, location="not-a-valid-location", country="US")
     assert b"must be" in resp.data.lower() or b"city, st" in resp.data.lower()
 
@@ -64,7 +46,7 @@ def test_us_location_still_requires_city_state(client, app):
 
 
 def test_us_location_with_valid_city_state_saves(client, app):
-    _login_admin(client, app)
+    _login_admin(client)
     resp = _post_search_settings(client, location="Boise, ID", country="US")
     assert resp.status_code == 200
 
@@ -74,7 +56,7 @@ def test_us_location_with_valid_city_state_saves(client, app):
 
 
 def test_non_us_country_accepts_free_text_location(client, app):
-    _login_admin(client, app)
+    _login_admin(client)
     resp = _post_search_settings(client, location="Manchester", country="GB")
     assert resp.status_code == 200
     assert b"danger" not in resp.data or b"Search settings saved" in resp.data
@@ -85,7 +67,7 @@ def test_non_us_country_accepts_free_text_location(client, app):
 
 
 def test_non_us_country_still_rejects_empty_location(client, app):
-    _login_admin(client, app)
+    _login_admin(client)
     # First save a known-good baseline so we can confirm the empty attempt didn't clobber it.
     _post_search_settings(client, location="Berlin", country="DE")
 
@@ -97,7 +79,7 @@ def test_non_us_country_still_rejects_empty_location(client, app):
 
 
 def test_malformed_country_code_rejected(client, app):
-    _login_admin(client, app)
+    _login_admin(client)
     _post_search_settings(client, location="Boise, ID", country="US")  # known-good baseline
 
     resp = _post_search_settings(client, location="Toronto, ON", country="USA")
@@ -109,7 +91,7 @@ def test_malformed_country_code_rejected(client, app):
 
 
 def test_blank_country_defaults_to_us(client, app):
-    _login_admin(client, app)
+    _login_admin(client)
     resp = _post_search_settings(client, location="Boise, ID", country="")
     assert resp.status_code == 200
 
