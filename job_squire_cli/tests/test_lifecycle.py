@@ -143,6 +143,14 @@ class FakeRuntime:
                 return SimpleNamespace(returncode=1, stdout="", stderr=f"error pulling {image}")
             return SimpleNamespace(returncode=0, stdout="", stderr="")
 
+        if args[0] == "cosign" and args[1] == "verify":
+            # compose.pull_image() (SEC-09) runs this against every image
+            # right after a successful pull. Always "verified" here --
+            # tests/test_compose.py is where cosign-failure behavior itself
+            # is exercised; these lifecycle tests are about pull/stop/swap
+            # ordering, not signature verification.
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
         if len(args) == 3 and args[1] == "rmi":
             image = args[2]
             if image in self.fail_rmi:

@@ -871,6 +871,25 @@ never depends on Flask/SQLAlchemy/the app package, same as
 `ops/secrets_copy.py`) -> a direct round-trip generation request against
 Ollama's own API to confirm it actually answers.
 
+**Accepted risk: the Linux install path is an unpinned `curl | sh` (SEC-09,
+2026-09-08 audit).** `ops/ollama_assist.py`'s Linux `InstallPlan` runs
+`curl -fsSL https://ollama.com/install.sh | sh`, and `ops/tailscale.py`'s
+Linux install plan does the same against `https://tailscale.com/install.sh`
+-- both fetch and execute the vendor's own install script over HTTPS with no
+hash or signature check, unlike `bootstrap.sh`'s own self-update (which
+resolves a tag to an immutable commit SHA via `git ls-remote` before
+installing anything -- see "Versioning" below). Both scripts are updated by
+their vendor on an unversioned rolling basis with no tagged release to pin
+against, so a fetched-and-hash-checked copy would either go stale (still
+"passing" a check against last month's script while silently missing this
+month's fix) or need re-verifying by a human before every `job-squire ollama
+setup`/`enable` run -- worse guarantees than trusting the vendor's own HTTPS
+endpoint the same way `curl https://get.docker.com | sh`-style installers are
+trusted industry-wide. Accepted as-is rather than pinned: both scripts are
+vendor-authored, served from the vendor's own domain over TLS, and reviewed
+by their respective maintainers on every release; this is a deliberate scope
+boundary of this CLI, not an oversight.
+
 **Why there's a "derive" step.** Ollama's OpenAI-compatible endpoint (what
 app/ai.py calls) has no per-request way to set context size -- confirmed
 against https://docs.ollama.com/api/openai-compatibility, which prescribes
