@@ -168,6 +168,8 @@ def create_app():
     app.register_blueprint(main_bp)
     from .contacts import contacts_bp
     app.register_blueprint(contacts_bp)
+    from .task_status import task_status_bp
+    app.register_blueprint(task_status_bp)
     from .onboarding import onboarding_bp
     app.register_blueprint(onboarding_bp)
 

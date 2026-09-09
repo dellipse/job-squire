@@ -4,7 +4,7 @@
 {% block content %}
 {# data-poll-url / data-task are read by app.js (inline scripts are blocked by CSP) #}
 <div id="task-status-root"
-     data-poll-url="{{ url_for('main.ai_task_poll', run_id=run_id) }}"
+     data-poll-url="{{ url_for('task_status.ai_task_poll', run_id=run_id) }}"
      data-task="{{ task }}">
 
   <div class="task-status-page">
