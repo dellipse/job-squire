@@ -36,7 +36,7 @@ from werkzeug.utils import secure_filename
 from .db_utils import commit
 from .extensions import db
 from .forms import AttachmentForm, ConfirmForm, InterviewForm, JobForm
-from .main import _csv_safe, _singleton, admin_required
+from .main import _csv_safe, _singleton, _stale_cutoffs, admin_required
 from .models import ACTIVE_STATUSES, STATUSES, AIConfig, Attachment, Interview, Job, JobNote
 from .task_status import _StatusLogHandler, _TaskStatus
 
@@ -230,10 +230,7 @@ def jobs_list():
 
     # --- Build query ---
     query = Job.query
-    _stale_filter_now = datetime.utcnow()
-    _stale_filter_saved_cutoff = _stale_filter_now - timedelta(days=14)
-    _stale_filter_active_cutoff = _stale_filter_now - timedelta(days=21)
-    _stale_filter_active_statuses = ["Applied", "Phone Screen", "Interview", "Final Interview"]
+    _stale_filter_saved_cutoff, _stale_filter_active_cutoff, _stale_filter_active_statuses = _stale_cutoffs()
     if status == "active":
         query = query.filter(Job.status.in_(list(ACTIVE_STATUSES)))
     elif status == "all":
@@ -277,10 +274,8 @@ def jobs_list():
     # Staleness: flag jobs that have gone quiet.
     # Saved >14 days → "stale lead" (posting may have expired).
     # Applied/active >21 days no update → "stale active" (may be ghosted).
-    _now = datetime.utcnow()
-    _saved_cutoff = _now - timedelta(days=14)
-    _active_cutoff = _now - timedelta(days=21)
-    _stale_active = {"Applied", "Phone Screen", "Interview", "Final Interview"}
+    _saved_cutoff, _active_cutoff, _stale_active_list = _stale_cutoffs()
+    _stale_active = set(_stale_active_list)
     stale_map: dict[int, str] = {}
     for _j in jobs:
         if _j.status == "Saved" and _j.created_at and _j.created_at <= _saved_cutoff:

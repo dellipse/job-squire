@@ -163,6 +163,22 @@ def _worker_heartbeat_status(max_age_seconds=900):
     }
 
 
+def _stale_cutoffs():
+    """Cutoffs for flagging jobs that have gone quiet: Saved >14 days (the
+    posting may have expired) and Applied/active >21 days with no update
+    (may be ghosted). Shared by dashboard() below and jobs.jobs_list() --
+    QUAL-02 flagged this as duplicated three times (once here, twice within
+    jobs_list()'s own query-filter and stale_map-annotation passes).
+
+    Returns (saved_cutoff, active_cutoff, active_statuses).
+    """
+    now = datetime.utcnow()
+    saved_cutoff = now - timedelta(days=14)
+    active_cutoff = now - timedelta(days=21)
+    active_statuses = ["Applied", "Phone Screen", "Interview", "Final Interview"]
+    return saved_cutoff, active_cutoff, active_statuses
+
+
 # --------------------------------------------------------------------------
 # Dashboard
 # --------------------------------------------------------------------------
@@ -237,10 +253,7 @@ def dashboard():
     metrics["open_submissions"] = len(open_submissions)
 
     # Stale job detection.
-    _stale_cutoff_naive = datetime.utcnow()
-    _stale_saved_cutoff = _stale_cutoff_naive - timedelta(days=14)
-    _stale_active_cutoff = _stale_cutoff_naive - timedelta(days=21)
-    _stale_active_statuses = ["Applied", "Phone Screen", "Interview", "Final Interview"]
+    _stale_saved_cutoff, _stale_active_cutoff, _stale_active_statuses = _stale_cutoffs()
     stale_saved_count = Job.query.filter(
         Job.status == "Saved",
         Job.created_at <= _stale_saved_cutoff,

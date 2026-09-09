@@ -332,6 +332,27 @@ def _kit_response(markdown, company, title):
     )
 
 
+def _job_from_kit_form(form):
+    """Create, persist, and flash-confirm a new Job from a KitForm's fields.
+
+    Shared by kit_hub and kit_run's ad-hoc ("save as a job too" = yes, no
+    tracked_job_id) paths -- both used to carry a verbatim copy of this
+    construction (QUAL-02)."""
+    job = Job(
+        company=form.company.data.strip(),
+        title=form.job_title.data.strip(),
+        location=(form.location.data or "").strip(),
+        url=(form.url.data or "").strip(),
+        status="Saved",
+        notes=form.job_description.data or "",
+        created_by=current_user.display_name or current_user.username,
+    )
+    db.session.add(job)
+    commit()
+    flash(f'Saved "{job.title}" to Job Squire as a job.', "success")
+    return job
+
+
 @kits_bp.route("/jobs/<int:job_id>/kit")
 @login_required
 def job_kit(job_id):
@@ -358,19 +379,7 @@ def kit_hub():
         if existing_id:
             kit_job_id = existing_id
         elif form.save_job.data == "yes":
-            job = Job(
-                company=form.company.data.strip(),
-                title=form.job_title.data.strip(),
-                location=(form.location.data or "").strip(),
-                url=(form.url.data or "").strip(),
-                status="Saved",
-                notes=form.job_description.data or "",
-                created_by=current_user.display_name or current_user.username,
-            )
-            db.session.add(job)
-            commit()
-            kit_job_id = job.id
-            flash(f'Saved "{job.title}" to Job Squire as a job.', "success")
+            kit_job_id = _job_from_kit_form(form).id
         else:
             kit_job_id = None
         kit_cfg = _singleton(KitConfig)
@@ -445,18 +454,7 @@ def kit_run():
         if existing_id:
             job = db.session.get(Job, existing_id)
         elif form.save_job.data == "yes":
-            job = Job(
-                company=form.company.data.strip(),
-                title=form.job_title.data.strip(),
-                location=(form.location.data or "").strip(),
-                url=(form.url.data or "").strip(),
-                status="Saved",
-                notes=form.job_description.data or "",
-                created_by=current_user.display_name or current_user.username,
-            )
-            db.session.add(job)
-            commit()
-            flash(f'Saved "{job.title}" to Job Squire as a job.', "success")
+            job = _job_from_kit_form(form)
 
         title = form.job_title.data.strip()
         company = form.company.data.strip()
