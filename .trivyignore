@@ -18,3 +18,14 @@
 # release updates its vendored msgpack/setuptools past the fixed versions.
 GHSA-6v7p-g79w-8964
 CVE-2025-47273
+
+# 2026-09-09: CVE-2026-59890 (setuptools, MANIFEST.in exclusion bypass via
+# NFC/NFD normalization collision) is the SAME pip/_vendor/setuptools==70.3.0
+# as CVE-2025-47273 above, just a second CVE against that one vendored copy --
+# not the top-level `setuptools` this image also installs (upgraded to
+# current in the venv RUN line, per the same Dockerfile comment). Still
+# pip 26.2.1 as of this date; reconfirmed against that tag's vendor.txt,
+# which still pins setuptools==70.3.0. Same "not reachable at runtime"
+# reasoning applies. Drop this line once a pip release bumps the vendored
+# setuptools past 83.0.0.
+CVE-2026-59890
