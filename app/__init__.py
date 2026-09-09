@@ -174,6 +174,8 @@ def create_app():
     app.register_blueprint(ai_tasks_bp)
     from .kits import kits_bp
     app.register_blueprint(kits_bp)
+    from .jobs import jobs_bp
+    app.register_blueprint(jobs_bp)
     from .onboarding import onboarding_bp
     app.register_blueprint(onboarding_bp)
 

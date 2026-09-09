@@ -436,7 +436,7 @@
     {{ last_run.found or 0 }} found, {{ last_run.created or 0 }} new job(s) added
     (providers: {{ last_run.providers or "none" }}).
     <br><strong>What's next:</strong>
-    review them under <a href="{{ url_for('main.jobs_list') }}">Jobs</a> and mark the ones
+    review them under <a href="{{ url_for('jobs.jobs_list') }}">Jobs</a> and mark the ones
     you'll pursue{% if ai_active %}; AI scoring will rank new finds for fit automatically —
     check the fit scores before spending time on applications{% else %}. Tip: adding an AI
     provider later gets each find scored 1&ndash;10 against your profile automatically{% endif %}.

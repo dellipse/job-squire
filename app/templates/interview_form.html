@@ -5,7 +5,7 @@
 <p class="sub">{{ job.title }} — {{ job.company }}</p>
 
 <form method="post" class="card form" novalidate
-      action="{{ url_for('main.interview_edit', iv_id=request.view_args.iv_id) if mode=='edit' else url_for('main.interview_new', job_id=job.id) }}">
+      action="{{ url_for('jobs.interview_edit', iv_id=request.view_args.iv_id) if mode=='edit' else url_for('jobs.interview_new', job_id=job.id) }}">
   {{ form.hidden_tag() }}
   <div class="form-grid">
     <div class="field">{{ form.interview_date.label }} {{ form.interview_date() }}</div>
@@ -20,7 +20,7 @@
   </div>
   <div class="actions">
     {{ form.submit(class="btn btn-primary") }}
-    <a class="btn btn-outline" href="{{ url_for('main.job_detail', job_id=job.id) }}">Cancel</a>
+    <a class="btn btn-outline" href="{{ url_for('jobs.job_detail', job_id=job.id) }}">Cancel</a>
     {% if gcal_url %}
     <a class="btn btn-outline" href="{{ gcal_url }}" target="_blank" rel="noopener noreferrer">
       Add to Google Calendar ↗
