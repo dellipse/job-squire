@@ -426,6 +426,29 @@ def _run_migrations():
         # per-row random value, not a single SQL constant every user would
         # share) can tell "not yet migrated" apart from an already-rotated token.
         "ALTER TABLE users ADD COLUMN session_token VARCHAR(64) DEFAULT ''",
+        # REL-03: back a UNIQUE(source, external_id) constraint with an index on
+        # existing databases (create_all() only applies __table_args__ to a table it
+        # creates fresh -- it never ALTERs one that already exists, so upgraded
+        # installs need this explicitly). Three statements, order matters:
+        #   1. Normalize the old '' sentinel (the column's old default) to NULL. SQL's
+        #      "NULL never equals NULL" UNIQUE semantics then keep every no-external_id
+        #      job distinct from every other one -- an empty string wouldn't. Must run
+        #      before step 2, or every '' row would look like one big duplicate group.
+        #   2. Dedupe any real pre-existing duplicate (source, external_id) rows --
+        #      possible on any install that predates this constraint, since ingest_jobs()
+        #      was previously read-then-insert with no DB-level guard. Keeps the oldest
+        #      row (lowest id) per group and NULLs external_id on the rest, so no data is
+        #      deleted -- the "loser" rows just fall back to ingest_jobs()'s company+title
+        #      dedupe going forward, same as any other no-external_id job.
+        #   3. Create the unique index. IF NOT EXISTS makes this idempotent on its own;
+        #      the generic try/except below is a second safety net in case some other
+        #      edge case still leaves a duplicate pair (index creation then fails and is
+        #      logged, not raised -- the app still boots, just without the constraint
+        #      until a later restart resolves it).
+        "UPDATE jobs SET external_id = NULL WHERE external_id = ''",
+        "UPDATE jobs SET external_id = NULL WHERE external_id IS NOT NULL AND id NOT IN "
+        "(SELECT MIN(id) FROM jobs WHERE external_id IS NOT NULL GROUP BY source, external_id)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_jobs_source_external_id ON jobs(source, external_id)",
     ]
     for stmt in migrations:
         try:

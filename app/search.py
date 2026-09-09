@@ -19,9 +19,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from flask import current_app
+from sqlalchemy.exc import IntegrityError
 
 from .crypto import decrypt
-from .db_utils import commit
+from .db_utils import commit, with_db_retry
 from .extensions import db
 from .models import Job, ProviderCredential, SearchConfig, SearchRun, SmtpConfig, User
 from .notify import build_digest, build_error_report, send_email
@@ -174,7 +175,7 @@ def ingest_jobs(items, created_by="auto-search", default_status="Saved"):
             location=(it.get("location") or "").strip(),
             work_mode="Unknown",
             source=source,
-            external_id=ext,
+            external_id=ext or None,  # NULL, not "" -- see uq_jobs_source_external_id (models.py)
             url=_http_url(it.get("url")),
             salary=(it.get("salary") or "").strip(),
             status=default_status,
@@ -182,6 +183,26 @@ def ingest_jobs(items, created_by="auto-search", default_status="Saved"):
             created_by=created_by,
         )
         db.session.add(job)
+
+        # REL-03: the DB dedupe check above is read-then-insert with no lock -- a
+        # concurrent ingest_jobs() call (a scheduled search racing an MCP add_jobs
+        # call, say) can pass it for both callers before either commits, producing
+        # duplicate rows. uq_jobs_source_external_id is the authoritative guard now;
+        # flush this one job inside its own savepoint so a UNIQUE violation only
+        # rolls back this row (not the whole batch), and treat it exactly like the
+        # pre-check catching it. with_db_retry still absorbs this container's known
+        # transient SQLite hiccups (see db_utils.py) around the flush -- it only
+        # retries OperationalError, so an IntegrityError passes straight through.
+        def _flush_new_job():
+            with db.session.begin_nested():
+                db.session.flush()
+
+        try:
+            with_db_retry(_flush_new_job)
+        except IntegrityError:
+            db.session.rollback()
+            skipped += 1
+            continue
         created.append(job)
 
     commit()

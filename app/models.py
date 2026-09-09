@@ -128,6 +128,18 @@ class User(UserMixin, db.Model):
 
 class Job(db.Model):
     __tablename__ = "jobs"
+    __table_args__ = (
+        # REL-03: DB-level guard against the ingest_jobs() dedupe race (read-then-insert
+        # from two processes -- e.g. a scheduled search.run_search and a concurrent MCP
+        # add_jobs call -- can both pass the "not found" check before either commits).
+        # external_id is stored as NULL (never "") when a job has no provider id (see
+        # the column default below and ingest_jobs()), so SQL's standard "NULL never
+        # equals NULL" UNIQUE semantics keep every no-external_id job distinct from every
+        # other one instead of colliding on (source, "") -- no partial/filtered index
+        # needed. ingest_jobs()'s existing company+title dedupe stays the correctness
+        # guard for the no-external_id case.
+        db.UniqueConstraint("source", "external_id", name="uq_jobs_source_external_id"),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
     company = db.Column(db.String(160), nullable=False)
@@ -138,7 +150,8 @@ class Job(db.Model):
     url = db.Column(db.String(500), default="")
     salary = db.Column(db.String(80), default="")
     status = db.Column(db.String(40), default="Applied", index=True)
-    external_id = db.Column(db.String(255), default="", index=True)  # provider's job id, for dedup
+    # NULL (not "") when unknown -- see uq_jobs_source_external_id above.
+    external_id = db.Column(db.String(255), default=None, index=True)  # provider's job id, for dedup
     date_applied = db.Column(db.Date, nullable=True)
     follow_up_date = db.Column(db.Date, nullable=True, index=True)
     contact_name = db.Column(db.String(120), default="")
@@ -157,8 +170,15 @@ class Job(db.Model):
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
+    # PERF-01: selectin avoids the N+1 that lazy="select" (the default) causes when
+    # build_export_dict() (and run_rejection_analysis(), etc.) iterate job.interviews
+    # for every job in a full-pipeline export -- one extra round trip per job otherwise,
+    # ~200 jobs -> ~201 queries with the session open into the AI provider network call.
+    # selectin issues one batched "WHERE job_id IN (...)" query per level and still
+    # honors order_by, so ordering behavior is unchanged.
     interviews = db.relationship(
-        "Interview", backref="job", cascade="all, delete-orphan", order_by="Interview.interview_date"
+        "Interview", backref="job", cascade="all, delete-orphan",
+        order_by="Interview.interview_date", lazy="selectin",
     )
     attachments = db.relationship(
         "Attachment", backref="job", cascade="all, delete-orphan", order_by="Attachment.uploaded_at"
