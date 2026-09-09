@@ -1,9 +1,20 @@
-# No active ignores. Kept as a placeholder since trivy-action looks for
-# this file by default in the CI gate step (see .github/workflows/ci.yml).
-#
 # History: this file briefly suppressed CVE-2026-5773 and CVE-2026-6276
 # (curl/libcurl, HIGH) while the fix (curl 8.20.0-r0+) lagged Alpine's
 # v3.23 stable branch. Resolved 2026-07-17 by bumping the base image to
 # the Alpine 3.24 line (ghcr.io/linuxserver/baseimage-alpine:3.24-03b33b49-ls6),
 # which ships curl 8.21.0-r0 and does not need the ignore. See the FROM
 # comment in the Dockerfile for the full record.
+#
+# 2026-09-08: GHSA-6v7p-g79w-8964 (msgpack) and CVE-2025-47273 (setuptools)
+# are pip 26.2.1's OWN internal vendored copies -- pip/_vendor/msgpack==1.1.2
+# and pip/_vendor/setuptools==70.3.0 (confirmed against pip's vendor.txt at
+# that exact tag), not the top-level `msgpack`/`setuptools` packages this
+# image also installs, which are current (see the venv RUN line in the
+# Dockerfile, right after the c-ares/jq/openssl comment). Not reachable at
+# runtime: pip is only used during the image build, never invoked by the
+# running app (same Dockerfile comment already establishes this for pip
+# itself). No pip release has bumped these vendor pins yet as of this date.
+# Re-check next time this file changes; drop these two lines once a pip
+# release updates its vendored msgpack/setuptools past the fixed versions.
+GHSA-6v7p-g79w-8964
+CVE-2025-47273
