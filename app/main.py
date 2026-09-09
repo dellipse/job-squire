@@ -3407,6 +3407,102 @@ def settings_run():
 # --------------------------------------------------------------------------
 # Candidate asset library (master documents: resume, rec letters, certs, etc.)
 # --------------------------------------------------------------------------
+def _handle_resume_kind_upload(f, ext, original, label, notes, uploaded_by):
+    """Convert an uploaded file straight into a Custom Resume (kind="Resume")
+    markdown asset -- always returns the settings redirect, since unlike
+    every other kind, this upload MUST convert successfully or be rejected
+    outright rather than silently storing something broken. The originally
+    uploaded file is kept in source_* on the same row (there's no separate
+    archival copy the way "Base Resume" gets one)."""
+    from .onboarding import save_resume_draft
+    from .resume_convert import ResumeConversionError, SUPPORTED_EXTENSIONS, convert_to_markdown
+
+    if ext not in SUPPORTED_EXTENSIONS:
+        flash(f"Custom Resume needs a file Job Squire can convert to markdown "
+              f"({', '.join(SUPPORTED_EXTENSIONS)}) — .{ext or 'this'} isn't "
+              "supported. Use Base Resume instead to keep the original file "
+              "as-is, or paste the text into the resume interview's markdown box.",
+              "danger")
+        return redirect(_safe_next(url_for("main.settings", _anchor="tab-documents")))
+
+    raw = f.read()
+    try:
+        markdown = convert_to_markdown(raw, ext)
+    except ResumeConversionError as exc:
+        flash(f"Couldn't convert this file: {exc}", "danger")
+        return redirect(_safe_next(url_for("main.settings", _anchor="tab-documents")))
+    except Exception:
+        log.exception("resume auto-convert failed for a Custom Resume upload")
+        flash("Automatic markdown conversion hit an unexpected error. Use Base "
+              "Resume instead, or paste the text into the resume interview's "
+              "markdown box.", "danger")
+        return redirect(_safe_next(url_for("main.settings", _anchor="tab-documents")))
+
+    source_stored = f"{uuid.uuid4().hex}{('.' + ext) if ext else ''}"
+    source_dest = os.path.join(current_app.config["UPLOAD_DIR"], source_stored)
+    with open(source_dest, "wb") as fh:
+        fh.write(raw)
+
+    result = save_resume_draft(
+        markdown, created_by=uploaded_by,
+        label=label or f'Converted from "{original}"')
+    if result.get("ok"):
+        asset = db.session.get(CandidateAsset, result["asset_id"])
+        asset.source_stored_name = source_stored
+        asset.source_original_name = original
+        asset.source_content_type = f.mimetype or ""
+        if notes:
+            asset.notes = notes
+        commit()
+        flash("Converted it to markdown and saved as a new Custom Resume — "
+              "review it below and edit if anything needs cleanup.", "success")
+    else:
+        try:
+            os.remove(source_dest)
+        except OSError:
+            pass
+        flash(f"Couldn't save the converted resume: {result.get('error')}", "danger")
+    return redirect(_safe_next(url_for("main.settings", _anchor="tab-documents")))
+
+
+def _attempt_base_resume_autoconvert(dest, ext, original, asset, uploaded_by):
+    """After a "Base Resume" upload is already saved, best-effort convert it
+    to markdown too and save that as a new kind="Resume" variant -- the
+    same outcome the Getting Started resume interview produces, but without
+    AI. Only flashes a warning on failure; the Base Resume upload itself has
+    already succeeded and is not rolled back. See app/resume_convert.py and
+    app/onboarding.py:save_resume_draft."""
+    from .onboarding import save_resume_draft
+    from .resume_convert import ResumeConversionError, SUPPORTED_EXTENSIONS, convert_to_markdown
+
+    if ext not in SUPPORTED_EXTENSIONS:
+        flash(f"Uploaded. Automatic markdown conversion isn't available for "
+              f".{ext or 'this'} files yet — use the resume interview below, or "
+              "paste the text into the markdown box yourself.", "warning")
+        return
+
+    try:
+        with open(dest, "rb") as fh:
+            raw = fh.read()
+        markdown = convert_to_markdown(raw, ext)
+        result = save_resume_draft(
+            markdown, created_by=uploaded_by,
+            label=f'Converted from "{original}"')
+        if result.get("ok"):
+            flash("Converted it to markdown and saved as a new Custom Resume — "
+                  "review it below and edit if anything needs cleanup.", "success")
+        else:
+            flash(f"Uploaded, but couldn't auto-convert it: {result.get('error')}",
+                  "warning")
+    except ResumeConversionError as exc:
+        flash(f"Uploaded, but couldn't auto-convert it: {exc}", "warning")
+    except Exception:
+        log.exception("resume auto-convert failed for asset %s", asset.id)
+        flash("Uploaded, but the automatic markdown conversion hit an "
+              "unexpected error. Use the resume interview below, or paste "
+              "the text into the markdown box yourself.", "warning")
+
+
 @main_bp.route("/settings/assets/upload", methods=["POST"])
 @login_required
 @admin_required
@@ -3423,62 +3519,9 @@ def settings_asset_upload():
 
         # "Custom Resume" (kind="Resume") is the markdown-draft slot read
         # back into the Getting Started paste-back box and shown to Claude
-        # as "the" resume (see app/onboarding.py:_read_resume_asset_markdown)
-        # -- it can never hold raw binary, so unlike every other kind, a
-        # document uploaded here MUST convert successfully or the upload is
-        # rejected outright rather than silently storing something broken.
-        # The originally uploaded file is kept in source_* on the same row
-        # (there's no separate archival copy the way "Base Resume" gets one).
+        # as "the" resume (see app/onboarding.py:_read_resume_asset_markdown).
         if kind == "Resume":
-            from .onboarding import save_resume_draft
-            from .resume_convert import ResumeConversionError, SUPPORTED_EXTENSIONS, convert_to_markdown
-
-            if ext not in SUPPORTED_EXTENSIONS:
-                flash(f"Custom Resume needs a file Job Squire can convert to markdown "
-                      f"({', '.join(SUPPORTED_EXTENSIONS)}) — .{ext or 'this'} isn't "
-                      "supported. Use Base Resume instead to keep the original file "
-                      "as-is, or paste the text into the resume interview's markdown box.",
-                      "danger")
-                return redirect(_safe_next(url_for("main.settings", _anchor="tab-documents")))
-
-            raw = f.read()
-            try:
-                markdown = convert_to_markdown(raw, ext)
-            except ResumeConversionError as exc:
-                flash(f"Couldn't convert this file: {exc}", "danger")
-                return redirect(_safe_next(url_for("main.settings", _anchor="tab-documents")))
-            except Exception:
-                log.exception("resume auto-convert failed for a Custom Resume upload")
-                flash("Automatic markdown conversion hit an unexpected error. Use Base "
-                      "Resume instead, or paste the text into the resume interview's "
-                      "markdown box.", "danger")
-                return redirect(_safe_next(url_for("main.settings", _anchor="tab-documents")))
-
-            source_stored = f"{uuid.uuid4().hex}{('.' + ext) if ext else ''}"
-            source_dest = os.path.join(current_app.config["UPLOAD_DIR"], source_stored)
-            with open(source_dest, "wb") as fh:
-                fh.write(raw)
-
-            result = save_resume_draft(
-                markdown, created_by=uploaded_by,
-                label=label or f'Converted from "{original}"')
-            if result.get("ok"):
-                asset = db.session.get(CandidateAsset, result["asset_id"])
-                asset.source_stored_name = source_stored
-                asset.source_original_name = original
-                asset.source_content_type = f.mimetype or ""
-                if notes:
-                    asset.notes = notes
-                commit()
-                flash("Converted it to markdown and saved as a new Custom Resume — "
-                      "review it below and edit if anything needs cleanup.", "success")
-            else:
-                try:
-                    os.remove(source_dest)
-                except OSError:
-                    pass
-                flash(f"Couldn't save the converted resume: {result.get('error')}", "danger")
-            return redirect(_safe_next(url_for("main.settings", _anchor="tab-documents")))
+            return _handle_resume_kind_upload(f, ext, original, label, notes, uploaded_by)
 
         stored = f"{uuid.uuid4().hex}{('.' + ext) if ext else ''}"
         dest = os.path.join(current_app.config["UPLOAD_DIR"], stored)
@@ -3499,41 +3542,12 @@ def settings_asset_upload():
 
         # A "Base Resume" upload is the user's actual resume, uploaded as a
         # document rather than produced through the Getting Started resume
-        # interview. Convert it to markdown here (no AI needed) and save it
-        # as a new kind="Resume" variant the same way the interview does, so
-        # a plain upload satisfies the Getting Started "Resume & documents"
-        # step the same way the interview does. The original stays on file
-        # as its own "Base Resume" asset regardless of whether conversion
-        # succeeds. See app/resume_convert.py and
-        # app/onboarding.py:save_resume_draft.
+        # interview -- also try to convert it to markdown so a plain upload
+        # satisfies the Getting Started "Resume & documents" step the same
+        # way the interview does. The original stays on file as its own
+        # "Base Resume" asset regardless of whether conversion succeeds.
         if kind == "Base Resume":
-            from .onboarding import save_resume_draft
-            from .resume_convert import ResumeConversionError, SUPPORTED_EXTENSIONS, convert_to_markdown
-            if ext in SUPPORTED_EXTENSIONS:
-                try:
-                    with open(dest, "rb") as fh:
-                        raw = fh.read()
-                    markdown = convert_to_markdown(raw, ext)
-                    result = save_resume_draft(
-                        markdown, created_by=uploaded_by,
-                        label=f'Converted from "{original}"')
-                    if result.get("ok"):
-                        flash("Converted it to markdown and saved as a new Custom Resume — "
-                              "review it below and edit if anything needs cleanup.", "success")
-                    else:
-                        flash(f"Uploaded, but couldn't auto-convert it: {result.get('error')}",
-                              "warning")
-                except ResumeConversionError as exc:
-                    flash(f"Uploaded, but couldn't auto-convert it: {exc}", "warning")
-                except Exception:
-                    log.exception("resume auto-convert failed for asset %s", asset.id)
-                    flash("Uploaded, but the automatic markdown conversion hit an "
-                          "unexpected error. Use the resume interview below, or paste "
-                          "the text into the markdown box yourself.", "warning")
-            else:
-                flash(f"Uploaded. Automatic markdown conversion isn't available for "
-                      f".{ext or 'this'} files yet — use the resume interview below, or "
-                      "paste the text into the markdown box yourself.", "warning")
+            _attempt_base_resume_autoconvert(dest, ext, original, asset, uploaded_by)
     else:
         msg = "Upload failed."
         for errs in form.errors.values():

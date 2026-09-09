@@ -901,6 +901,76 @@ def run_auto_triage(api_key: str = "", model: str = "") -> dict:
     return {"scored": scored, "failed": failed}
 
 
+def _retry_missing_triage_jobs(jobs, applied_ids, apply_fn, invoke_fn, build_content_fn):
+    """The sub-batch-of-5-then-solo retry ladder for jobs run_triage_batch's
+    initial pass didn't get scores back for.
+
+    apply_fn is run_triage_batch's own nested _apply closure -- calling it
+    here still mutates that call's pending/results/applied_ids state, since a
+    Python closure keeps its enclosing scope regardless of where it's
+    invoked from. This function only decides *what* to retry and reports how
+    many additional jobs got scored; it holds none of that state itself.
+    """
+    scored_delta = 0
+
+    missing = [j for j in jobs if j.id not in applied_ids]
+    if missing:
+        log.info("triage-batch: %d job(s) not in initial response; retrying in sub-batches of 5",
+                 len(missing))
+        _RETRY_CHUNK = 5
+        for chunk_start in range(0, len(missing), _RETRY_CHUNK):
+            chunk = missing[chunk_start:chunk_start + _RETRY_CHUNK]
+            chunk_dicts = [
+                {
+                    "id": j.id,
+                    "title": j.title,
+                    "company": j.company,
+                    "location": j.location or "",
+                    "work_mode": j.work_mode or "",
+                    "salary": j.salary or "",
+                    "source": j.source or "",
+                    "description": (j.notes or "")[:400],
+                }
+                for j in chunk
+            ]
+            try:
+                retry_parsed = _parse_triage_response(invoke_fn(build_content_fn(chunk_dicts)))
+            except Exception as exc:  # noqa: BLE001
+                log.warning("triage-batch retry chunk failed: %s", exc)
+                continue
+            for item in retry_parsed:
+                if apply_fn(item):
+                    scored_delta += 1
+
+    # Second retry: send each still-missing job individually (one per call).
+    # Free-tier models may drop entries even from a 5-job sub-batch when
+    # descriptions push the prompt over their context limit.
+    still_missing = [j for j in jobs if j.id not in applied_ids]
+    if still_missing:
+        log.info("triage-batch: %d job(s) still missing; retrying one-by-one", len(still_missing))
+        for j in still_missing:
+            solo_dict = [{
+                "id": j.id,
+                "title": j.title,
+                "company": j.company,
+                "location": j.location or "",
+                "work_mode": j.work_mode or "",
+                "salary": j.salary or "",
+                "source": j.source or "",
+                "description": (j.notes or "")[:400],
+            }]
+            try:
+                solo_parsed = _parse_triage_response(invoke_fn(build_content_fn(solo_dict)))
+            except Exception as exc:  # noqa: BLE001
+                log.warning("triage-batch solo retry failed for job %d: %s", j.id, exc)
+                continue
+            for item in solo_parsed:
+                if apply_fn(item):
+                    scored_delta += 1
+
+    return scored_delta
+
+
 def run_triage_batch(offset: int, limit: int = 20,
                      provider_id: int | None = None) -> dict:
     """Run triage on a specific page of unscored Saved jobs.
@@ -1092,63 +1162,10 @@ def run_triage_batch(offset: int, limit: int = 20,
         # Don't count unparseable items from the main pass as failures yet —
         # they'll be retried below.
 
-    # Retry any jobs missing from the initial response in sub-batches of 5 with
-    # shorter descriptions (400 chars). Free-tier models often have small context
-    # windows and silently drop entries when the prompt is too long.
-    missing = [j for j in jobs if j.id not in applied_ids]
-    if missing:
-        log.info("triage-batch: %d job(s) not in initial response; retrying in sub-batches of 5",
-                 len(missing))
-        _RETRY_CHUNK = 5
-        for chunk_start in range(0, len(missing), _RETRY_CHUNK):
-            chunk = missing[chunk_start:chunk_start + _RETRY_CHUNK]
-            chunk_dicts = [
-                {
-                    "id": j.id,
-                    "title": j.title,
-                    "company": j.company,
-                    "location": j.location or "",
-                    "work_mode": j.work_mode or "",
-                    "salary": j.salary or "",
-                    "source": j.source or "",
-                    "description": (j.notes or "")[:400],
-                }
-                for j in chunk
-            ]
-            try:
-                retry_parsed = _parse_triage_response(_invoke(_build_content(chunk_dicts)))
-            except Exception as exc:  # noqa: BLE001
-                log.warning("triage-batch retry chunk failed: %s", exc)
-                continue
-            for item in retry_parsed:
-                if _apply(item):
-                    scored += 1
-
-    # Second retry: send each still-missing job individually (one per call).
-    # Free-tier models may drop entries even from a 5-job sub-batch when
-    # descriptions push the prompt over their context limit.
-    still_missing = [j for j in jobs if j.id not in applied_ids]
-    if still_missing:
-        log.info("triage-batch: %d job(s) still missing; retrying one-by-one", len(still_missing))
-        for j in still_missing:
-            solo_dict = [{
-                "id": j.id,
-                "title": j.title,
-                "company": j.company,
-                "location": j.location or "",
-                "work_mode": j.work_mode or "",
-                "salary": j.salary or "",
-                "source": j.source or "",
-                "description": (j.notes or "")[:400],
-            }]
-            try:
-                solo_parsed = _parse_triage_response(_invoke(_build_content(solo_dict)))
-            except Exception as exc:  # noqa: BLE001
-                log.warning("triage-batch solo retry failed for job %d: %s", j.id, exc)
-                continue
-            for item in solo_parsed:
-                if _apply(item):
-                    scored += 1
+    # Retry any jobs missing from the initial response: sub-batches of 5, then
+    # solo. Free-tier models often have small context windows and silently
+    # drop entries when the prompt is too long.
+    scored += _retry_missing_triage_jobs(jobs, applied_ids, _apply, _invoke, _build_content)
 
     # Flag any jobs that still didn't come back after all retry passes.
     for j in jobs:
