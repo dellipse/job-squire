@@ -202,7 +202,7 @@
     <h2>Recent activity</h2>
     <div class="actions">
       <a class="btn btn-outline" href="{{ url_for('main.export_csv') }}">Export CSV</a>
-      <a class="btn btn-outline" href="{{ url_for('main.ai_hub') }}">AI analysis</a>
+      <a class="btn btn-outline" href="{{ url_for('ai_tasks.ai_hub') }}">AI analysis</a>
     </div>
   </div>
   {% if recent %}
@@ -231,7 +231,7 @@
 <section class="card">
   <h2>Latest AI summary <span class="muted small">({{ latest_insight.created_at | local_date }})</span></h2>
   <p>{{ latest_insight.summary }}</p>
-  <a href="{{ url_for('main.ai_hub') }}">See full analysis →</a>
+  <a href="{{ url_for('ai_tasks.ai_hub') }}">See full analysis →</a>
 </section>
 {% endif %}
 
