@@ -16,7 +16,7 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <button class="btn" type="submit" data-loading-text="Opened in a new tab…">Draft follow-up</button>
     </form>
-    <form method="post" action="{{ url_for('main.kit_run') }}" target="_blank" style="display:inline">
+    <form method="post" action="{{ url_for('kits.kit_run') }}" target="_blank" style="display:inline">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="job_id" value="{{ job.id }}">
       <button class="btn" type="submit" data-loading-text="Opened in a new tab…">Build kit</button>
@@ -39,7 +39,7 @@
       <button class="btn" type="submit" data-loading-text="Opened in a new tab…">ATS gap analysis</button>
     </form>
     {% endif %}
-    <a class="btn btn-outline" href="{{ url_for('main.job_kit', job_id=job.id) }}"
+    <a class="btn btn-outline" href="{{ url_for('kits.job_kit', job_id=job.id) }}"
        title="Downloads a prompt file to paste into any AI assistant yourself">Download kit prompt (.md)</a>
     <a class="btn btn-outline" href="{{ url_for('main.job_edit', job_id=job.id) }}">Edit</a>
     {% if current_user.is_admin %}

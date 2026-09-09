@@ -33,7 +33,7 @@
         <p class="muted small">This posting was not saved to Job Squire, so nothing was written
           to the database. Copy or download the kit below before you close this tab.</p>
         <div id="ts-kit-output-text" class="pre" style="font-size:.9rem;white-space:pre-wrap"></div>
-        <form method="post" action="{{ url_for('main.kit_download_docx') }}" style="margin-top:.75rem">
+        <form method="post" action="{{ url_for('kits.kit_download_docx') }}" style="margin-top:.75rem">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <textarea name="kit_markdown" id="ts-kit-docx-markdown" hidden></textarea>
           <input type="hidden" name="company" id="ts-kit-docx-company">
