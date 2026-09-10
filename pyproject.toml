@@ -22,3 +22,12 @@ select = ["E4", "E7", "E9", "F"]
 # otherwise risk circular imports. The reordering is deliberate.
 "app/main.py" = ["E402"]
 "app/mcp_server.py" = ["E402"]
+
+[tool.mypy]
+# Gradual/permissive mode (CI-03, 2026-09-08 audit): ci.yml's mypy job is
+# advisory-only while the codebase carries almost no type annotations --
+# no --strict, no untyped-def checking. This is visibility into what's
+# already annotated (and obviously wrong), not a coverage requirement.
+# Tighten per-module once the advisory run has been quiet for a cycle.
+python_version = "3.14"
+ignore_missing_imports = true

@@ -78,6 +78,52 @@ jobs:
       - name: Audit installed dependencies for known CVEs
         run: pip-audit --skip-editable
 
+  # CI-03 (2026-09-08 audit): advisory-only cross-platform coverage for a
+  # pip-distributed *host* CLI that macOS and Windows operators genuinely
+  # install (see bootstrap.sh / docs/job-squire-cli.md). Deliberately a
+  # separate job rather than turning `test` above into a matrix --
+  # branch protection's required_status_checks matches the literal
+  # context name "test", and a matrix job reports as "test (ubuntu-
+  # latest)" etc., which would silently stop satisfying that requirement
+  # for every future PR. `test` above stays exactly as it is (the one
+  # required, Linux-only check); this job covers the other two platforms
+  # without being wired into anything that blocks a merge.
+  #
+  # continue-on-error is deliberate, not a placeholder: a repo-wide grep
+  # turned up real POSIX-only constructs in this suite (os.chmod-based
+  # permission assertions in test_ports.py/test_backup.py/test_compose.py)
+  # that are known to behave differently on Windows. Promoting this to a
+  # required check needs those failures triaged first -- likely some
+  # combination of real Windows-specific bugs and tests that need a
+  # platform-conditional skip -- not something to force through CI
+  # without a way to iterate against an actual Windows/macOS runner.
+  test-cross-platform:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install job-squire-cli with the query extra, plus dev tools
+        run: |
+          pip install -e "./job_squire_cli[query]"
+          pip install pytest==9.1.1 pytest-cov==7.1.0
+
+      - name: Run tests
+        run: cd job_squire_cli && pytest -q
+
   # Deployment-only install: prove the [query] extra is truly optional --
   # the ops commands and the console entry points must work without rich
   # or mcp anywhere on the machine.
