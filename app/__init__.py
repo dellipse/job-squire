@@ -461,6 +461,14 @@ def _run_migrations():
         "UPDATE jobs SET external_id = NULL WHERE external_id IS NOT NULL AND id NOT IN "
         "(SELECT MIN(id) FROM jobs WHERE external_id IS NOT NULL GROUP BY source, external_id)",
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_jobs_source_external_id ON jobs(source, external_id)",
+        # PERF-03: app/search.py's per-item ingest dedupe (ingest_jobs(), for
+        # jobs with no external_id) filters on lower(company)/lower(title)
+        # with no supporting index, so every ingested job triggers a full
+        # table scan. An expression index only helps if it matches the
+        # query's own expression syntactically -- SQLAlchemy's
+        # db.func.lower(...) compiles to the same bare lower(...) SQL
+        # function this index is built on, on SQLite.
+        "CREATE INDEX IF NOT EXISTS idx_jobs_company_title_lower ON jobs(lower(company), lower(title))",
     ]
     for stmt in migrations:
         try:
