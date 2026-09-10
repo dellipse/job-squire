@@ -241,6 +241,24 @@ patterns** (AI tab → Privacy) to add your own: one `LABEL=regex` per line, mer
 pattern pass. A line that doesn't parse (bad label, invalid regex) is skipped with a warning
 rather than silently doing nothing or blocking the rest.
 
+Also built in, without an NER/ML dependency:
+
+- A generic international phone shape (any `+<country code><digits>`), alongside the US-only
+  phone pattern above.
+- Credit-card-shaped numbers, tokenized only when they pass a Luhn check (so an ordinary long
+  number — an order ID, a zip+phone run — isn't swallowed).
+- **Heuristic name detection** (AI tab → Privacy, on by default) — two regex heuristics that
+  catch a person's name even when they were never entered as a Contact: a name directly following
+  a trigger phrase ("interviewer", "referred by", "hiring manager", …), and any two Title Case
+  words where the first is a common English given name. Best-effort and English-first-name-biased
+  by construction — it can occasionally flag a non-name phrase, or miss a name outside its list.
+  Turn it off if it gets in the way; known Contacts and interviewers are still redacted either way
+  since that pass is separate and always on.
+- Coaching flags (content stripped from outbound text, never sent) now also cover religion,
+  sexual orientation, and race/ethnicity, alongside the existing health/age/marital categories —
+  anchored to first-person disclosure phrasing ("I am …", "my faith is …") so an employer name
+  like "Catholic Charities" isn't mistaken for a disclosure.
+
 ### AI providers — `AIProviderConfig` (AI tab → AI Providers)
 
 Zero or more rows; tried in `rank` order. When a provider returns a rate-limit (429), server

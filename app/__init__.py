@@ -472,6 +472,10 @@ def _run_migrations():
         # SEC-13: operator-configurable extra redaction patterns (see
         # AIConfig.redact_extra_patterns's own comment in app/models.py).
         "ALTER TABLE ai_config ADD COLUMN redact_extra_patterns TEXT DEFAULT ''",
+        # Heuristic name detection toggle (see AIConfig.redact_heuristic_names
+        # / app/privacy.py). Defaults ON, same fail-closed rationale as
+        # redaction_enabled -- existing installs gain the extra coverage on upgrade.
+        "ALTER TABLE ai_config ADD COLUMN redact_heuristic_names BOOLEAN DEFAULT 1",
     ]
     for stmt in migrations:
         try:

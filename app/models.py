@@ -476,6 +476,11 @@ class AIConfig(db.Model):
     # operator can cover non-US/non-English shapes without waiting on a
     # built-in pattern update.
     redact_extra_patterns = db.Column(db.Text, default="")
+    # Two opt-out regex heuristics (context-anchored trigger phrases, and a
+    # common first-name list) that catch names never entered as a Contact --
+    # see app/privacy.py's "Heuristic name detection" section. Default ON,
+    # same fail-closed rationale as redaction_enabled.
+    redact_heuristic_names = db.Column(db.Boolean, default=True)
     updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 

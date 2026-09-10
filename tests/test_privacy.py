@@ -21,7 +21,7 @@ import pytest
 
 from app import privacy
 from app.extensions import db
-from app.models import AIConfig, Contact, Job, User
+from app.models import AIConfig, Contact, Interview, Job, User
 
 
 @pytest.fixture
@@ -95,6 +95,22 @@ class TestKnownValues:
         out = privacy.redact("Led CP4BA deployments at IBM for six years.").text
         assert "IBM" in out
 
+    def test_interview_interviewer_redacted(self, seeded):
+        job = Job(title="Ops Manager", company="Acme", created_by="test")
+        db.session.add(job)
+        db.session.commit()
+        interview = Interview(job_id=job.id, interviewer="Casey Whitfield")
+        db.session.add(interview)
+        db.session.commit()
+        try:
+            out = privacy.redact("Casey Whitfield asked about my last role.").text
+            assert "Casey Whitfield" not in out
+            assert "{{PII:NAME_" in out
+        finally:
+            db.session.delete(interview)
+            db.session.delete(job)
+            db.session.commit()
+
 
 # ---------------------------------------------------------------------------
 # Pattern pass
@@ -126,6 +142,62 @@ class TestPatternPass:
         assert "{{PII:WORKAUTH_" in res.text
         back, unresolved = privacy.rehydrate(res.text)
         assert "TS/SCI" in back and not unresolved
+
+    def test_international_phone(self, seeded):
+        out = privacy.redact("Reach me on +44 20 7946 0958 during UK hours.").text
+        assert "7946 0958" not in out
+        assert "{{PII:PHONE_" in out
+
+    def test_creditcard_number_redacted(self, seeded):
+        # 4111 1111 1111 1111 is the standard Luhn-valid Visa test number.
+        out = privacy.redact("Card on file: 4111 1111 1111 1111.").text
+        assert "4111 1111 1111 1111" not in out
+        assert "{{PII:CARD_" in out
+
+    def test_non_luhn_long_number_left_alone(self, seeded):
+        text = "Tracking number 1234567890123456."
+        out = privacy.redact(text).text
+        assert out == text
+
+
+# ---------------------------------------------------------------------------
+# Heuristic name detection (opt-out, AIConfig.redact_heuristic_names)
+# ---------------------------------------------------------------------------
+
+class TestHeuristicNames:
+    def test_context_anchored_name_caught(self, seeded):
+        out = privacy.redact("The hiring manager Devon Castillo seemed impressed.").text
+        assert "Devon Castillo" not in out
+        assert "{{PII:NAME_" in out
+
+    def test_referred_by_phrase_caught(self, seeded):
+        out = privacy.redact("Referred by Marcus Feldman at the conference.").text
+        assert "Marcus Feldman" not in out
+
+    def test_common_first_name_pair_caught(self, seeded):
+        out = privacy.redact("Talked to Michael Bloomfield about the role.").text
+        assert "Michael Bloomfield" not in out
+        assert "{{PII:NAME_" in out
+
+    def test_non_name_titlecase_pair_left_alone(self, seeded):
+        # "Software" is not a common first name, so this shouldn't fire.
+        out = privacy.redact("Applied for a Software Engineer position.").text
+        assert "Software Engineer" in out
+
+    def test_stopword_first_token_protects_company_names(self, seeded):
+        # "Grant" is a stopword (also a common surname/company name) --
+        # must never be mistaken for a person's first name.
+        out = privacy.redact("Worked with Grant Thornton on the audit.").text
+        assert "Grant Thornton" in out
+
+    def test_toggle_off_disables_heuristics_but_not_known_values(self, seeded):
+        cfg = db.session.get(AIConfig, 1)
+        cfg.redact_heuristic_names = False
+        db.session.commit()
+        out = privacy.redact("Talked to Michael Bloomfield about the role. "
+                             "Priya Raghunathan is my recruiter.").text
+        assert "Michael Bloomfield" in out        # heuristic disabled
+        assert "Priya Raghunathan" not in out     # known contact still redacted
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +232,25 @@ class TestSPI:
         ] or all(f["category"] == "marital" for f in privacy.scan_spi(
             "Runs in a single container."))
         assert privacy.scan_spi("Runs in a single container.") == []
+
+    def test_religion_orientation_race_stripped_and_flagged(self, seeded):
+        res = privacy.redact("Strong Python skills. I am Catholic and volunteer "
+                             "weekly. I identify as Hispanic. I am gay and active "
+                             "in LGBTQ advocacy. Ten years of ops experience.")
+        for leak in ("Catholic", "Hispanic", "gay", "LGBTQ"):
+            assert leak not in res.text
+        assert "Strong Python skills." in res.text
+        assert "Ten years of ops experience." in res.text
+        cats = {f["category"] for f in res.spi_flags}
+        assert {"religion", "race_ethnicity", "orientation"} <= cats
+
+    def test_employer_and_idiom_names_not_mistaken_for_spi(self, seeded):
+        # These must survive intact -- anchoring to first-person disclosure
+        # phrasing is what keeps ordinary employer names/idioms out of the
+        # strip pass.
+        text = ("Worked at Catholic Charities for two years. Announced the "
+                "Black Friday launch plan. Delivered a white-label product.")
+        assert privacy.redact(text).text == text
 
 
 # ---------------------------------------------------------------------------
