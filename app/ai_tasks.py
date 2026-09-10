@@ -144,8 +144,10 @@ def ai_analyze():
         with _app.app_context():
             try:
                 status.log("INFO Analyzing the full pipeline…")
-                parsed, provider = ai.run_api_analysis(api_key, cfg.model, cfg.thinking_mode or "disabled")
-                updated, missing = ai.apply_analysis(parsed, created_by=created_by, provider=provider)
+                parsed, provider, exported_job_ids = ai.run_api_analysis(
+                    api_key, cfg.model, cfg.thinking_mode or "disabled")
+                updated, missing = ai.apply_analysis(
+                    parsed, created_by=created_by, provider=provider, allowed_job_ids=exported_job_ids)
                 status.done({"updated": updated, "skipped": missing,
                             "overall_summary": parsed.get("overall_summary", "")})
             except Exception as exc:  # noqa: BLE001
