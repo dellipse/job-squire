@@ -41,6 +41,7 @@ import threading
 import time
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from apscheduler.events import EVENT_JOB_MISSED
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 
@@ -391,28 +392,49 @@ def main():
     weekly_review_hour = os.environ.get("WEEKLY_REVIEW_HOUR", "6")
     tz, tz_source = _resolve_timezone()
 
+    # REL-06 (2026-09-08 audit): every add_job call below set coalesce=True/
+    # max_instances=1 but no misfire_grace_time -- APScheduler's default is
+    # None, meaning a job that couldn't fire at its scheduled time for
+    # longer than this (process paused, container CPU-starved, an earlier
+    # run still holding the slot) is dropped rather than run late, with no
+    # record it was ever skipped. Reusing SCHEDULE_OFFSET_MAX_MINUTES here
+    # too: it already defines how late a run can start-by-design (the
+    # jitter in _run() above), so a misfire grace shorter than that jitter
+    # window would be self-defeating.
+    misfire_grace_time = max(1, int(os.environ.get("SCHEDULE_OFFSET_MAX_MINUTES", "20"))) * 60
+
+    def _log_missed_job(event):
+        log.warning("scheduler: job %r missed its scheduled run time (%s) -- see "
+                     "misfire_grace_time in app/worker.py:main()", event.job_id,
+                     event.scheduled_run_time)
+
     sched = BlockingScheduler(timezone=tz)
+    sched.add_listener(_log_missed_job, EVENT_JOB_MISSED)
     if weekday_hours.strip():
         sched.add_job(_run, CronTrigger(day_of_week="mon-fri", hour=weekday_hours,
                                         minute=minute, timezone=tz),
-                      id="weekday", max_instances=1, coalesce=True)
+                      id="weekday", max_instances=1, coalesce=True,
+                      misfire_grace_time=misfire_grace_time)
     if weekend_hours.strip():
         sched.add_job(_run, CronTrigger(day_of_week="sat,sun", hour=weekend_hours,
                                         minute=minute, timezone=tz),
-                      id="weekend", max_instances=1, coalesce=True)
+                      id="weekend", max_instances=1, coalesce=True,
+                      misfire_grace_time=misfire_grace_time)
 
     # Feature 2: Auto follow-up drafts — daily.
     if followup_hour.strip():
         sched.add_job(_run_followup_drafts_job,
                       CronTrigger(hour=followup_hour, minute="0", timezone=tz),
-                      id="followup_drafts", max_instances=1, coalesce=True)
+                      id="followup_drafts", max_instances=1, coalesce=True,
+                      misfire_grace_time=misfire_grace_time)
 
     # Feature 3: Weekly strategy review — Mondays only.
     if weekly_review_hour.strip():
         sched.add_job(_run_weekly_review_job,
                       CronTrigger(day_of_week="mon", hour=weekly_review_hour,
                                   minute="0", timezone=tz),
-                      id="weekly_review", max_instances=1, coalesce=True)
+                      id="weekly_review", max_instances=1, coalesce=True,
+                      misfire_grace_time=misfire_grace_time)
 
     # Feature 1 (standalone cadence): auto-triage on its own short interval,
     # decoupled from the search schedule above. Set to 0 to disable and rely
@@ -421,14 +443,16 @@ def main():
     if triage_interval > 0:
         sched.add_job(_run_auto_triage_interval_job, "interval",
                       minutes=triage_interval, id="auto_triage_interval",
-                      max_instances=1, coalesce=True)
+                      max_instances=1, coalesce=True,
+                      misfire_grace_time=misfire_grace_time)
 
     # Heartbeat — proves the scheduler process itself is alive, independent of
     # whether search/AI features are enabled or due to run. Backs the
     # container's aggregated healthcheck and the in-app staleness warning.
     heartbeat_minutes = max(1, int(os.environ.get("HEARTBEAT_INTERVAL_MINUTES", "5")))
     sched.add_job(_touch_heartbeat, "interval", minutes=heartbeat_minutes,
-                  id="heartbeat", max_instances=1, coalesce=True)
+                  id="heartbeat", max_instances=1, coalesce=True,
+                  misfire_grace_time=misfire_grace_time)
 
     log.info("scheduler up (tz=%s via %s, weekdays=%s, weekends=%s, followup=%s:00, review=Mon %s:00, "
              "triage_interval=%sm, heartbeat=%sm). Jobs: %s",

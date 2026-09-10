@@ -198,9 +198,14 @@ def dashboard():
             return redirect(redirect_target)
         onboarding_checklist = checklist_for_dashboard()
 
-    jobs = Job.query.all()
-    total = len(jobs)
+    # PERF-02 (2026-09-08 audit): this used to load every Job row (Job.query.all())
+    # just to compute `total` and `active` in Python, right alongside a SQL
+    # GROUP BY that already has everything needed for both — both are now
+    # derived from `rows` instead, so the dashboard's cost no longer scales
+    # with the total number of jobs in the pipeline.
     rows = db.session.query(Job.status, func.count(Job.id)).group_by(Job.status).all()
+    total = sum(cnt for _status, cnt in rows)
+    active = sum(cnt for status, cnt in rows if status in ACTIVE_STATUSES)
     counts = {s: 0 for s in STATUSES}
     for status, cnt in rows:
         if status in counts:
@@ -211,7 +216,6 @@ def dashboard():
     reached_interview = sum(counts.get(s, 0) for s in
                             ["Interview", "Final Interview", "Offer", "Hired"])
     offers = counts.get("Offer", 0) + counts.get("Hired", 0)
-    active = sum(1 for j in jobs if j.status in ACTIVE_STATUSES)
 
     def pct(n, d):
         return round(100 * n / d) if d else 0
@@ -366,10 +370,25 @@ def timeline():
     """Week-by-week application activity bar chart + chronological feed."""
     today = date.today()
 
+    # PERF-02 (2026-09-08 audit): the three queries below used to be
+    # unbounded Job.query.all()/JobNote.query...all()/Interview.query.all()
+    # -- fine at pipeline-start scale, but their cost (and this route's
+    # response time) grew linearly with the *lifetime* total of jobs/notes/
+    # interviews ever created, not with what the page actually displays
+    # (a 12-week chart plus a chronological feed). Windowing to the last
+    # year bounds that cost without touching what any real job search
+    # realistically needs to see -- a full pagination UI would be the more
+    # complete fix but is a bigger template-level change than this
+    # (Long-term, low-severity) item warrants on its own.
+    _lookback_cutoff = today - timedelta(days=365)
+
     # --- Collect events -------------------------------------------------------
     events: list[dict] = []
 
-    for j in Job.query.all():
+    _jobs_query = Job.query.filter(
+        db.or_(Job.date_applied >= _lookback_cutoff, Job.kit_generated_at >= _lookback_cutoff)
+    )
+    for j in _jobs_query:
         if j.date_applied:
             events.append({
                 "date": j.date_applied,
@@ -389,7 +408,10 @@ def timeline():
                 "status": j.status,
             })
 
-    for n in JobNote.query.filter(JobNote.note_type == "status_change").all():
+    _notes_query = JobNote.query.filter(
+        JobNote.note_type == "status_change", JobNote.created_at >= _lookback_cutoff
+    )
+    for n in _notes_query:
         if n.created_at:
             events.append({
                 "date": n.created_at.date(),
@@ -400,7 +422,10 @@ def timeline():
                 "status": None,
             })
 
-    for iv in Interview.query.all():
+    _interviews_query = Interview.query.filter(
+        db.or_(Interview.interview_date >= _lookback_cutoff, Interview.created_at >= _lookback_cutoff)
+    )
+    for iv in _interviews_query:
         iv_date = iv.interview_date or (iv.created_at.date() if iv.created_at else None)
         if iv_date and iv.job:
             events.append({

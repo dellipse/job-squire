@@ -215,6 +215,29 @@ def _refresh_tokens_cache() -> None:
     _tokens_cache_time = now
 
 
+# PERF-04 (2026-09-08 audit): the static-key path used to write
+# mcp_api_key_last_used_at + commit() on every single MCP call, even
+# though the field is only ever read back as an operator-facing "last
+# used" timestamp (precision to the minute is more than enough) --
+# unconditionally committing on every request added real, unnecessary
+# write load for no visible benefit. Same in-memory-throttle shape as
+# _TOKENS_CACHE_TTL above (a process-local timer, not a DB-backed lock);
+# each worker process throttles independently, which just means an
+# instance with N workers commits at most N times per window instead of
+# once per request.
+_LAST_USED_WRITE_THROTTLE = 300.0  # seconds (5 minutes)
+_last_used_write_time = 0.0
+
+
+def _should_write_last_used() -> bool:
+    global _last_used_write_time
+    now = time.time()
+    if (now - _last_used_write_time) < _LAST_USED_WRITE_THROTTLE:
+        return False
+    _last_used_write_time = now
+    return True
+
+
 # ---------------------------------------------------------------------------
 # MCP tools
 # ---------------------------------------------------------------------------
@@ -1395,8 +1418,9 @@ async def asgi_app(scope, receive, send):
             flask_app.config.get("DEPLOY_MODE"), cfg.mcp_api_key_allow_network,
             expires_at=cfg.mcp_api_key_expires_at,
         ):
-            cfg.mcp_api_key_last_used_at = _dt.now(_tz.utc)
-            commit()
+            if _should_write_last_used():
+                cfg.mcp_api_key_last_used_at = _dt.now(_tz.utc)
+                commit()
             await _inner(_scope_for_inner(scope, "/mcp"), receive, send)
             return
 

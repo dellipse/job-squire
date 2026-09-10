@@ -52,6 +52,10 @@ def mcp(app):
     # Force the /mcp bearer path's token-store cache to reload on next use
     # (SEC-06) so each test starts from a known, unstale state.
     m._tokens_cache_time = 0.0
+    # Same for the static-key last_used_at write throttle (PERF-04) -- a
+    # 5-minute in-memory throttle would otherwise silently suppress the
+    # write in every test after the first one in a given pytest session.
+    m._last_used_write_time = 0.0
 
     # Start each test with an empty on-disk token store.
     try:
@@ -430,6 +434,32 @@ def test_static_key_updates_last_used_at(mcp, monkeypatch):
     status, _, _ = _call(mcp, "POST", "/mcp",
                          headers=[(b"authorization", b"Bearer s3cr3t-static-key")])
 
+    assert status == 200
+    assert _static_key_last_used_at(mcp) is not None
+
+
+def test_static_key_last_used_at_write_is_throttled(mcp, monkeypatch):
+    """PERF-04 (2026-09-08 audit): the write only needs minute-level
+    precision for an operator-facing "last used" timestamp -- a second
+    call within the throttle window must not re-commit."""
+    inner, hits = _sentinel_inner()
+    monkeypatch.setattr(mcp, "_inner", inner)
+    _set_static_key(mcp, "s3cr3t-static-key")
+    headers = [(b"authorization", b"Bearer s3cr3t-static-key")]
+
+    status, _, _ = _call(mcp, "POST", "/mcp", headers=headers)
+    assert status == 200
+    first_seen = _static_key_last_used_at(mcp)
+    assert first_seen is not None
+
+    status, _, _ = _call(mcp, "POST", "/mcp", headers=headers)
+    assert status == 200
+    assert _static_key_last_used_at(mcp) == first_seen, \
+        "a second call inside the throttle window must not update last_used_at"
+
+    # Simulate the throttle window having elapsed.
+    mcp._last_used_write_time = 0.0
+    status, _, _ = _call(mcp, "POST", "/mcp", headers=headers)
     assert status == 200
     assert _static_key_last_used_at(mcp) is not None
 
