@@ -592,6 +592,7 @@ def settings_ai_privacy():
     cfg.redaction_enabled = bool(request.form.get("redaction_enabled"))
     cfg.redact_strict = bool(request.form.get("redact_strict"))
     cfg.redact_local = bool(request.form.get("redact_local"))
+    cfg.redact_heuristic_names = bool(request.form.get("redact_heuristic_names"))
     extra_patterns_raw = (request.form.get("redact_extra_patterns") or "").strip()
     # SEC-13: validate at save time so a typo is caught here, not silently
     # skipped (and only logged) the next time something actually gets
@@ -608,6 +609,8 @@ def settings_ai_privacy():
             bits.append("strict mode (employers/locations pseudonymized)")
         if cfg.redact_local:
             bits.append("applied to local providers too")
+        if cfg.redact_heuristic_names:
+            bits.append("heuristic name detection on")
         if _valid:
             bits.append(f"{len(_valid)} extra pattern(s) active")
         flash("Privacy settings saved: " + ", ".join(bits) + ".", "success")

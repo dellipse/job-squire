@@ -10,9 +10,10 @@ Design:
   Optional strict mode additionally pseudonymizes organization names and
   locations known to the app.
 - SPI/PHI that should not reach employers at all (health information, age
-  signals, marital status) is *stripped* from outbound text and surfaced to
-  the user as coaching flags — it is never tokenized-and-rehydrated because
-  it should be removed from the source documents entirely.
+  signals, marital status, religion, sexual orientation, race/ethnicity) is
+  *stripped* from outbound text and surfaced to the user as coaching flags —
+  it is never tokenized-and-rehydrated because it should be removed from the
+  source documents entirely.
 
 Placeholder IDs are HMAC-SHA256 digests of the value, keyed with the app
 SECRET_KEY and truncated. This makes redaction deterministic across the three
@@ -22,10 +23,13 @@ is only needed to *reverse* placeholders whose values were discovered by the
 pattern pass; placeholders for known values can always be recomputed.
 
 Detection is local-only: exact matching of values the app already knows
-(candidate account, SMTP settings, contacts) plus regexes for common
-identifier shapes. No NER/ML dependencies -- those add hundreds of MB to
-a single-container image, and detecting PII with a cloud AI would be
-circular anyway.
+(candidate account, SMTP settings, contacts, interviewers) plus regexes for
+common identifier shapes. No NER/ML dependencies -- those add hundreds of MB
+to a single-container image, and detecting PII with a cloud AI would be
+circular anyway. AIConfig.redact_heuristic_names adds two cheap, opt-out
+regex heuristics on top (context-anchored trigger phrases, and a common
+first-name list) to catch people who were never entered as a Contact --
+see the "Heuristic name detection" section below the SPI patterns.
 """
 
 from __future__ import annotations
@@ -81,6 +85,11 @@ _EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
 _PHONE_RE = re.compile(
     r"(?<![\d.])(?:\+?1[\s.\-]?)?\(?\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}(?![\d.])"
 )
+# Generic international shape (E.164-ish): a leading '+', a country code, then
+# 6-13 more digits with optional separators. Deliberately loose -- it only
+# needs to catch what _PHONE_RE's US-only shape misses, and a bare '+' this
+# long in prose is almost never anything but a phone number.
+_INTL_PHONE_RE = re.compile(r"(?<!\d)\+[1-9]\d{0,3}(?:[\s.\-]?\d){6,13}(?!\d)")
 _SSN_RE = re.compile(r"(?<!\d)\d{3}-\d{2}-\d{4}(?!\d)")
 _LINKEDIN_RE = re.compile(
     r"(?:https?://)?(?:www\.)?linkedin\.com/in/[A-Za-z0-9\-_%.]+/?", re.IGNORECASE
@@ -105,9 +114,42 @@ _PATTERN_PASS = [
     ("SSN", _SSN_RE),
     ("LINKEDIN", _LINKEDIN_RE),
     ("PHONE", _PHONE_RE),
+    ("PHONE", _INTL_PHONE_RE),
     ("ADDRESS", _ADDRESS_RE),
     ("WORKAUTH", _WORKAUTH_RE),
 ]
+
+# Credit-card-shaped numbers (13-19 digits, optionally grouped) are only
+# tokenized when they pass a Luhn check -- otherwise this would swallow
+# ordinary long numbers (order IDs, zip+phone runs). Handled as its own pass
+# rather than a _PATTERN_PASS entry because it needs that validation step,
+# not a blind pattern.sub().
+_CREDITCARD_CANDIDATE_RE = re.compile(r"(?<!\d)(?:\d[ \-]?){13,19}(?!\d)")
+
+
+def _luhn_ok(digits: str) -> bool:
+    total = 0
+    parity = len(digits) % 2
+    for i, ch in enumerate(digits):
+        d = int(ch)
+        if i % 2 == parity:
+            d *= 2
+            if d > 9:
+                d -= 9
+        total += d
+    return total % 10 == 0
+
+
+def _sub_creditcards(text: str, mapping: dict) -> str:
+    def _repl(m):
+        raw = m.group(0)
+        digits = re.sub(r"[ \-]", "", raw)
+        if not (13 <= len(digits) <= 19) or not _luhn_ok(digits):
+            return raw
+        ph = make_placeholder("CARD", digits)
+        mapping[ph] = raw
+        return ph
+    return _CREDITCARD_CANDIDATE_RE.sub(_repl, text)
 
 # SEC-13 (2026-09-08 audit): _PATTERN_PASS above only covers US phone/SSN/
 # street-suffix shapes and English name stopwords -- a documented scope gap
@@ -182,6 +224,31 @@ _SPI_MARITAL_RE = re.compile(
     r"\b(?:married|divorced|widowed|marital\s+status|my\s+(?:spouse|husband|wife))\b",
     re.IGNORECASE,
 )
+# Religion, orientation, and race/ethnicity are anchored to first-person
+# self-identification phrasing ("I am ...", "my faith is ...") rather than
+# bare category words. This pass *removes* whatever sentence it matches
+# (see _strip_spi), so unanchored words like "black"/"white"/"catholic"
+# would wrongly gut ordinary text ("Catholic Charities", "Black Friday
+# launch", "white-label product") -- anchoring keeps it to actual disclosure.
+_SPI_RELIGION_RE = re.compile(
+    r"\bi\s+(?:am|practice)\s+(?:a\s+)?(?:christian|catholic|protestant|jewish|"
+    r"muslim|hindu|buddhist|sikh|mormon|atheist|agnostic)\b|"
+    r"\bmy\s+(?:faith|religion|religious\s+beliefs?)\b",
+    re.IGNORECASE,
+)
+_SPI_ORIENTATION_RE = re.compile(
+    r"\bi\s+(?:am|identify\s+as)\s+(?:gay|lesbian|bisexual|queer|straight|"
+    r"heterosexual|pansexual|asexual)\b|"
+    r"\bmy\s+sexual\s+orientation\b|\bLGBTQ\+?\b",
+    re.IGNORECASE,
+)
+_SPI_RACE_RE = re.compile(
+    r"\bi\s+(?:am|identify\s+as)\s+(?:african[- ]american|black|white|caucasian|"
+    r"hispanic|latino|latina|latinx|asian[- ]american|native\s+american|"
+    r"indigenous|pacific\s+islander)\b|"
+    r"\bmy\s+(?:race|ethnicity)\s+is\b|\bracial\s+background\b",
+    re.IGNORECASE,
+)
 
 SPI_CATEGORIES = {
     "health": (
@@ -199,6 +266,21 @@ SPI_CATEGORIES = {
         _SPI_MARITAL_RE,
         "Marital or family status was found. It is not relevant to "
         "applications and can invite bias — recommend removing it.",
+    ),
+    "religion": (
+        _SPI_RELIGION_RE,
+        "Religious affiliation was found. It is not relevant to applications "
+        "and can invite bias — recommend removing it.",
+    ),
+    "orientation": (
+        _SPI_ORIENTATION_RE,
+        "Sexual orientation was found. It is not relevant to applications "
+        "and can invite bias — recommend removing it.",
+    ),
+    "race_ethnicity": (
+        _SPI_RACE_RE,
+        "Race or ethnicity was found. It is not relevant to applications "
+        "and can invite bias — recommend removing it.",
     ),
 }
 
@@ -239,6 +321,13 @@ def strict_mode() -> bool:
 def redact_local() -> bool:
     cfg = _cfg()
     return bool(getattr(cfg, "redact_local", False)) if cfg else False
+
+
+def heuristic_names_enabled() -> bool:
+    # Default ON, same fail-closed rationale as redaction_enabled(): a
+    # missing row/column should redact more, not less.
+    cfg = _cfg()
+    return bool(getattr(cfg, "redact_heuristic_names", True)) if cfg else True
 
 
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "host.docker.internal", "::1"}
@@ -339,7 +428,7 @@ def collect_known_values() -> list:
 
     Longest values first so full names replace before their parts.
     """
-    from .models import User, SmtpConfig, Contact
+    from .models import User, SmtpConfig, Contact, Interview
 
     out: list[tuple[str, str]] = []
 
@@ -366,6 +455,13 @@ def collect_known_values() -> list:
             out.append(("PHONE", c.phone.strip()))
         if (c.linkedin_url or "").strip():
             out.append(("LINKEDIN", c.linkedin_url.strip()))
+
+    # Interview.interviewer is a free-text name field with no link to
+    # Contact -- without this it was invisible to redaction anywhere else
+    # the same name got mentioned (prep notes, follow-up drafts).
+    for (interviewer,) in db.session.query(Interview.interviewer).distinct():
+        for variant in _name_variants(interviewer or ""):
+            out.append(("NAME", variant))
 
     # De-duplicate (case-insensitive), longest first.
     seen: set[tuple[str, str]] = set()
@@ -467,11 +563,118 @@ def _strip_spi(text: str) -> tuple:
 
 
 # ---------------------------------------------------------------------------
+# Heuristic name detection (opt-out via AIConfig.redact_heuristic_names) --
+# catches people who were never entered as a Contact/Interview.interviewer,
+# so their name only exists as a free-text mention (a hiring manager named in
+# an interview debrief, a reference mentioned in a note). No NER/ML: two
+# cheap, complementary regex heuristics.
+#
+# 1. Context-anchored: a relation phrase directly followed by a Title Case
+#    name. Low false-positive rate because it requires that anchor.
+# 2. First-name-led: any two consecutive Title Case words where the first is
+#    a common English given name. Higher recall, more false-positive risk
+#    (catches "Software Engineer"-shaped noise less often than you'd think,
+#    since job-title/place words rarely double as first names, but it does
+#    happen) -- this is why both heuristics share one opt-out toggle rather
+#    than being unconditionally on.
+#
+# Both reuse _NAME_STOPWORDS (common words that are also surnames, e.g.
+# "Grant", "Hunter") as an exclusion list, so "Hunter Douglas" or "Grant
+# Thornton" (companies) are not mistaken for people.
+# ---------------------------------------------------------------------------
+
+_CONTEXT_NAME_RE = re.compile(
+    # [ \t] rather than \s throughout -- must not cross a line break. Without
+    # this, a heading like "QUESTIONS FOR THE INTERVIEWER" followed by an
+    # unrelated Title Case paragraph on the next line was misread as trigger
+    # word + name (caught by the KIT_PROMPT regression test).
+    r"(?i:interviewer|hiring[ \t]+manager|recruiter|referred[ \t]+by|spoke[ \t]+with|"
+    r"reached[ \t]+out[ \t]+by|contacted[ \t]+by|interview(?:ed)?[ \t]+with|met[ \t]+with)"
+    r"[ \t]*(?:is|was)?[ \t]*:?[ \t]*"
+    r"(\b[A-Z][a-z]+(?:[ \t]+[A-Z][a-z]+){0,2}\b)"
+)
+
+_TITLECASE_PAIR_RE = re.compile(r"\b([A-Z][a-z]{2,})\s+([A-Z][a-z]{2,})\b")
+
+# A few hundred common English given names (not exhaustive -- a best-effort
+# heuristic, same spirit as the pattern pass's documented US/English scope).
+_COMMON_FIRST_NAMES = frozenset(n.casefold() for n in [
+    "james", "john", "robert", "michael", "william", "david", "richard",
+    "joseph", "thomas", "charles", "christopher", "daniel", "matthew",
+    "anthony", "mark", "donald", "steven", "andrew", "paul", "joshua",
+    "kenneth", "kevin", "brian", "george", "timothy", "ronald", "edward",
+    "jason", "jeffrey", "ryan", "jacob", "gary", "nicholas", "eric",
+    "jonathan", "stephen", "larry", "justin", "scott", "brandon",
+    "benjamin", "samuel", "gregory", "alexander", "patrick", "frank",
+    "raymond", "jack", "dennis", "jerry", "tyler", "aaron", "jose", "adam",
+    "nathan", "henry", "douglas", "zachary", "peter", "kyle", "walter",
+    "ethan", "jeremy", "harold", "carl", "keith", "roger", "gerald",
+    "christian", "terry", "sean", "arthur", "austin", "noah", "lawrence",
+    "jesse", "joe", "bryan", "billy", "jordan", "albert", "dylan", "bruce",
+    "willie", "gabriel", "alan", "juan", "logan", "wayne", "ralph", "roy",
+    "eugene", "randy", "vincent", "russell", "elijah", "louis", "bobby",
+    "philip", "johnny", "mary", "patricia", "jennifer", "linda",
+    "elizabeth", "barbara", "susan", "jessica", "sarah", "karen", "lisa",
+    "nancy", "betty", "sandra", "margaret", "ashley", "kimberly", "emily",
+    "donna", "michelle", "dorothy", "carol", "amanda", "melissa",
+    "deborah", "stephanie", "rebecca", "sharon", "laura", "cynthia",
+    "kathleen", "amy", "angela", "shirley", "anna", "brenda", "pamela",
+    "emma", "nicole", "helen", "samantha", "katherine", "christine",
+    "debra", "rachel", "carolyn", "janet", "catherine", "maria", "heather",
+    "diane", "ruth", "julie", "olivia", "joyce", "virginia", "victoria",
+    "kelly", "lauren", "christina", "joan", "evelyn", "judith", "megan",
+    "andrea", "cheryl", "hannah", "jacqueline", "martha", "gloria",
+    "teresa", "ann", "sara", "madison", "frances", "kathryn", "janice",
+    "jean", "abigail", "alice", "julia", "judy", "sophia", "denise",
+    "doris", "marilyn", "danielle", "isabella", "beverly", "theresa",
+    "diana", "natalie", "brittany", "charlotte", "marie", "kayla",
+    "alexis", "lori", "taylor", "morgan", "casey", "riley", "jamie",
+    "cameron", "avery", "peyton", "quinn", "skyler", "dakota", "charlie",
+    "rowan", "emerson", "finley", "hayden",
+])
+
+# Never treat these as a person's name even after the checks above -- generic
+# placeholders that occasionally sit where a name would in free text.
+_CONTEXT_NAME_EXCLUDE = {"none", "unknown", "tbd", "n/a", "pending", "unsure"}
+
+
+def _sub_context_names(text: str, mapping: dict) -> str:
+    def _repl(m):
+        name = m.group(1)
+        words = [w.casefold() for w in name.split()]
+        if any(w in _NAME_STOPWORDS or w in _CONTEXT_NAME_EXCLUDE for w in words):
+            return m.group(0)
+        ph = make_placeholder("NAME", name)
+        mapping[ph] = name
+        # Keep the trigger phrase text intact; only the captured name moves.
+        prefix = m.group(0)[:m.start(1) - m.start(0)]
+        return prefix + ph
+    return _CONTEXT_NAME_RE.sub(_repl, text)
+
+
+def _sub_heuristic_names(text: str, mapping: dict) -> str:
+    def _repl(m):
+        first, last = m.group(1), m.group(2)
+        first_cf, last_cf = first.casefold(), last.casefold()
+        if (first_cf not in _COMMON_FIRST_NAMES
+                or first_cf in _NAME_STOPWORDS
+                or last_cf in _NAME_STOPWORDS
+                or last_cf in _CONTEXT_NAME_EXCLUDE):
+            return m.group(0)
+        full = f"{first} {last}"
+        ph = make_placeholder("NAME", full)
+        mapping[ph] = full
+        return ph
+    return _TITLECASE_PAIR_RE.sub(_repl, text)
+
+
+# ---------------------------------------------------------------------------
 # redact / rehydrate
 # ---------------------------------------------------------------------------
 
 def _redact_core(text: str, known: list, strict_vals: list | None,
-                 strip_spi: bool, mapping: dict, spi_flags: list) -> str:
+                 strip_spi: bool, mapping: dict, spi_flags: list,
+                 heuristic_names: bool = False) -> str:
     """One-string redaction against precollected value lists. No persistence."""
     if strip_spi:
         text, flags = _strip_spi(text)
@@ -503,10 +706,18 @@ def _redact_core(text: str, known: list, strict_vals: list | None,
             mapping[ph] = value
             return ph
         text = pattern.sub(_repl, text)
+    text = _sub_creditcards(text, mapping)
 
     # 2. Known values (longest first — collect_known_values guarantees order).
     for kind, value in known:
         text = _sub_value(kind, value, text)
+
+    # 2b. Heuristic name detection (opt-out) -- runs after known values so a
+    # Contact/Interview.interviewer match always wins over a guess, and never
+    # rescans text already turned into a placeholder.
+    if heuristic_names:
+        text = _sub_context_names(text, mapping)
+        text = _sub_heuristic_names(text, mapping)
 
     # 3. Strict mode: pseudonymize organizations and locations.
     if strict_vals:
@@ -531,7 +742,8 @@ def redact(text: str, strict: bool | None = None, strip_spi: bool = True) -> Red
     spi_flags: list = []
     out = _redact_core(text, collect_known_values(),
                        _strict_values() if strict else None,
-                       strip_spi, mapping, spi_flags)
+                       strip_spi, mapping, spi_flags,
+                       heuristic_names=heuristic_names_enabled())
     _persist_mappings(mapping)
     return RedactionResult(text=out, mapping=mapping, spi_flags=spi_flags)
 
@@ -606,10 +818,12 @@ def redact_obj(obj, strict: bool | None = None, strip_spi: bool = True):
     strict_vals = _strict_values() if strict else None
     mapping: dict[str, str] = {}
     spi_flags: list = []
+    heuristic_names = heuristic_names_enabled()
 
     def _walk(node):
         if isinstance(node, str):
-            return _redact_core(node, known, strict_vals, strip_spi, mapping, spi_flags)
+            return _redact_core(node, known, strict_vals, strip_spi, mapping, spi_flags,
+                                heuristic_names=heuristic_names)
         if isinstance(node, dict):
             return {k: _walk(v) for k, v in node.items()}
         if isinstance(node, (list, tuple)):

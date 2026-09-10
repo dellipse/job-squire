@@ -289,6 +289,20 @@
           </span>
         </div>
         <div class="field field-wide">
+          <label>
+            <input type="checkbox" name="redact_heuristic_names"
+                   {% if ai_cfg.redact_heuristic_names %}checked{% endif %}>
+            Heuristic name detection (beta)
+          </label>
+          <span class="muted small">
+            Catches people who were never entered as a Contact — a hiring manager or
+            reference only mentioned by name in a note or interview debrief — using a
+            common-name list and phrases like "interviewer" or "referred by". Best-effort,
+            not exhaustive, and can occasionally redact a non-name word that happens to look
+            like one; turn off if that gets in the way.
+          </span>
+        </div>
+        <div class="field field-wide">
           <label for="redact_extra_patterns"><strong>Extra redaction patterns (advanced)</strong></label>
           <span class="muted small">
             The built-in patterns cover US phone numbers, SSNs, and US street-suffix addresses
