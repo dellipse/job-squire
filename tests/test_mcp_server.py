@@ -659,6 +659,29 @@ def test_authorize_post_bad_password_no_code(mcp):
     assert mcp._codes == {}
 
 
+def test_authorize_post_unknown_username_no_code(mcp):
+    """SEC-12 (2026-09-08 audit): an unknown username used to short-circuit
+    before ever calling check_password_hash(), making it faster than a
+    known-username/wrong-password attempt -- a username-enumeration timing
+    oracle. This only asserts the functional outcome is unchanged (rejected,
+    same error, no code issued); the dummy-hash fix that closes the timing
+    gap isn't something a unit test can assert on directly."""
+    from urllib.parse import urlencode
+    _, challenge = _pkce()
+    cid = _register_client(mcp, ["https://claude.ai/cb"])
+    body = urlencode({
+        "username": "no-such-user", "password": "whatever",
+        "client_id": cid, "redirect_uri": "https://claude.ai/cb",
+        "code_challenge": challenge, "code_challenge_method": "S256",
+    }).encode()
+
+    status, headers, out = _call(mcp, "POST", "/oauth/authorize", body=body)
+
+    assert status == 200
+    assert b"Incorrect username or password" in out
+    assert mcp._codes == {}
+
+
 # ---------------------------------------------------------------------------
 # 8. SEC-01: auth page escaping and response security headers
 # ---------------------------------------------------------------------------

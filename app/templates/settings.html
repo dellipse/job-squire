@@ -288,6 +288,22 @@
             unnecessary for them.
           </span>
         </div>
+        <div class="field field-wide">
+          <label for="redact_extra_patterns"><strong>Extra redaction patterns (advanced)</strong></label>
+          <span class="muted small">
+            The built-in patterns cover US phone numbers, SSNs, and US street-suffix addresses
+            only — a documented scope limitation, not a bug. If you're outside the US, or your
+            candidate profile includes identifier shapes the built-ins miss (a non-US phone
+            format, a national ID number, etc.), add your own below: one
+            <code>LABEL=regex</code> per line, e.g. <code>UK_PHONE=\b0\d{4}\s?\d{6}\b</code>.
+            LABEL may only use letters, digits, and underscores. Lines starting with
+            <code>#</code> are comments. A bad line is skipped (with a warning here) rather
+            than blocking the rest.
+          </span>
+          <textarea id="redact_extra_patterns" name="redact_extra_patterns" rows="4"
+                    class="mono" style="width:100%"
+                    placeholder="UK_PHONE=\b0\d{4}\s?\d{6}\b">{{ ai_cfg.redact_extra_patterns or "" }}</textarea>
+        </div>
       </div>
       <div class="actions" style="margin-top:1.25rem">
         <button class="btn btn-primary" type="submit">Save</button>

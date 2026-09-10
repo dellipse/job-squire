@@ -469,6 +469,13 @@ class AIConfig(db.Model):
     redaction_enabled = db.Column(db.Boolean, default=True)   # tokenize identifiers, strip SPI
     redact_strict = db.Column(db.Boolean, default=False)      # also pseudonymize orgs/locations
     redact_local = db.Column(db.Boolean, default=False)       # apply redaction to local providers too
+    # SEC-13 (2026-09-08 audit): the built-in pattern pass only covers US
+    # phone/SSN/street-suffix shapes -- a documented scope gap, not a
+    # bypass. One "LABEL=regex" per line, merged into the pattern pass at
+    # redact time (see app/privacy.py:_operator_extra_patterns) so an
+    # operator can cover non-US/non-English shapes without waiting on a
+    # built-in pattern update.
+    redact_extra_patterns = db.Column(db.Text, default="")
     updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 

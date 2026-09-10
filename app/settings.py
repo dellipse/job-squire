@@ -54,7 +54,7 @@ from . import ai, privacy
 from .backup import build_backup_archive
 from .crypto import decrypt, dump_encrypted_json, encrypt, load_encrypted_json
 from .db_utils import commit
-from .extensions import csrf, db
+from .extensions import csrf, db, limiter
 from .forms import CandidateAssetEditForm, CandidateAssetForm, ConfirmForm
 from .main import (
     _bookmarklet_js,
@@ -591,6 +591,12 @@ def settings_ai_privacy():
     cfg.redaction_enabled = bool(request.form.get("redaction_enabled"))
     cfg.redact_strict = bool(request.form.get("redact_strict"))
     cfg.redact_local = bool(request.form.get("redact_local"))
+    extra_patterns_raw = (request.form.get("redact_extra_patterns") or "").strip()
+    # SEC-13: validate at save time so a typo is caught here, not silently
+    # skipped (and only logged) the next time something actually gets
+    # redacted -- see privacy.parse_extra_patterns()'s own docstring.
+    _valid, pattern_warnings = privacy.parse_extra_patterns(extra_patterns_raw)
+    cfg.redact_extra_patterns = extra_patterns_raw
     commit()
     if not cfg.redaction_enabled:
         flash("Privacy redaction disabled — personal identifiers will be sent "
@@ -601,7 +607,11 @@ def settings_ai_privacy():
             bits.append("strict mode (employers/locations pseudonymized)")
         if cfg.redact_local:
             bits.append("applied to local providers too")
+        if _valid:
+            bits.append(f"{len(_valid)} extra pattern(s) active")
         flash("Privacy settings saved: " + ", ".join(bits) + ".", "success")
+    for w in pattern_warnings:
+        flash(f"Extra redaction pattern ignored — {w}", "warning")
     return redirect(url_for("settings.settings") + "#tab-claude")
 
 
@@ -622,6 +632,11 @@ def ai_provider_fallback_toggle():
 # --------------------------------------------------------------------------
 @settings_bp.route("/api/ingest", methods=["POST"])
 @csrf.exempt
+# SEC-12 (2026-09-08 audit): coarse rate limit against brute-forcing
+# INGEST_API_KEY -- no gate existed here at all before. Generous relative
+# to /login's since this is a machine API meant for legitimate periodic
+# bulk pushes, not a human typing a password.
+@limiter.limit("30 per minute; 300 per hour", methods=["POST"])
 def api_ingest():
     expected = os.environ.get("INGEST_API_KEY", "")
     provided = request.headers.get("X-API-Key", "")

@@ -1735,6 +1735,45 @@ def test_backup_passphrase_flag_skips_the_prompt(runner, monkeypatch, tmp_path):
     assert captured["passphrase"] == "pw-from-flag"
 
 
+def test_backup_passphrase_file_skips_the_prompt(runner, monkeypatch, tmp_path):
+    """SEC-11 (2026-09-08 audit): --passphrase-file lets a script provide the
+    passphrase without ever putting it on argv (visible in `ps`/shell history)."""
+    reg.add_instance(
+        name="castelo", mode="local", runtime="docker", data_dir=str(tmp_path),
+        public_url="http://localhost:8080", app_port=8080, mcp_port=9000,
+    )
+    captured = {}
+    monkeypatch.setattr(
+        bk, "create_backup",
+        lambda instance, *, dest_dir, passphrase, ext: captured.update(passphrase=passphrase)
+        or bk.BackupResult(instance_name=instance.name, archive_path=tmp_path / "a.tgz", manifest={}),
+    )
+    pass_file = tmp_path / "pw.txt"
+    pass_file.write_text("pw-from-file\n")
+
+    result = runner.invoke(main, ["backup", "castelo", "--passphrase-file", str(pass_file)])
+    assert result.exit_code == 0
+    assert captured["passphrase"] == "pw-from-file"
+
+
+def test_backup_passphrase_env_var_skips_the_prompt(runner, monkeypatch, tmp_path):
+    reg.add_instance(
+        name="castelo", mode="local", runtime="docker", data_dir=str(tmp_path),
+        public_url="http://localhost:8080", app_port=8080, mcp_port=9000,
+    )
+    captured = {}
+    monkeypatch.setattr(
+        bk, "create_backup",
+        lambda instance, *, dest_dir, passphrase, ext: captured.update(passphrase=passphrase)
+        or bk.BackupResult(instance_name=instance.name, archive_path=tmp_path / "a.tgz", manifest={}),
+    )
+    monkeypatch.setenv("JOB_SQUIRE_BACKUP_PASSPHRASE", "pw-from-env")
+
+    result = runner.invoke(main, ["backup", "castelo"])
+    assert result.exit_code == 0
+    assert captured["passphrase"] == "pw-from-env"
+
+
 def test_backup_all_backs_up_every_registered_instance(runner, monkeypatch, tmp_path):
     reg.add_instance(
         name="one", mode="local", runtime="docker", data_dir=str(tmp_path / "one"),
