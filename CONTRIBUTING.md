@@ -62,7 +62,7 @@ CI enforces two coverage floors with `coverage report --fail-under`:
 
 | Scope | Floor |
 |---|---|
-| Whole `app/` package | 33% |
+| Whole `app/` package | 50% |
 | Critical modules (`crypto.py`, `auth.py`, `mcp_server.py`, `providers.py`, `search.py`) | 58% |
 
 These are **ratchet baselines**, not targets — they only go up over time as

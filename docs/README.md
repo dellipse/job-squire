@@ -16,7 +16,7 @@ re-reading all the source first.
 | [deployment.md](deployment.md) | Operator's runbook for the CLI: instance lifecycle, updating/rollback, reverse-proxy and DNS/TLS provisioning for network mode, password reset, `SECRET_KEY` rotation. |
 | [backup-restore.md](backup-restore.md) | The CLI's passphrase-encrypted backup/restore archive: what's inside, how it's encrypted, the restore procedure and verification checklist. |
 | [multi-instance.md](multi-instance.md) | Running more than one independent instance on the same host (e.g. one per job seeker): the instance model, the cross-platform registry, per-instance isolation. |
-| [mcp-connector.md](mcp-connector.md) | The MCP server: its 23 tools (17 core + 6 routine-support), the OAuth auth flow, and how to connect it in Claude or another MCP-capable agent. |
+| [mcp-connector.md](mcp-connector.md) | The MCP server: its 24 tools (18 core + 6 routine-support), the OAuth auth flow, and how to connect it in Claude or another MCP-capable agent. |
 | [mcp-setup-guide.md](mcp-setup-guide.md) | Developer-focused MCP setup guide: all three connection methods (Claude Pro OAuth, Hermes Agent, OpenClaw), full tool listing, and ready-to-use config blocks. |
 | [Setup-Guide.md](Setup-Guide.md) | The narrative, non-technical walkthrough: the one-line bootstrap, creating an instance, in-app configuration, and the three deployment modes. Start here if you're setting Job Squire up for the first time. |
 | [troubleshooting.md](troubleshooting.md) | Every real issue hit during build and deploy, with the cause and the fix. Check here first when something breaks. |
@@ -34,7 +34,7 @@ JobSquire is a Flask + SQLite web app, packaged as a single multi-architecture D
 deployed, updated, and backed up through the `job-squire` CLI — one command bootstraps the CLI,
 which then creates, starts, and manages one or more independent instances, each running the web
 app, the scheduler, and the MCP server as three s6-supervised processes inside one container. It
-tracks job applications and interview debriefs for two users, automatically searches eight job
+tracks job applications and interview debriefs for two users, automatically searches seven job
 boards on a schedule and emails new matches, generates tailored application documents, and
 integrates with AI through two independent paths: Automatic Features (ranked provider chain for
 one-click analysis and background automation) and an MCP Connector (remote server for live

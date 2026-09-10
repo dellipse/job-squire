@@ -14,7 +14,7 @@ job_squire_cli/
   pyproject.toml
   job_squire_cli/
     cli.py            # top-level click group; wires ops + lazy query group
-    ops/commands.py    # deployment/lifecycle click commands; backup/restore stubs remain
+    ops/commands.py    # deployment/lifecycle click commands
     ops/runtime.py     # container runtime detection and per-OS install
     ops/registry.py    # cross-platform instance registry
     ops/paths.py       # per-instance directory layout
@@ -24,11 +24,15 @@ job_squire_cli/
     ops/crypto_mirror.py  # HKDF-SHA256 -> Fernet derivation mirrored from app/crypto.py
     ops/secrets_copy.py  # Fernet-aware settings import between instances
     ops/lifecycle.py   # create/start/stop/restart/status/list/remove/update orchestration
+    ops/self_update.py # CLI self-update: resolve tag -> pinned sha -> pip install
+    ops/uninstall.py   # full teardown: instances, runtime, CLI's own venv/PATH
     ops/mcp_token.py   # jsq_mcp_ static token generate/rotate/revoke
     ops/backup.py      # backup/restore orchestration
     ops/backup_crypto.py  # Argon2id + AES-256-GCM archive encryption
     ops/proxy.py       # reverse-proxy provisioning: detect/install SWAG, nginx confs
     ops/dns.py         # DNS/TLS validation for the CLI-installed SWAG: DuckDNS auto, Cloudflare DNS-01 semi-auto
+    ops/tailscale.py   # Tailscale Serve enable/disable/status for local instances
+    ops/ollama_assist.py  # host capability detection + guided Ollama install
     query/
       commands.py      # health, list, pipeline, contacts, job, contact, followups
       mcp_client.py     # self-contained MCP client (Streamable HTTP, no Hermes)
@@ -102,10 +106,16 @@ order, and the loop stops at the first instance whose update fails,
 same as `backup --all`.
 
 The new image is pulled *before* the running container is touched -- a
-failed pull changes nothing. Only then is the container stopped
-(`compose stop`, a graceful SIGTERM that s6 forwards so the app
-checkpoints its SQLite WAL before exiting), the image swapped, and the
-container recreated. The image the instance was running is recorded in
+failed pull changes nothing. Since SEC-09 (2026-09-08 audit), a successful
+pull is also verified with `cosign verify` (keyless, against this repo's
+GitHub Actions OIDC identity) before the swap proceeds -- missing `cosign`,
+or a failed verification, aborts the update with an operator-facing error
+rather than running an unverified image. Install `cosign` from
+https://docs.sigstore.dev/cosign/system_config/installation/ if
+`job-squire update` reports it's missing. Only after verification is the
+container stopped (`compose stop`, a graceful SIGTERM that s6 forwards so
+the app checkpoints its SQLite WAL before exiting), the image swapped, and
+the container recreated. The image the instance was running is recorded in
 its compose-level `.env` (`PREVIOUS_IMAGE`) before the swap, which is what
 `--rollback` reads; each rollback swaps current and previous again, so
 rolling back twice returns to where you started.
@@ -131,6 +141,44 @@ made deliberately as part of settling this fold-in:
 alias to the exact same entry point (`job_squire_cli.cli:main`) so
 existing muscle memory and scripts keep working. Both are installed by
 `pip install job-squire-cli`.
+
+## Backup and restore
+
+```
+job-squire backup NAME [--dest DIR] [--format tgz|zip] [--passphrase ...|--passphrase-file ...]
+job-squire backup --all [--dest DIR] ...            # same options, every registered instance
+job-squire restore ARCHIVE [--rename-to NAME] [--overwrite] [--image REF] [--up/--no-up]
+```
+
+Every archive is passphrase-encrypted (Argon2id key derivation + AES-256-GCM,
+`ops/backup_crypto.py`) -- there is no unencrypted format from the CLI (the
+in-app Settings → Backup download and `scripts/backup.sh` are the separate,
+deliberately-unencrypted ad-hoc paths; see `docs/backup-restore.md`).
+`--all` backs up every registered instance in registry order and stops at
+the first failure, same as `update --all`.
+
+Since `/data` is a named Docker volume, not a host bind mount, the CLI can't
+read a WAL-safe DB snapshot straight off the host filesystem -- `ops/backup.py`
+execs into the instance's running container (`app/backup_cli.py`, run as
+`python -m app.backup_cli`) to take the snapshot, the same container-exec
+pattern `app/mcp_token_cli.py`/`app/secrets_copy_cli.py` use. The in-container
+snapshot excludes `.env` (`include_env=False`) since the CLI already has
+`data/.env` from the host side and bundles it separately into the archive,
+alongside the registry/version manifest that lets `restore` recreate an
+instance with the right image and layout.
+
+**Secret-handling flags (SEC-08/SEC-11, 2026-09-08 audit).** `--passphrase`
+(here), `--admin-password` (`create`), and `--token` (`configure`) all still
+accept the secret directly as a flag value for scripted convenience, but that
+leaves it visible in `ps` and shell history. Prefer the interactive
+hidden-input prompt (the default when the flag is omitted), or the matching
+`--passphrase-file`/`--admin-password-file`/`--token-file` flag or
+`JOB_SQUIRE_BACKUP_PASSPHRASE`/`JOB_SQUIRE_ADMIN_PASSWORD`/
+`JOB_SQUIRE_MANUAL_TOKEN` environment variable for non-interactive use.
+Flag values themselves are also validated at the input boundary against
+control-character, hostname-shape, and YAML-unsafe-character injection
+(SEC-08), closing several ways a crafted flag value could smuggle an extra
+line into `.env`/nginx confs or break out of a quoted YAML scalar.
 
 ## Query group configuration
 
@@ -180,7 +228,9 @@ OAuth 2.0/PKCE stays the default, untouched MCP flow in every mode --
 `job-squire configure` generates nothing for it. Where a browser flow is
 available, `job-squire configure NAME --token <oauth-access-token>
 [--endpoint URL]` wires an OAuth access token obtained elsewhere into the
-query group's config, without the CLI implementing the OAuth dance itself.
+query group's config, without the CLI implementing the OAuth dance itself
+(prefer `--token-file`/`JOB_SQUIRE_MANUAL_TOKEN` or the interactive prompt
+over passing the token as a bare flag -- see "Secret-handling flags" above).
 OAuth is preferred whenever an instance is reachable beyond the one
 machine (network mode, or a Tailscale-Serve-fronted local instance).
 
@@ -282,11 +332,11 @@ container runtime or a real `PATH`.
 
 ## Instance lifecycle core
 
-`create`, `start`, `stop`, `restart`, `status`, `list`, and `remove` are
-real, wired to `ops/lifecycle.py` (`configure` is wired to
+`create`, `start`, `stop`, `restart`, `status`, `list`, `remove`, `update`,
+`backup`, and `restore` are all real, wired to `ops/lifecycle.py` /
+`ops/self_update.py` / `ops/backup.py` respectively (`configure` is wired to
 `ops/mcp_token.py` and `query/config.py` -- see "MCP authentication"
-below); `update`, `backup`, and `restore` remain structural stubs for
-now. Every real command follows the same shape as `ops/runtime.py`: `ops/commands.py` is a
+below). Every real command follows the same shape as `ops/runtime.py`: `ops/commands.py` is a
 thin click adapter (prompting, printing, mapping exceptions to a clean
 `exit(1)`), and `ops/lifecycle.py` takes no click objects at all -- every
 function accepts its subprocess `run`, `PATH` `which`, `confirm`, and
@@ -595,6 +645,14 @@ so more than one CLI-managed instance can share a proxy.
   no Docker network exists to join, so the conf proxies straight to the
   instance's published host ports (`proxy_pass http://127.0.0.1:<port>;`),
   matching the fallback the example conf's own comments already document.
+- **Podman rootless pasta network** (the proxy container runs in Podman's
+  default rootless `pasta` mode): pasta gives the proxy a private
+  point-to-point link to the host, so it can't join a shared bridge network
+  the instance's container could attach to (`docker network connect` fails
+  there with "pasta is not supported"). The conf instead routes to the
+  instance's published host ports via pasta's own `--map-host-loopback`
+  address (`--pasta-host-addr`, default `169.254.1.2`) -- `job-squire
+  proxy`/`create` print a `pasta_note` explaining this when detected.
 
 Either way, the proxy stays a separate, independently maintained component
 -- nothing here is baked into the Job Squire image, and TLS still
@@ -866,10 +924,13 @@ script on Linux, winget on Windows; skipped if Ollama already works) ->
 start/verify the service -> `ollama pull` the two recommended (or
 overridden) base tags -> derive a context-sized model from each
 (`ollama create <tag>-ctx<n>` from a generated Modelfile -- see below) ->
-write the `ai_provider_configs` row directly via `sqlite3` (this package
-never depends on Flask/SQLAlchemy/the app package, same as
-`ops/secrets_copy.py`) -> a direct round-trip generation request against
-Ollama's own API to confirm it actually answers.
+write the `ai_provider_configs` row by exec'ing into the instance's running
+container (`app/ollama_provider_cli.py`, fed a JSON payload on stdin -- the
+same container-exec pattern `app/mcp_token_cli.py`/`app/secrets_copy_cli.py`
+use, since `/data` is a named Docker volume the host can't open directly;
+this package still never depends on Flask/SQLAlchemy/the app package) -> a
+direct round-trip generation request against Ollama's own API to confirm it
+actually answers.
 
 **Accepted risk: the Linux install path is an unpinned `curl | sh` (SEC-09,
 2026-09-08 audit).** `ops/ollama_assist.py`'s Linux `InstallPlan` runs
@@ -935,21 +996,24 @@ targets with different syntax rules colliding on the same idea:
 The fix is one source of truth, rendered two ways for two targets that
 each require a different separator, rather than two independent schemes:
 
-- **Single source of truth:** the root `VERSION` file (currently `0.5.0`).
+- **Single source of truth:** the root `VERSION` file (currently `0.8.2`).
 - **Docker image tag** (`.github/workflows/ci.yml`, `BUILD_VERSION`):
-  `<VERSION>-<short-sha>`, e.g. `0.5.0-162722a`.
+  `<VERSION>-<short-sha>`, e.g. `0.8.2-a869c13`.
 - **`job-squire-cli` package version:** `<VERSION>+<short-sha>`, e.g.
-  `0.5.0+162722a`, PEP 440-valid. Produced by
+  `0.8.2+a869c13`, PEP 440-valid. Produced by
   `scripts/stamp_cli_version.py` (repo root), which rewrites
   `job_squire_cli/pyproject.toml`'s `version` field from the same
   `VERSION` file plus `git rev-parse --short HEAD`. `.github/workflows/
-  release.yml` runs this and commits the result automatically whenever
-  `VERSION` changes, retargeting that release's tag at the resulting
-  commit -- so every tagged release (and everything `bootstrap.sh`
+  release.yml` runs this whenever `VERSION` changes and opens an
+  auto-merging PR with the stamped result (gated on lint/test/pip-audit,
+  per CI-01) rather than committing directly to `main` -- a direct push
+  would bypass branch protection's required status checks, which only gate
+  PR merges. Once that PR merges, the release tag is retargeted at the
+  merge commit -- so every tagged release (and everything `bootstrap.sh`
   installs from one) always carries a correctly stamped version. The
-  committed value in `pyproject.toml` between releases is a `+dev`
-  placeholder, not a real one; don't hand-run the script expecting that
-  placeholder to matter outside of local/manual builds.
+  committed value in `pyproject.toml` between releases is simply the last
+  release's real stamped value (increasingly stale until the next stamp
+  lands), not a placeholder.
 
-Both numbers always agree on the base (`0.5.0` in the example above) and
+Both numbers always agree on the base (`0.8.2` in the example above) and
 differ only in the separator their target format requires.

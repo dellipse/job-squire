@@ -19,8 +19,10 @@ Free/Pro/Max/Team/Enterprise (launched March 2026).
   **30-day Bearer token**, and sends it on every call. The `asgi_app` wrapper handles the
   `/.well-known/...` discovery, `/oauth/register|authorize|token`, and gates `/mcp` on a valid
   token. `/health` is open and returns `{"ok": true}`.
-- OAuth clients/codes/tokens are kept **in memory**, so a container restart invalidates them —
-  re-authorizing takes ~10 seconds. Only the **user** account (role `user`) may authorize.
+- OAuth clients/codes are kept **in memory** and expire in 10 minutes. Access tokens are
+  **persisted** encrypted to `DATA_DIR/oauth_tokens.json` (30-day TTL) and survive a container
+  restart. Either Job Squire account (admin or user) may sign in to authorize an MCP client — this
+  is intentional for the two-user model.
 - A **static API key** (`Authorization: Bearer <key>`, generated on the Settings page and stored
   Fernet-encrypted in `AIConfig.mcp_api_key_enc`) is also accepted, for scripts and non-Claude
   tools that can't complete OAuth's browser redirect — see `app/mcp_auth.py` for the full token

@@ -107,7 +107,9 @@
     <a href="https://console.groq.com" target="_blank" rel="noopener">Groq</a>, and
     <a href="https://openrouter.ai" target="_blank" rel="noopener">OpenRouter</a> all offer
     free API tiers that work well here. Your identifiers are automatically replaced
-    with placeholders before anything is sent (see
+    with placeholders before anything is sent, and a heuristic toggle also flags
+    likely personal names it finds outside your Contacts list — on by default,
+    occasionally over-eager, easy to turn off (see
     <a href="{{ url_for('settings.settings', _anchor='tab-claude') }}">Privacy settings</a>).
     Add keys under Settings &rarr; AI &rarr; Providers.
   </div>
@@ -448,10 +450,11 @@
 {# ══════════════ notifications ══════════════ #}
 {% elif step_key == 'notifications' %}
 <section class="card">
-  <p>Job Squire can email you search digests, follow-up reminders, and the weekly
-    strategy review — sent from your own instance to your own inbox, not bulk mail
-    to strangers. That matters for deliverability: this is exactly the low-volume,
-    single-recipient case that free email providers handle well without tripping
+  <p>Job Squire can email you search digests, follow-up reminders, weekly strategy
+    reviews, and rejection-pattern alerts — sent from your own instance to your own
+    inbox, not bulk mail to strangers. That matters for deliverability: this is
+    exactly the low-volume, single-recipient case that free email providers handle
+    well without tripping
     spam filters.</p>
 
   {% if smtp.enabled and smtp.host %}

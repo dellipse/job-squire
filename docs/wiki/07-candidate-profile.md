@@ -21,6 +21,7 @@ When Claude is connected in MCP mode, it reads these documents directly when tai
 
 **Asset kinds:**
 - Base Resume
+- Custom Resume (a markdown draft slot, distinct from Base Resume)
 - Recommendation Letter
 - Cover Letter Template
 - Certification

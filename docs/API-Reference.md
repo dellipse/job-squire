@@ -32,14 +32,13 @@ If `INGEST_API_KEY` isn't set in `data/.env`, or the provided key doesn't match,
       "source":      "external-claude",
       "external_id": "acme-42",
       "salary":      "$70,000 - $90,000",
-      "work_mode":   "Hybrid",
-      "posted_date": "2026-06-20"
+      "date_posted": "2026-06-20"
     }
   ]
 }
 ```
 
-All fields except `title` are optional. `external_id` is used for deduplication -- jobs with a matching `external_id` are skipped. An optional top-level `created_by` string tags who/what submitted the batch (defaults to `"api"`).
+All fields except `title` are optional. `external_id` is used for deduplication -- jobs with a matching `external_id` are skipped. An optional top-level `created_by` string tags who/what submitted the batch (defaults to `"api"`). `work_mode` is not accepted here -- new jobs ingested this way are always created with `work_mode="Unknown"`.
 
 **Response:**
 
@@ -128,7 +127,7 @@ Returns the document library (base resume, rec letters, certs, portfolio). Text/
 get_candidate_assets(kind: str = "") -> list
 ```
 
-Valid `kind` values: `Resume`, `Cover Letter`, `Recommendation Letter`, `Certificate`, `Portfolio`, `Other`.
+Valid `kind` values: `Base Resume`, `Resume`, `Recommendation Letter`, `Cover Letter Template`, `Certification`, `Portfolio`, `Other`.
 
 ---
 
@@ -160,7 +159,7 @@ Returns the recruiter/contact list, optionally filtered by type.
 list_contacts(contact_type: str = "") -> list
 ```
 
-Valid `contact_type` values: `Recruiter`, `Hiring Manager`, `Networking`, `Staffing Agency`, `Other`.
+Valid `contact_type` values: `Recruiter`, `Staffing Agency`, `Hiring Manager`, `Networking`, `Reference`.
 
 ---
 
@@ -216,6 +215,16 @@ save_candidate_profile(profile_markdown: str) -> dict
 
 ---
 
+#### `save_resume_draft`
+
+Saves the final resume from the Getting Started resume-interview routine, replacing any previous draft, and optionally folds extracted facts into the candidate profile.
+
+```
+save_resume_draft(resume_markdown: str, profile_facts: str = "") -> dict
+```
+
+---
+
 #### `add_jobs`
 
 Pushes one or more found jobs into Job Squire as `Saved`. Deduplicated via `external_id` (same as the ingest API). Used by Claude when searching with its own connectors.
@@ -226,7 +235,7 @@ add_jobs(jobs: list) -> dict
 
 Each job object in the list follows the same schema as the ingest API request body.
 
-Response: `{"created": N, "skipped": N, "total": N}`.
+Response: `{"created": N, "skipped": N, "ids": [<created job ids>]}`.
 
 ---
 
@@ -237,8 +246,8 @@ Writes pipeline analysis back to Job Squire: a global insight and optional per-j
 ```
 save_analysis(
   overall_summary:   str,
-  recommendations:   str,
-  jobs:              list   # [{job_id, notes, fit_score?}]
+  recommendations:   list   # list of recommendation strings
+  jobs:              list   # [{id, analysis}]
 ) -> dict
 ```
 

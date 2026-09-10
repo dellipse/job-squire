@@ -23,14 +23,37 @@ job-squire/
     forms.py               # WTForms (also provide CSRF)
     crypto.py              # Fernet encrypt/decrypt for stored secrets
     timezones.py           # map a "City, ST" location to an IANA timezone (for the scheduler)
-    auth.py                # auth blueprint: login / logout
-    main.py                # main blueprint: everything else (UI, API, settings)
-    providers.py           # job-board adapters (Adzuna, Jooble, USAJOBS, The Muse) + retry/backoff
+    auth.py                # auth blueprint: login / logout / self-service password change
+    main.py                # main blueprint: dashboard, health check, timeline, guide/wiki
+    jobs.py                # jobs blueprint: jobs/interviews/attachments (split from main.py in v0.8.0)
+    contacts.py            # contacts blueprint: contacts/submissions (split from main.py in v0.8.0)
+    kits.py                # kits blueprint: application-kit generator (split from main.py in v0.8.0)
+    settings.py            # settings blueprint: search/sources/email/AI/profile/assets/ingest API
+    ai_tasks.py            # AI tab + analyze/run-task/triage-batch routes (split from main.py in v0.8.0)
+    task_status.py         # shared background-thread/poll routes for long-running AI calls
+    onboarding.py          # Getting Started walkthrough blueprint
+    providers.py           # job-board adapters (The Muse, Jobicy, ZipRecruiter, Google Jobs, Adzuna,
+                            # Jooble, USAJOBS) + retry/backoff
     search.py              # run_search(), ingest_jobs() dedup, cooldowns, email triggers
     notify.py              # SMTP send + digest + error-report builders
     worker.py              # APScheduler process (python -m app.worker)
-    ai.py                  # AI payload, prompt, JSON parsing, Anthropic API call, apply
+    ai.py                  # AI payload, prompt, JSON parsing, multi-provider API calls, apply
+    privacy.py             # PII/SPI redaction + rehydration for all AI paths
+    prompts.py             # Claude Pro routine prompt templates
     mcp_server.py          # remote MCP server with OAuth (python -m app.mcp_server)
+    mcp_auth.py            # MCP OAuth 2.0/PKCE endpoints and static-key verification
+    backup.py              # in-app backup archive builder
+    backup_cli.py          # container-side backup entrypoint (job-squire-cli)
+    mcp_token_cli.py       # container-side MCP token entrypoint (job-squire-cli)
+    ollama_provider_cli.py # container-side Ollama provider entrypoint (job-squire-cli)
+    secrets_copy_cli.py    # container-side settings-copy entrypoint (job-squire-cli)
+    db_utils.py            # transient SQLite retry helper
+    deploy.py              # DEPLOY_MODE preset resolution + startup guard
+    docgen.py              # Markdown -> .docx renderer
+    kit_export.py          # ATS cleaning + PDF export for saved kits
+    resume_convert.py      # deterministic resume upload -> Markdown
+    sample_locations.py    # placeholder "City, ST" text for empty-field copy
+    websearch.py           # best-effort DuckDuckGo research for kit generation
     candidate_profile.md   # bundled master profile, copied to /data on first boot (then edited there)
     templates/             # Jinja2 templates
     static/style.css       # all styling
@@ -125,54 +148,77 @@ provider keys, SMTP password, Anthropic key; regenerate the MCP token).
 - `GET/POST /login` — rate limited (`10/min; 60/hour` on POST). Looks up the user (username
   lowercased), checks password, logs in, redirects to a safe `next` or the dashboard.
 - `GET /logout`.
+- `GET/POST /account` — rate-limited self-service password change.
 - `_is_safe_next(target)` — only allows relative redirects back into the app.
 
-## `app/main.py` — `main` blueprint (the bulk of the app)
+## `app/main.py` — `main` blueprint
 
-Helpers:
-- `_inject_globals()` — a `app_context_processor` that injects `ai_mode` (drives the "Open in
-  Claude" buttons) and `build_version` (the `BUILD_VERSION` build arg, shown in the page footer)
-  into **every** template.
-- `_claude_search_prompt()` — builds the "Search jobs in Claude" prompt from `SearchConfig` and the
-  configured connector name.
-- `admin_required` — decorator gating admin-only routes (job delete).
-- `_singleton(model)` — get-or-create the id=1 row for a config model.
-- `_business_days_from(start, n)` — date `n` business days out (default follow-up = 3 business days).
-- `_add_job_note(job_id, content, note_type)` — append an activity-log entry; called by edits to
-  auto-log status and follow-up changes.
-- `_apply_job_form` / `_apply_interview_form` / `_apply_contact_form` / `_apply_submission_form` —
-  copy form fields onto a model. `_apply_submission_form` parses the string `contact_id`/`job_id`
-  selects to ints (or None) and back-fills company/role from a linked job when left blank.
-- `_populate_submission_choices(form)` — fills the recruiter and job dropdowns on `SubmissionForm`.
-- `_build_kit(...)`, `_load_profile()` / `_save_profile()`, `_load_profile_prompt()` /
-  `_save_profile_prompt()`, `KIT_PROMPT` — assemble the application-kit markdown and read/write the
-  profile + profile-generation prompt files in `/data`. `KIT_PROMPT` is the full multi-step kit
-  instruction set (fit assessment, company + salary research, ATS keyword analysis, the tailored
-  documents, save to disk, push back via MCP); `_build_kit` substitutes the candidate location and
-  `fit_salary_floor` into it.
-- Jobs-list sort/pagination helpers: `_parse_sort` / `_apply_sort` (multi-column sort, NULLs last)
-  with per-page and sort preferences persisted in the session.
-- `_user_guide_path()` / `_render_user_guide()` — locate and render the bundled user-guide
-  Markdown to HTML (via the `markdown` library) for the `/guide` page. The guide ships in
-  `docs/` and is copied into the image at `docs/` by the Dockerfile.
-- `_int(...)` — tolerant int parsing for settings forms.
+As of the v0.8.0 blueprint split (see CHANGELOG), `main.py` only holds the dashboard and a handful
+of app-wide routes — jobs, contacts, kits, settings, and AI routes now live in their own
+blueprints (below). Every route path is unchanged from pre-split; only the Flask endpoint name
+(and which file it lives in) moved.
 
-### Route table
+Helpers: `_inject_globals()` (context processor injecting `ai_mode`/`build_version` into every
+template), `admin_required` (decorator gating admin-only routes), `_singleton(model)` (get-or-create
+the id=1 row for a config model), `_worker_heartbeat_status()`/`_stale_cutoffs()` (worker-heartbeat
+staleness check backing the dashboard warning and `/health`), `_bookmarklet_js()` (generates the
+quick-apply bookmarklet's JS), `_user_guide_path()`/`_render_user_guide()` (render bundled
+Markdown docs for `/guide` and `/wiki/<page>`), `_load_profile()`/`_save_profile()`/
+`_load_profile_prompt()`/`_save_profile_prompt()` (read/write the candidate profile + its
+generation prompt in `/data`).
 
 | Method & path | Function | Notes |
 |---|---|---|
+| `GET /health` | `health` | Aggregated healthcheck; also checks worker heartbeat staleness. |
 | `GET /` | `dashboard` | Metrics, pipeline, follow-ups due (jobs + recruiters), open submissions, recent activity, latest AI summary. |
-| `GET /jobs` | `jobs_list` | Filter by status/search; multi-column sort + pagination (per-page & sort persisted in session). Passes `search_prompt`. |
+| `GET /guide` | `user_guide` | Renders the bundled `Job_Squire_User_Guide.md` as an in-app page. |
+| `GET /wiki/<page>` | `wiki_page` | Renders a bundled `docs/wiki/*.md` page. |
+| `GET /timeline` | `timeline` | Cross-job activity timeline. |
+| `GET /setup` | `setup_redirect` | First-boot redirect into the Getting Started walkthrough. |
+| `GET /api/mcp-ping` | `mcp_ping` | Lightweight liveness check used by the MCP setup flow. |
+
+## `app/jobs.py` — `jobs` blueprint
+
+Helpers: `_claude_search_prompt()` (the "Search jobs in Claude" prompt), `_business_days_from(start,
+n)` (date n business days out; default follow-up = 3 business days), `_add_job_note(job_id, content,
+note_type)` (append an activity-log entry), `_apply_job_form`/`_apply_interview_form` (copy form
+fields onto a model), `_parse_sort`/`_apply_sort` (multi-column sort, NULLs last, with per-page and
+sort preferences persisted in the session).
+
+| Method & path | Function | Notes |
+|---|---|---|
+| `GET /jobs` | `jobs_list` | Filter by status/search; multi-column sort + pagination. Passes `search_prompt`. |
+| `POST /jobs/save-default-view` | `save_default_view` | Persist the current filter/sort as the default. |
+| `POST /jobs/clear-default-view` | `clear_default_view` | Clear the saved default view. |
 | `GET/POST /jobs/new` | `job_new` | Create a job. |
 | `GET /jobs/<id>` | `job_detail` | Detail + attachments + debriefs + activity log. Passes `ai_mode`, connector name. |
 | `GET/POST /jobs/<id>/edit` | `job_edit` | Auto-logs status and follow-up changes to the activity log. |
+| `POST /jobs/<id>/ats-gap` | `job_ats_gap` | Run ATS keyword-gap analysis (Feature 4). |
+| `POST /jobs/<id>/score-fit` | `job_score_fit` | One-off AI fit score for a single job. |
+| `POST /jobs/<id>/draft-followup` | `job_draft_followup` | One-off AI follow-up draft for a single job. |
+| `POST /jobs/build-kits-api` | `jobs_build_kits_api` | Kick off API-mode kit generation for one or more jobs. |
+| `POST /jobs/<id>/prep-interview` | `job_prep_interview` | Runs the resume-interview-style interview prep routine for a job. |
 | `POST /jobs/<id>/delete` | `job_delete` | **admin only**. Deletes files too; unlinks submissions. |
+| `POST /jobs/bulk-update` | `jobs_bulk_update` | Bulk status/follow-up update across selected jobs. |
 | `POST /jobs/<id>/notes` | `job_add_note` | Add a manual activity-log note. |
 | `POST /jobs/<id>/set-followup` | `job_set_followup` | Set/clear the follow-up date (defaults to +3 business days). |
 | `GET/POST /jobs/<id>/interviews/new` | `interview_new` | Add a debrief. |
 | `GET/POST /interviews/<id>/edit` | `interview_edit` | |
 | `POST /interviews/<id>/delete` | `interview_delete` | |
-| `GET /contacts` | `contacts_list` | Recruiter/contact list. Filter by type/search. |
+| `POST /jobs/<id>/upload` | `attachment_upload` | Validated doc upload to `/data/uploads`. |
+| `GET /attachments/<id>/download` | `attachment_download` | Auth-gated file serving. |
+| `POST /attachments/<id>/delete` | `attachment_delete` | |
+| `GET /export/csv` | `export_csv` | Whole Job Squire as CSV. |
+
+## `app/contacts.py` — `contacts` blueprint
+
+Helpers: `_apply_contact_form`, `_populate_submission_choices(form)` (fills the recruiter/job
+dropdowns on `SubmissionForm`), `_apply_submission_form` (parses string `contact_id`/`job_id`
+selects to ints or None, back-fills company/role from a linked job when left blank).
+
+| Method & path | Function | Notes |
+|---|---|---|
+| `GET /contacts` | `contacts_list` | Recruiters/Contacts list. Filter by type/search. |
 | `GET/POST /contacts/new` | `contact_new` | Create a contact. |
 | `GET /contacts/<id>` | `contact_detail` | Contact detail + their submission history. |
 | `GET/POST /contacts/<id>/edit` | `contact_edit` | |
@@ -181,36 +227,90 @@ Helpers:
 | `GET/POST /submissions/new` | `submission_new` | Log a submission. GET `?contact_id=N`/`?job_id=N` pre-fills. |
 | `GET/POST /submissions/<id>/edit` | `submission_edit` | |
 | `POST /submissions/<id>/delete` | `submission_delete` | |
-| `POST /jobs/<id>/upload` | `attachment_upload` | Validated doc upload to `/data/uploads`. |
-| `GET /attachments/<id>/download` | `attachment_download` | Auth-gated file serving. |
-| `POST /attachments/<id>/delete` | `attachment_delete` | |
-| `GET /export/csv` | `export_csv` | Whole Job Squire as CSV. |
-| `GET /guide` | `user_guide` | Renders the bundled `Job_Squire_User_Guide.md` as an in-app page. |
+
+## `app/kits.py` — `kits` blueprint
+
+Helpers: `_build_kit(...)`, `KIT_PROMPT` — assemble the application-kit markdown. `KIT_PROMPT` is
+the full multi-step kit instruction set (fit assessment, company + salary research, ATS keyword
+analysis, the tailored documents, save to disk, push back via MCP); `_build_kit` substitutes the
+candidate location and `fit_salary_floor` into it.
+
+| Method & path | Function | Notes |
+|---|---|---|
 | `GET /jobs/<id>/kit` | `job_kit` | Download the application-kit markdown for a job. |
 | `GET/POST /kit` | `kit_hub` | Kit generator. GET `?job_id=N` pre-fills from a tracked job. |
-| `GET /export/ai` | `export_ai` | Download the pipeline JSON for manual AI analysis. |
-| `GET/POST /ai` | `ai_hub` | AI tab; POST is the manual import. Renders per `AIConfig.mode`. |
-| `POST /ai/analyze` | `ai_analyze` | API mode: calls Anthropic (with thinking mode), applies result. |
-| `POST /settings/ai` | `settings_ai` | Save AI mode/model/key/connector name/thinking mode. |
+| `POST /kit/run` | `kit_run` | API-mode kit generation (background thread, polled via `task_status`). |
+| `POST /kit/download-docx` | `kit_download_docx` | Convert a saved kit to `.docx` on demand. |
+| `GET/POST /tools/kit-batch` | `kit_batch` | Batch kit generation across multiple applied jobs. |
+
+## `app/settings.py` — `settings` blueprint
+
+Helper: `_int(...)` — tolerant int parsing for settings forms. Also owns the JSON ingest API.
+
+| Method & path | Function | Notes |
+|---|---|---|
+| `GET /settings/backup/download` | `settings_backup_download` | Download a full data-snapshot `.tgz`. |
+| `POST /settings/ai-mode` | `settings_ai_mode` | Toggle Manual/API/MCP mode flags. |
+| `POST /settings/claude-pro` | `settings_claude_pro` | Save the Claude Pro connector name. |
+| `POST /settings/ai` | `settings_ai` | Save AI model/key/thinking mode. |
+| `POST /settings/mcp-api-key` | `settings_mcp_api_key` | Generate/rotate the static MCP bearer key. |
+| `POST /settings/mcp-revoke-token` | `settings_mcp_revoke_token` | Revoke a single OAuth token. |
+| `POST /settings/mcp-revoke-all` | `settings_mcp_revoke_all` | Revoke all OAuth tokens. |
+| `POST /settings/ai/tasks` | `settings_ai_tasks` | Save per-task (`AITaskConfig`) provider assignments. |
+| `POST /settings/ai/providers/add` | `settings_ai_provider_add` | Add a row to the ranked provider chain. |
+| `POST /settings/ai/providers/<id>/edit` | `settings_ai_provider_edit` | |
+| `POST /settings/ai/providers/<id>/delete` | `settings_ai_provider_delete` | |
+| `POST /settings/ai/providers/<id>/toggle` | `settings_ai_provider_toggle` | |
+| `POST /settings/ai/providers/<id>/move-up` | `settings_ai_provider_move_up` | Re-rank. |
+| `POST /settings/ai/providers/<id>/move-down` | `settings_ai_provider_move_down` | Re-rank. |
+| `POST /settings/ai/providers/<id>/test` | `settings_ai_provider_test` | Ping one provider with its saved key. |
+| `POST /settings/ai/privacy` | `settings_ai_privacy` | Save redaction/privacy toggles and custom patterns. |
+| `POST /settings/ai/providers/fallback` | `settings_ai_providers_fallback` | Save "fall back to Anthropic" toggle. |
 | `POST /api/ingest` | `api_ingest` | **CSRF-exempt**, `X-API-Key` = `INGEST_API_KEY`. Batch job push. |
-| `GET /settings` | `settings` | Settings page (Search, Sources, Email, AI, Candidate Profile, Application Kit, History tabs). |
+| `GET /settings` | `settings` | Settings page (Search, Sources, Email, AI, Candidate Profile, Application Kit, History, Backup tabs). |
 | `POST /settings/search` | `settings_search` | Save search targets (validates `"City, ST"`). |
 | `POST /settings/kit` | `settings_kit` | Save the application-kit `fit_salary_floor`. |
+| `POST /settings/providers/save-keyless` | `settings_providers_save_keyless` | Enable/disable keyless providers. |
 | `POST /settings/provider/<provider>` | `settings_provider` | Save+encrypt a provider's keys. |
 | `POST /settings/provider/<provider>/test` | `settings_provider_test` | Ping one provider with its saved key. |
-| `POST /settings/provider/<provider>/pull` | `settings_provider_pull` | Run a full search for one provider now, clear its cooldown. |
+| `POST /settings/provider/<provider>/pull` | `settings_provider_pull` | Run a full search for one provider now (background thread, polled), clear its cooldown. |
 | `POST /settings/smtp` | `settings_smtp` | Save+encrypt SMTP config (incl. admin alert address). |
 | `POST /settings/test-email` | `settings_test_email` | Send a one-off test email. |
-| `POST /settings/run` | `settings_run` | Run the search now (synchronous). |
+| `POST /settings/run` | `settings_run` | Run the search now (background thread, polled). |
 | `POST /settings/assets/upload` | `settings_asset_upload` | Upload a master candidate document. |
 | `GET /assets/<id>/download` | `asset_download` | Download a candidate asset. |
+| `GET /assets/<id>/download-source` | `asset_download_source` | Download the original uploaded file, unconverted. |
+| `POST /assets/<id>/set-base` | `asset_set_base` | Mark an asset as the Base Resume. |
 | `POST /assets/<id>/edit` | `asset_edit` | Edit a candidate asset's kind/label/notes. |
 | `POST /assets/<id>/delete` | `asset_delete` | Delete a candidate asset (and its file). |
 | `POST /settings/profile` | `settings_profile` | Save the candidate profile markdown. |
-| `POST /settings/profile/upload` | `settings_profile_upload` | Replace the profile from an uploaded `.md`. |
 | `POST /settings/profile-prompt` | `settings_profile_prompt` | Save the profile-generation prompt. |
+| `POST /settings/profile/upload` | `settings_profile_upload` | Replace the profile from an uploaded `.md`. |
 
-AI helpers used by routes live in `app/ai.py` (not duplicated in `main.py`).
+## `app/ai_tasks.py` — `ai_tasks` blueprint
+
+| Method & path | Function | Notes |
+|---|---|---|
+| `GET /export/ai` | `export_ai` | Download the pipeline JSON for manual AI analysis. |
+| `GET/POST /ai` | `ai_hub` | AI tab; POST is the manual import. |
+| `POST /ai/analyze` | `ai_analyze` | API mode: calls the ranked provider chain, applies result. |
+| `POST /ai/run/<task>` | `ai_run_task` | Run one automated task (triage/followup/weekly_review/rejection_alert) on demand. |
+| `GET/POST /tools/triage-batch` | `triage_batch` | Batch auto-triage across unscored Saved jobs. |
+
+AI logic itself (provider calls, prompt building, JSON parsing, apply) lives in `app/ai.py`, not
+duplicated in `ai_tasks.py`.
+
+## `app/task_status.py` — background-task polling
+
+Shared infrastructure backing the "runs in a background thread, poll for progress" pattern used by
+kit generation, triage, search pulls, and AI analysis (adopted after a class of gunicorn-timeout
+bugs from running slow AI/search calls on the request thread — see CHANGELOG REL-01 and the
+`settings_provider_pull` fix in [0.8.1]).
+
+| Method & path | Function | Notes |
+|---|---|---|
+| `GET /ai/task/<run_id>/status` | `task_status_view` | Render the task-status page for a run. |
+| `GET /ai/task/<run_id>/poll` | `task_poll` | JSON poll endpoint the status page calls. |
 
 ## `app/providers.py` — job-board adapters
 

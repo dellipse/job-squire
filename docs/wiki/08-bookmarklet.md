@@ -4,9 +4,11 @@ The bookmarklet lets you capture any job posting in one click without copying an
 
 ## Setup (once)
 
-1. Go to **Settings → AI** tab.
-2. Scroll to the **Bookmarklet** section.
-3. Drag the **+ Add to JobSquire** button to your browser's bookmarks bar.
+1. Go to **Settings → AI → Tools** and find the **Quick-apply bookmarklet** card.
+2. Click **Copy code** to copy the bookmarklet's JavaScript.
+3. Create a new bookmark in your browser and paste the copied code into the bookmark's URL field
+   (the card gives separate instructions for Chrome/Edge, Firefox, and Safari, since none of them
+   let you drag-and-drop a piece of code into place).
 
 Do this once. The bookmarklet is tied to your Job Squire's URL so it opens the right place.
 

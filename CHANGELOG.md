@@ -3,8 +3,10 @@
 All notable changes to Job Squire are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
-Versioning follows the `VERSION` file at the repo root, displayed in the app
-footer as `<VERSION>-<build-sha>`.
+Versioning follows the `VERSION` file at the repo root, rendered two ways for two
+targets: the app/Docker image tag as `<VERSION>-<build-sha>` (shown in the app
+footer) and the `job-squire-cli` package as `<VERSION>+<build-sha>` (PEP 440). See
+`docs/job-squire-cli.md` ("Versioning").
 
 ## [Unreleased]
 
