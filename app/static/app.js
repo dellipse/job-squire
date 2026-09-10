@@ -793,6 +793,10 @@ document.addEventListener('DOMContentLoaded', function () {
         if (tsTask === 'build_kit' && r.title !== undefined && r.company !== undefined && !parts.length) {
           parts.push('Kit built for ' + r.title + ' at ' + r.company);
         }
+        if (tsTask.indexOf('pull_') === 0 && r.found !== undefined) {
+          parts.push('Fetched: ' + r.found + ', ' + r.created + ' new'
+            + (r.skipped ? ', ' + r.skipped + ' already in Job Squire' : '') + '.');
+        }
         summary.textContent = parts.length ? parts.join(' · ') : 'Complete.';
         document.title = 'Done — ' + heading.textContent.trim();
 

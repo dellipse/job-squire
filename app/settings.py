@@ -81,6 +81,7 @@ from .models import (
 from .notify import send_email
 from .providers import PROVIDERS, search_provider
 from .search import ingest_jobs, run_search
+from .task_status import _TaskStatus
 from .timezones import parse_state
 
 log = logging.getLogger(__name__)
@@ -1000,7 +1001,18 @@ def settings_provider_test(provider):
 @login_required
 @admin_required
 def settings_provider_pull(provider):
-    """Run a full search for one provider, ingest results, and clear any cooldown."""
+    """Run a full search for one provider, ingest results, and clear any cooldown --
+    in a background thread, polled via the shared task-status page.
+
+    search_provider() throttles between search titles (60-120s per gap; see
+    THROTTLE_SECONDS in app/providers.py) and used to run inline on this request,
+    so as few as 4 configured titles (3 throttle gaps) reliably exceeded gunicorn's
+    180s --timeout and got the worker SIGABRT'd mid-request -- the same class of
+    gunicorn-timeout-kills-a-slow-request bug REL-01 already fixed for
+    job_prep_interview/ai_analyze/the resume interview. Routes through that same
+    background-thread + poll pattern instead of joining that list of fixes with a
+    fourth, parallel one.
+    """
     if provider not in PROVIDERS:
         abort(404)
     label = PROVIDERS[provider]["label"]
@@ -1023,39 +1035,60 @@ def settings_provider_pull(provider):
         "results_per_query": (cfg_row.results_per_query if cfg_row else None) or 25,
     }
     # Tracked the same way a full search is, so it shows up in Settings | History
-    # instead of silently vanishing after the flash message disappears.
+    # instead of silently vanishing after the task-status tab is closed.
     run = SearchRun(trigger="manual", status="running", providers=provider)
     db.session.add(run)
     commit()
+    run_id_db = run.id
 
-    results, err = search_provider(provider, creds, titles, cfg)
-    if err:
-        run.finished_at = datetime.now(timezone.utc)
-        run.status = "error"
-        run.detail = err[:1000]
-        commit()
-        flash(f"{label} pull failed: {err}", "danger")
-        return redirect(url_for("settings.settings"))
+    run_id = uuid.uuid4().hex
+    task_name = f"pull_{provider}"
+    data_dir = current_app.config["DATA_DIR"]
+    status = _TaskStatus(run_id, task_name, data_dir)
+    _app = current_app._get_current_object()
 
-    from .search import _load_cooldowns, _save_cooldowns
-    cooldowns = _load_cooldowns()
-    if provider in cooldowns:
-        del cooldowns[provider]
-        _save_cooldowns(cooldowns)
+    def _run():
+        with _app.app_context():
+            db_run = db.session.get(SearchRun, run_id_db)
+            try:
+                status.log(f"INFO Pulling {label}…")
+                results, err = search_provider(provider, creds, titles, cfg)
+                if err:
+                    db_run.finished_at = datetime.now(timezone.utc)
+                    db_run.status = "error"
+                    db_run.detail = err[:1000]
+                    commit()
+                    status.fail(err)
+                    return
 
-    created, skipped = ingest_jobs(results, created_by=f"pull:{provider}")
-    run.finished_at = datetime.now(timezone.utc)
-    run.found = len(results)
-    run.created = len(created)
-    run.skipped = skipped
-    run.status = "ok"
-    commit()
-    flash(
-        f"{label}: fetched {len(results)}, {len(created)} new"
-        + (f", {skipped} already in Job Squire" if skipped else "") + ".",
-        "success",
-    )
-    return redirect(url_for("settings.settings"))
+                from .search import _load_cooldowns, _save_cooldowns
+                cooldowns = _load_cooldowns()
+                if provider in cooldowns:
+                    del cooldowns[provider]
+                    _save_cooldowns(cooldowns)
+
+                created, skipped = ingest_jobs(results, created_by=f"pull:{provider}")
+                db_run.finished_at = datetime.now(timezone.utc)
+                db_run.found = len(results)
+                db_run.created = len(created)
+                db_run.skipped = skipped
+                db_run.status = "ok"
+                commit()
+                status.done({
+                    "provider": provider, "label": label,
+                    "found": len(results), "created": len(created), "skipped": skipped,
+                })
+            except Exception as exc:  # noqa: BLE001
+                db.session.rollback()
+                log.exception("provider pull failed (provider=%s)", provider)
+                db_run.finished_at = datetime.now(timezone.utc)
+                db_run.status = "error"
+                db_run.detail = str(exc)[:1000]
+                commit()
+                status.fail(exc)
+
+    threading.Thread(target=_run, daemon=True).start()
+    return redirect(url_for("task_status.ai_task_status", run_id=run_id, task=task_name))
 
 
 @settings_bp.route("/settings/smtp", methods=["POST"])
