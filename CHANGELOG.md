@@ -10,6 +10,27 @@ footer) and the `job-squire-cli` package as `<VERSION>+<build-sha>` (PEP 440). S
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-09-09
+
+### Fixed
+
+- Full documentation accuracy audit: `CLAUDE.md` and `docs/code-reference.md` still described
+  the pre-0.8.0 3-container/bind-mount topology and the pre-blueprint-split `main.py`; corrected
+  to the real 1-container/3-process/named-volume model and rewrote the stale 36-row route table
+  into seven accurate per-blueprint tables. MCP tool count was wrong everywhere it was stated
+  (23, one place said 22) -- actual is 24; `save_resume_draft` was a real tool missing from every
+  list, and a false "only the user account can authorize OAuth" claim is corrected (either
+  account can). `docs/API-Reference.md`'s `add_jobs`/`save_analysis` response shapes and two enum
+  value lists are corrected to match `models.py`. `docs/configuration.md`'s AI-provider type list
+  was missing 5 of 12 real types; documented the per-task `AITaskConfig` provider assignment and
+  two undocumented env vars (`AI_HTTP_TIMEOUT`, `AI_LOCAL_HTTP_TIMEOUT`). `docs/job-squire-cli.md`
+  falsely called `update`/`backup`/`restore` "structural stubs" (all fully implemented); added the
+  missing backup/restore mechanism section, the SEC-08/09/11 hardening, and the Podman rootless
+  pasta-network path. Also fixes a real bug in `app/onboarding.py`: the Getting Started
+  walkthrough's "AI will automatically score new jobs" claim was driven by a flag that didn't
+  match what the worker actually gates auto-triage on, and could show even when auto-triage
+  wasn't active.
+
 ## [0.8.2] - 2026-09-10
 
 ### Added
