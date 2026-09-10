@@ -8,6 +8,32 @@ footer as `<VERSION>-<build-sha>`.
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-09-10
+
+### Added
+
+- Expanded AI-privacy redaction (`app/privacy.py`), all local regex/heuristic -- no ML/NER
+  dependency:
+  - `Interview.interviewer` now feeds known-value redaction; previously it was a free-text name
+    invisible to redaction anywhere else it was mentioned (prep notes, follow-up drafts).
+  - Two opt-out regex heuristics catch a person's name even when they were never entered as a
+    Contact: a name directly following a trigger phrase ("interviewer", "hiring manager",
+    "referred by", ...), and any two Title Case words where the first is a common English given
+    name. Both share one toggle, `AIConfig.redact_heuristic_names` (AI tab -> Privacy), default on.
+  - New always-on built-ins: a generic international phone pattern alongside the existing US-only
+    one, and a credit-card-shaped pattern gated on a Luhn check so ordinary long numbers aren't
+    swallowed.
+  - Three new SPI coaching categories -- religion, sexual orientation, race/ethnicity -- anchored
+    to first-person disclosure phrasing ("I am ...", "my faith is ...") so an employer name like
+    "Catholic Charities" or an idiom like "Black Friday" isn't mistaken for a disclosure and
+    stripped.
+  - `docs/configuration.md`'s "Redaction scope" section documents all of the above.
+
+### Changed
+
+- The "Recruiters" nav tab and page title are now "Recruiters/Contacts" -- the page already covers
+  non-recruiter contacts (hiring managers, networking contacts), not just recruiters.
+
 ## [0.8.1] - 2026-09-10
 
 ### Fixed
