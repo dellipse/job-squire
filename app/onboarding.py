@@ -33,7 +33,7 @@ from flask_login import current_user, login_required
 
 from .db_utils import commit, with_db_retry
 from .extensions import db
-from .models import (AIConfig, AIProviderConfig, CandidateAsset,
+from .models import (AIConfig, AIProviderConfig, AITaskConfig, CandidateAsset,
                      OnboardingState, ProviderCredential, SearchConfig,
                      SearchRun, SmtpConfig, User, ASSET_KINDS)
 from .providers import PROVIDERS, REMOTE_ONLY_PROVIDERS
@@ -510,9 +510,13 @@ def step(step):
         ctx["enabled_providers"] = ProviderCredential.query.filter_by(enabled=True).all()
         ctx["last_run"] = SearchRun.query.order_by(SearchRun.id.desc()).first()
         ai_cfg = db.session.get(AIConfig, 1)
+        triage_cfg = AITaskConfig.query.filter_by(task_name="triage").first()
+        triage_enabled = (
+            triage_cfg.enabled if triage_cfg is not None
+            else bool(ai_cfg and ai_cfg.auto_triage_enabled))
         ctx["ai_active"] = bool(
-            AIProviderConfig.query.filter_by(enabled=True).count()
-            or (ai_cfg and (ai_cfg.api_enabled or ai_cfg.mcp_enabled)))
+            ai_cfg and ai_cfg.api_enabled and triage_enabled
+            and AIProviderConfig.query.filter_by(enabled=True).count())
         ctx["search_ready"] = bool(cfg and cfg.titles.strip() and cfg.location.strip()
                                    and ctx["enabled_providers"])
     elif step == "notifications":

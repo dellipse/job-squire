@@ -80,8 +80,14 @@ cosign verify-attestation \
   ghcr.io/dellipse/job-squire:latest
 ```
 
-A versioned CycloneDX SBOM is also committed to [`sbom/`](sbom/) on every
-build.
+A CycloneDX SBOM is generated on every build and attached to the published image
+as a signed cosign attestation (not committed to the repo — see
+[`sbom/README.md`](sbom/README.md)). Pull it with:
+
+```
+cosign download attestation ghcr.io/dellipse/job-squire:latest \
+  --predicate-type https://cyclonedx.org/bom | jq -r '.payload | @base64d | fromjson | .predicate'
+```
 
 ## Security model and scope
 

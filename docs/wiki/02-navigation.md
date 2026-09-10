@@ -10,20 +10,21 @@ The navigation bar across the top gives you access to everything.
 
 **Timeline** — a visual history: a bar chart of applications per week for the last 12 weeks, plus a chronological activity feed showing every application, status change, and interview.
 
-**Recruiters** — track staffing agency contacts and the submissions they make on your behalf. See [Recruiters and Staffing Agencies](05-recruiters.md).
+**Recruiters/Contacts** — track staffing agency contacts and the submissions they make on your behalf. See [Recruiters and Staffing Agencies](05-recruiters.md).
 
 **Application kit** — build a tailored application package for any role. See [Application Kits](06-application-kits.md).
 
 **AI analysis** — analyze your whole pipeline for patterns and get per-job advice. See [AI Pipeline Analysis](11-ai-analysis.md).
 
-**Settings** — organized into seven tabs:
+**Settings** — organized into eight tabs:
 - **Search** — what to look for and where (titles, location, radius, age filter).
 - **Sources** — API keys for each job board.
 - **Email** — SMTP notification settings.
-- **AI** — AI mode, Anthropic API key, model choice, thinking mode, connector setup, automated feature toggles, and Claude Pro routine prompts.
+- **AI** — AI mode, provider chain, model choice, thinking mode, connector setup, automated feature toggles, and Claude Pro routine prompts.
 - **Candidate Profile** — your master candidate profile, document library, and profile-generation tools.
-- **Application Kit** — the salary floor used in kit fit assessments and the kit output folder path.
+- **Application Kit** — the salary floor used in kit fit assessments.
 - **History** — log of every search run.
+- **Backup** — download a full data snapshot (`.tgz`); restoring is a CLI step, documented on this tab.
 
 **Guide** — this documentation, served inside the app.
 

@@ -126,3 +126,6 @@ ad-hoc use without the CLI:
 
 Neither of these encrypts the archive or bundles the registry/version manifest the CLI's format
 does, so prefer `job-squire backup` for anything you intend to keep or move to another machine.
+Both scripts apply owner-only permissions (`umask 077`, `chmod 600` on the archive) and
+`restore.sh` rejects any archive entry with an absolute or `..` path before extracting — see each
+script's header comment.

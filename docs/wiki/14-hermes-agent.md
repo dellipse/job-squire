@@ -8,7 +8,7 @@ Hermes is a good fit if you want to run a local agent against your job pipeline,
 
 ## How it connects
 
-Hermes connects to Job Squire as an MCP client over HTTP, using a static Bearer token for authentication. You generate the token in Job Squire, put it in Hermes's config, and Hermes discovers and registers all 22 Job Squire tools automatically at startup.
+Hermes connects to Job Squire as an MCP client over HTTP, using a static Bearer token for authentication. You generate the token in Job Squire, put it in Hermes's config, and Hermes discovers and registers all Job Squire tools automatically at startup.
 
 This is a different path from the Claude Pro connector (which uses OAuth). The static token never expires on its own — rotate it manually in Settings → AI → MCP Connector if needed.
 
@@ -78,7 +78,7 @@ Hermes substitutes `${JOB_SQUIRE_API_KEY}` at runtime from that file.
     connect_timeout: 10   # initial connection timeout
     enabled: true
     tools:
-      include:            # restrict to specific tools (omit to allow all 22)
+      include:            # restrict to specific tools (omit to allow all)
         - get_pipeline
         - list_jobs
         - save_analysis

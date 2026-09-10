@@ -26,6 +26,10 @@ Before connecting any agent, confirm:
    curl https://mcp-squire.yourdomain.com/health
    # expect: {"ok": true}
    ```
+5. If you're using the static-key methods (Hermes Agent, OpenClaw) below on a network-reachable
+   instance (`DEPLOY_MODE=network` — the typical case for any production deploy), also check
+   **Allow the static key on this network-reachable instance** in Settings → AI → MCP Connector.
+   The static key is loopback-only until you opt in.
 
 The MCP server listens on port 9000 (internal). SWAG proxies it over HTTP/1.1 (`http2 off` — required because MCP streaming breaks nginx HTTP/2 framing).
 
@@ -40,7 +44,7 @@ Claude's connector handshake uses **OAuth 2.0 Authorization Code flow with PKCE*
 1. In Claude, go to **Settings → Connectors → Add custom connector**.
 2. Paste the base URL: `https://mcp-squire.yourdomain.com` (no path, no token).
 3. Give the connector a name (e.g. `JobSquire`). Copy this name exactly — you will need it in Settings.
-4. Claude opens an authorization page served by the MCP server. Enter the JobSquire **user** account credentials (not the admin account, not your Claude password).
+4. Claude opens an authorization page served by the MCP server. Enter either Job Squire account's credentials (admin or user — not your Claude password); review the requesting client name and redirect host, and check the consent box.
 5. Claude completes the handshake. The connector shows as active.
 
 Back in JobSquire: open **Settings → AI → MCP Connector** and paste the connector name into the **Connector name** field. This name is used to phrase the "Open in Claude" deep-link prompts and the five scheduled routine prompts.
@@ -187,7 +191,7 @@ You can restrict which Telegram users can trigger OpenClaw commands by adding `a
 
 ---
 
-## Available tools (23)
+## Available tools (24)
 
 All tools are available to every connection method.
 
@@ -213,6 +217,7 @@ All tools are available to every connection method.
 | Tool | What it does |
 |---|---|
 | `save_candidate_profile` | Save an updated master profile back to Job Squire. |
+| `save_resume_draft` | Save the final resume from the Getting Started resume-interview routine, replacing any previous draft. |
 | `add_jobs` | Push found jobs into Job Squire as `Saved` (deduplicated). |
 | `save_analysis` | Write analysis back: global insight + per-job notes. |
 | `update_job_notes` | Replace the notes/description on a job record (e.g. a full posting fetched from its URL). |
@@ -234,7 +239,7 @@ All tools run against the shared SQLite database. Writes are committed immediate
 - Keep the MCP subdomain behind TLS. The MCP server itself listens on plain HTTP internally; SWAG terminates TLS.
 - DNS-rebinding protection is enabled: the server allowlists `PUBLIC_MCP_HOST` and rejects requests from other hostnames.
 - Revoke OAuth access by removing the connector in Claude. Revoke static key access by generating a new key in Settings (the old key is immediately invalidated).
-- Only the **user** account (not admin) can authorize through OAuth. The static key path bypasses this restriction — use it only in trusted, private environments.
+- Either Job Squire account (admin or user) can authorize through OAuth — this is intentional for the two-user model. The static key is a separate, non-account-based credential — use it only in trusted, private environments.
 
 ---
 

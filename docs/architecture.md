@@ -108,6 +108,7 @@ its own, with no certificate needed.
 | `SearchRun` | `search_runs` | Audit record of each search execution (found/created/skipped/emailed/status). |
 | `Contact` | `contacts` | A recruiter / staffing-agency rep / hiring manager / networking contact, with type, contact details, last-contacted and follow-up dates. |
 | `Submission` | `submissions` | "Who submitted User where, and when" — optional FK to `contacts` (the submitter) and an optional FK to `jobs`, plus company/role text and a submission status. |
+| `OnboardingState` | `onboarding_state` | Singleton (id=1) tracking the Getting Started walkthrough: persona answer, per-step skip/answer state, dismissed flag. Most step completion is *derived* from real data rather than stored here. |
 
 The master candidate profile (`candidate_profile.md`) and the kit/profile prompt overrides live as
 files in `/data`, not in the database, so they survive image rebuilds and can be edited in the UI
