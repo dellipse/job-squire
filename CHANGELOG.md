@@ -8,6 +8,178 @@ footer as `<VERSION>-<build-sha>`.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-09
+
+The 2026-09-08 pre-production security audit's full remediation pass -- every Critical/High
+finding, the follow-up short- and long-term items, and the CI/release hardening it called for.
+Also lands the `main.py` blueprint split, the MCP SDK 2.x migration, and routine dependency/CI
+maintenance. No user-facing schema changes beyond the additive migrations noted below; every
+route path is unchanged even where its Flask endpoint name moved.
+
+### Security
+
+- **SEC-01** (Critical): the MCP OAuth login page (`_AUTH_PAGE`) reflected several request values
+  into HTML with no escaping -- a reflected-XSS path on internet-facing infrastructure. Every
+  interpolation is now HTML-escaped, and every MCP response now carries CSP/X-Frame-Options/
+  nosniff headers.
+- **SEC-02**: `/oauth/authorize`'s consent screen now shows the requesting client's name and
+  redirect host behind an explicit checkbox instead of an implicit any-client approval;
+  `/oauth/register` is rate-limited per IP and capped.
+- **SEC-03**: the Settings "MCP Connector" toggle (`mcp_enabled`) was UI-only -- it now actually
+  gates the whole MCP surface (metadata, OAuth endpoints, `/mcp` under both auth methods).
+- **SEC-04**: job/contact URLs are normalized to `http(s)`-only at `ingest_jobs()` and the MCP
+  `add_contact` tool, closing a stored `javascript:` URL path.
+- **SEC-05**: added `REMEMBER_COOKIE_SECURE`/`SAMESITE`/`DURATION`, plus a `User.session_token`
+  stamp (rotated on password change) so a stolen remember-cookie or hijacked session dies
+  immediately on rotation instead of staying valid indefinitely.
+- **SEC-06**: the hand-rolled OAuth endpoints (`/oauth/register|authorize|token|revoke`) run
+  outside FastMCP's transport-security middleware and needed their own hardening: request bodies
+  are now capped at 64 KiB (413 past that), the `X-Forwarded-For` fallback for client-IP
+  resolution is removed (a spoofable path around SWAG's trusted `X-Real-IP`), and the on-disk
+  OAuth token store is no longer re-decrypted on every single `/mcp` request (now a 2-second TTL
+  cache, preserving near-real-time revocation).
+- **SEC-07**: `scripts/backup.sh`/`restore.sh` hardened rather than removed -- `umask 077` +
+  `chmod 600` on the backup archive, and `restore.sh` now rejects any archive entry with an
+  absolute path or `..` traversal before extracting.
+- **SEC-08**: `job_squire_cli` flags that get f-string-interpolated into generated config files
+  (`--admin-username`/`--admin-password`/`--user-password`, `--hostname`/`--mcp-hostname`/
+  `--subdomain`/`--domain`/`--url`, DuckDNS/Cloudflare `--token`) are now validated at the input
+  boundary against control-character, hostname-shape, and YAML-unsafe-character injection, closing
+  several ways a crafted flag value could smuggle an extra line into `.env`/nginx confs or break
+  out of a quoted YAML scalar.
+- **SEC-09**: `job-squire update` now runs `cosign verify` against a pulled image immediately after
+  the pull, before the running container is ever stopped and replaced -- a failed verification (or
+  a missing `cosign`) now fails closed with an operator-facing error instead of silently running an
+  unverified image. This is a breaking change for hosts without `cosign` installed (link to install
+  instructions included in the error). The Tailscale/Ollama vendor install scripts' own unpinned
+  `curl | sh` pattern is documented as an accepted risk instead (no tagged releases exist to pin
+  against).
+- **SEC-10**: `apply_analysis()`'s automated ("Analyze now") writeback path could write a
+  model-returned `{id, analysis}` pair to *any* job id in the database -- since job descriptions
+  are untrusted input replayed into every AI prompt, a prompt-injected description could redirect
+  fabricated analysis onto a different job with no human review in the loop. Writeback is now
+  scoped to the exact set of job ids exported in that call, mirroring the scoping
+  `run_triage_batch` already had. Also labels all untrusted job text as data via a notice appended
+  in `call_with_fallback()`, the shared choke point nearly every AI call already routes through.
+- **SEC-11**: `--admin-password`, `--passphrase` (backup/restore), and `--token` (configure) used
+  to accept secrets directly as CLI flags -- visible in `ps` and left in shell history. Added
+  `--*-file` / environment-variable alternatives for all three; the interactive hidden-input
+  prompt stays the default.
+- **SEC-12**: the MCP OAuth bearer check used plain `in` dict-membership instead of a constant-time
+  comparison; replaced with `hmac.compare_digest` per candidate. `/oauth/authorize`'s login check
+  was a username-enumeration timing oracle (only known usernames triggered a password hash check);
+  it now always hashes against a fixed dummy hash on an unknown username so both paths cost the
+  same. `/api/ingest` had no rate limit at all; added one (30/min, 300/hour).
+- **SEC-13**: documented the redaction pattern set's real scope (US phone/SSN/street-suffix shapes,
+  English name stopwords -- a scope gap, not a bypass) in `docs/configuration.md`, and added an
+  operator-configurable `redact_extra_patterns` list (Settings → AI → Privacy) merged into the same
+  redaction pass.
+- **SEC-14**: the resume upload/convert path had no cap beyond the blanket 10 MB upload limit on
+  what a `.docx` could decompress into or how many pages a `.pdf` could claim. Added a
+  100 MB-uncompressed cap (checked before extraction) and a 500-page cap (checked before
+  `extract_text()` runs on any page), closing a zip-bomb/pathological-PDF DoS on this
+  `@admin_required` route.
+- Alpine base image: bumped `c-ares`/`jq`/`libssl3`/`libcrypto3` and, in this release, `curl`/
+  `libcurl` (8.21.0-r0 → 8.22.0-r0, clearing 10 CVEs) ahead of the pinned LinuxServer base's own
+  release cadence. Ignored two CVEs (`CVE-2025-47273`, `CVE-2026-59890`) traced to pip's own
+  vendored `setuptools`/`msgpack` copies, unreachable at runtime and with no upstream fix yet.
+
+### Added
+
+- CI: SHA-pinned every GitHub Actions reference across all four workflows (was mutable-tag),
+  and added five new advisory-only (non-blocking) gates -- `ruff format --check`, `mypy`,
+  `bandit`, `gitleaks`, `actionlint`, and `hadolint` against the Dockerfile -- plus a
+  cross-platform (macOS/Windows) test job for `job_squire_cli`, which ships as a pip-installed
+  host CLI rather than code that runs inside the container.
+- `job-squire tailscale`/vendor-installer risk documentation, `docs/configuration.md`'s new
+  "Redaction scope" section, and substantially expanded test coverage across the CLI and app
+  (coverage floor raised 33% → 50%; a dedicated `tests/test_worker.py` for the APScheduler
+  process, which previously had none).
+- A route-smoke test that walks the live URL map and hits every GET route once as a logged-in
+  admin -- the safety net for the blueprint split below, since a missed `url_for()` rename only
+  breaks at render time, not at import time.
+
+### Changed
+
+- Split `app/main.py` (3,851 lines) into five domain blueprints -- `contacts.py`, `ai_tasks.py`
+  (plus a new shared `task_status.py` for the background-task/poll machinery both it and the jobs/
+  kits blueprints need), `kits.py`, `jobs.py`, and `settings.py` -- leaving `main.py` as the
+  528-line core/shared module (health, dashboard, timeline, setup, shared helpers). Every
+  `url_for()` call site across templates and Python is updated in the same commits; route paths
+  and behavior are unchanged.
+- Migrated the MCP SDK from 1.x to 2.x in both the app's MCP server and `job_squire_cli`'s query
+  client/group (`FastMCP` → `MCPServer`, `httpx` → `httpx2`, `CallToolResult` fields renamed to
+  snake_case). An unexpected exception raised inside a tool body now reaches the MCP client as a
+  generic "Error executing tool" message rather than the original exception text -- a deliberate
+  hardening confirmed against the SDK source, not a regression.
+- `release.yml`'s version-stamp step no longer pushes directly to `main` (branch protection didn't
+  actually scope direct pushes to any identity, so this bypassed required checks entirely); it now
+  opens a PR and relies on the repo's existing native auto-merge to gate the merge the same way a
+  human PR is gated.
+- Routine dependency maintenance: `cryptography`, `pypdf`, `gunicorn`, `markdown`, `mcp` (1.x line),
+  `uvicorn`, `ruff`, `actions/setup-python`, and `github/codeql-action`, plus Dependabot
+  configuration to stop proposing unresolvable lone `pydantic`/`pydantic-core` bumps and a
+  major-version hold on `mcp` until the 2.x migration above landed.
+- The build's SBOM is no longer committed to the repository; `cosign attest` already signs the
+  same SBOM against the exact published image digest, which can't go stale the way a separately
+  git-tracked copy could.
+
+### Fixed
+
+- **REL-01**: `job_prep_interview`, `ai_analyze`, and the resume-interview turn now run on the
+  existing background-thread + poll pattern instead of the request thread, closing the same class
+  of gunicorn-timeout SIGKILL an earlier incident hit on a long-running ATS-gap analysis.
+- **REL-02**: `_run_ats_after_kit` now checks `AIConfig.api_enabled` instead of the legacy `mode`
+  column.
+- **REL-03**: added a DB-level `UniqueConstraint("source", "external_id")` on `Job` -- a scheduled
+  search racing a concurrent MCP `add_jobs` call could previously both pass a read-then-insert
+  duplicate check before either committed. The migration normalizes and dedupes any pre-existing
+  duplicates without deleting data.
+- **REL-04**: the Anthropic provider's HTTP timeout is no longer hardcoded to 300s regardless of
+  mode -- it now uses the same 55s default every other provider in the fallback chain uses,
+  keeping 300s only when extended thinking is on, so a stalled rank-1 provider fails fast into the
+  next one instead of blocking for five minutes.
+- **REL-06**: every scheduled job gained a `misfire_grace_time` (previously unset, so an overrun
+  search could silently drop its next scheduled run with no record) and a logged
+  `EVENT_JOB_MISSED` listener.
+- **PERF-01**: `Job.interviews` now loads via `lazy="selectin"` instead of the implicit
+  `lazy="select"` default, replacing ~201 queries with a handful when building AI exports across
+  ~200 jobs.
+- **PERF-02**: the dashboard and 12-week timeline chart no longer load entire tables into memory
+  just to compute counts/derive chart data already available from an existing aggregate query or a
+  365-day window.
+- **PERF-03**: added a matching index for `app/search.py`'s per-item ingest dedupe filter, which
+  was triggering a full table scan on every ingested job.
+- **PERF-04**: the MCP static-key auth path no longer writes `mcp_api_key_last_used_at` and commits
+  on every single call; throttled to once per 5 minutes.
+- Fixed a Podman rootless "pasta" network mode incompatibility that made `job-squire proxy`
+  raise outright against a pre-existing reverse proxy running in that mode, and a second-instance
+  MCP port bug where the container-side `MCP_PORT` env var was never written, silently binding
+  every instance after the first to the wrong port.
+- Fixed `podman-compose` 1.5.0 rejecting the `--project-directory` flag entirely (redundant given
+  existing absolute paths and `cwd=root`, so simply dropped), and hardened the post-compose
+  health-check wait: budget raised from ~60s to ~120s to actually fit the app image's own
+  healthcheck timing, and a runtime-reported "unhealthy" status is now treated as a terminal
+  failure instead of silently exhausting its retry budget.
+- `job-squire configure NAME --mcp-token ...` and `job-squire create --import-from` were silently
+  broken against every instance created since the 2026-07-17 volume migration -- both still tried
+  to open a host-path SQLite file that stopped existing once `/data` became a named Docker volume.
+  Both now perform their reads/writes via `docker/podman exec` into the instance's own running
+  container, the same pattern already used elsewhere in the CLI for this exact problem.
+- Consolidated nine separate per-test-file login helper copies into one shared set in
+  `tests/conftest.py`, and isolated `tests/test_migrations.py`'s fixture onto a private in-memory
+  database -- it previously dropped/recreated the shared suite's real database around every
+  migration test, making the rest of the suite's pass/fail order-dependent on migration tests never
+  running in between.
+
+### Removed
+
+- Swept confirmed dead code (an unused `_has_any_provider()` helper, unused `AITaskConfig`/
+  `AI_TASK_LABELS` fields, a duplicate `time` import in `app/mcp_server.py`, several test-only
+  ops-layer functions superseded by other code paths already doing the same job) and stale
+  documentation (a nonexistent legacy MCP token route, a wrong MCP tool count, an inaccurate
+  `/api/ingest` API reference section, 16 undocumented modules in `docs/code-reference.md`).
+
 ## [0.7.27] - 2026-07-19
 
 ### Fixed
