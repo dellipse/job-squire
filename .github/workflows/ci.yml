@@ -36,6 +36,14 @@ jobs:
         # style) are gated now; formatting can be ratcheted in separately.
         run: ruff check .
 
+      - name: Ruff format check (advisory)
+        # CI-03 (2026-09-08 audit): visibility into formatting drift without
+        # blocking on the pre-existing sweep this repo hasn't done yet (see
+        # the comment above). Promote to a hard gate once a real formatting
+        # pass lands and this has been quiet for a cycle.
+        continue-on-error: true
+        run: ruff format --check .
+
   test:
     runs-on: ubuntu-latest
     permissions:
@@ -95,6 +103,125 @@ jobs:
 
       - name: Audit pinned dependencies for known CVEs
         run: pip-audit -r requirements.txt -r requirements-dev.txt
+
+  # ── Advisory-only gates (CI-03, 2026-09-08 audit) ──────────────────────
+  # None of the jobs below are wired into build-and-publish's `needs:` --
+  # they report findings (in-log, or to the Security tab for tools that
+  # support SARIF) without blocking anything, matching how the Trivy scan
+  # above is already split into an advisory full-report pass and a
+  # separate blocking pass for fixable CRITICAL/HIGH CVEs only. Promote
+  # any of these to a required check (branch protection +
+  # build-and-publish's needs:) once it's been quiet on this codebase for
+  # a cycle.
+
+  mypy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      - name: Install dependencies + mypy
+        run: |
+          pip install -r requirements-dev.txt
+          pip install mypy==1.19.1
+
+      - name: Type check (permissive/gradual mode, advisory)
+        # See [tool.mypy] in pyproject.toml for what "permissive" means here
+        # -- no --strict, no untyped-def checking. The codebase carries
+        # almost no type annotations today; this is visibility into what's
+        # already annotated (and obviously wrong) rather than a coverage
+        # requirement.
+        continue-on-error: true
+        run: mypy app/
+
+  bandit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      - name: Install bandit
+        run: pip install bandit==1.9.2
+
+      - name: Python SAST (advisory)
+        # Complements CodeQL (codeql.yml) rather than replacing it --
+        # bandit's ruleset is Python-specific and catches some
+        # framework/crypto-misuse patterns CodeQL's generic queries don't.
+        continue-on-error: true
+        run: bandit -r app/ job_squire_cli/job_squire_cli -f screen
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Gitleaks (advisory)
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # gitleaks-action's default behavior on a finding is to fail the
+          # step (and, on a public repo, open a GitHub Security Advisory
+          # draft) -- GITLEAKS_ENABLE_COMMENTS off since this isn't wired
+          # to comment on PRs, and continue-on-error above is the actual
+          # advisory boundary regardless of the action's own exit code.
+          GITLEAKS_ENABLE_COMMENTS: "false"
+
+  actionlint:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install actionlint (pinned release, checksum-verified)
+        run: |
+          set -e
+          version="1.7.12"
+          curl -fsSLO "https://github.com/rhysd/actionlint/releases/download/v${version}/actionlint_${version}_linux_amd64.tar.gz"
+          curl -fsSLO "https://github.com/rhysd/actionlint/releases/download/v${version}/actionlint_${version}_checksums.txt"
+          grep "actionlint_${version}_linux_amd64.tar.gz\$" "actionlint_${version}_checksums.txt" | sha256sum -c -
+          tar xzf "actionlint_${version}_linux_amd64.tar.gz" actionlint
+
+      - name: Lint workflow files (advisory)
+        continue-on-error: true
+        run: ./actionlint -color
+
+  hadolint:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Lint Dockerfile (advisory)
+        uses: hadolint/hadolint-action@06be81baf89a55ffd0e24b8f04a4185738dd3387 # v3.5.0
+        continue-on-error: true
+        with:
+          dockerfile: Dockerfile
 
   build-and-publish:
     # Gate: this job only runs after lint, test, and pip-audit all pass, and
