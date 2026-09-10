@@ -8,6 +8,21 @@ footer as `<VERSION>-<build-sha>`.
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-09-10
+
+### Fixed
+
+- `POST /settings/provider/<provider>/pull` ("Pull" on Settings -> Sources) ran the full
+  provider search inline on the request thread. `search_provider()` throttles between search
+  titles (60-120s per gap), so as few as 4 configured titles (3 throttle gaps) reliably exceeded
+  gunicorn's 180s `--timeout` and got the worker killed mid-request, surfacing as a bare 500 --
+  confirmed live in production, where it also left a `SearchRun` row stuck at "running" forever
+  since the crash pre-empted its own error handling. Same class of bug REL-01 (2026-09-08 audit)
+  already fixed for `job_prep_interview`/`ai_analyze`/the resume interview; this route wasn't in
+  that audit's list. Moves it onto the same background-thread + poll pattern those use: the
+  request now returns immediately, and the pull's progress/result is shown on the same
+  task-status page those other actions already use.
+
 ## [0.8.0] - 2026-09-09
 
 The 2026-09-08 pre-production security audit's full remediation pass -- every Critical/High
