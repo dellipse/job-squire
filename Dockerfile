@@ -26,10 +26,13 @@ ENV LSIO_FIRST_PARTY=false
 #    execution, hash-collision DoS); 1.8.2-r0 fixes both.
 #  - libssl3/libcrypto3 3.5.7-r0: CVE-2026-14456 (OpenSSL QUIC server
 #    unbounded memory growth DoS); 3.5.8-r0 fixes it.
-# All three found by the CI Trivy gate (job-squire-audit-2026-09-08.md
-# follow-up, 2026-09-08); fixed versions confirmed already in Alpine 3.24's
-# repo index at the time of this change.
-RUN apk add --no-cache --upgrade c-ares jq libssl3 libcrypto3
+#  - curl/libcurl 8.21.0-r0: CVE-2026-13608, -18924, -19931, -80229,
+#    -80230, -80231, -80255, -80256, -82208, -82209 (10 CVEs flagged by
+#    the CodeQL/Trivy container scan, 2026-09-09); 8.22.0-r0 fixes all.
+# All found by the CI Trivy gate (job-squire-audit-2026-09-08.md follow-up
+# plus the 2026-09-09 code-scanning re-scan); fixed versions confirmed
+# already in Alpine 3.24's repo index at the time of this change.
+RUN apk add --no-cache --upgrade c-ares jq libssl3 libcrypto3 curl libcurl
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
