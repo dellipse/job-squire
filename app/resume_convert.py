@@ -30,12 +30,25 @@ from __future__ import annotations
 import io
 import logging
 import re
+import zipfile
 
 log = logging.getLogger(__name__)
 
 # .pdf is handled separately (best-effort text extraction, no structure) but
 # is still a "supported" upload type for conversion purposes.
 SUPPORTED_EXTENSIONS = ("docx", "pdf", "txt", "md")
+
+# SEC-14 (2026-09-08 audit): MAX_CONTENT_LENGTH (default 10MB, app/__init__.py)
+# caps the *compressed* upload, but neither python-docx (which fully unzips a
+# .docx internally) nor pypdf's page iteration had any cap of their own on
+# what that upload could expand into or how many pages it could claim to
+# have -- a zip-bomb-shaped .docx or a pathological PDF could still exhaust
+# memory/CPU on this @admin_required route. Both caps are generous relative
+# to any real resume/CV: legitimate .docx compression ratios rarely exceed
+# 3-5x even with embedded images (already-compressed formats don't compress
+# further), and no real resume runs to hundreds of pages.
+_DOCX_MAX_UNCOMPRESSED_BYTES = 100 * 1024 * 1024   # 100MB
+_PDF_MAX_PAGES = 500
 
 _HEADING_RE = re.compile(r"^heading\s*(\d)$", re.IGNORECASE)
 
@@ -110,9 +123,26 @@ def _run_markdown(run) -> str:
     return f"{lead}{core}{trail}"
 
 
+def _reject_if_zip_bomb(data: bytes) -> None:
+    """Sum ZipFile.infolist()'s uncompressed sizes -- reading the central
+    directory only, not extracting anything -- and refuse a .docx that
+    would blow past _DOCX_MAX_UNCOMPRESSED_BYTES once unzipped (SEC-14)."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            total = sum(info.file_size for info in zf.infolist())
+    except zipfile.BadZipFile as exc:
+        raise ResumeConversionError("Could not read this .docx file -- it may be corrupted.") from exc
+    if total > _DOCX_MAX_UNCOMPRESSED_BYTES:
+        raise ResumeConversionError(
+            f"This .docx file would expand to over {_DOCX_MAX_UNCOMPRESSED_BYTES // (1024 * 1024)}MB "
+            "when decompressed -- that's larger than any real resume should be. If this is a "
+            "legitimate file, try saving a simpler copy (fewer/smaller embedded images).")
+
+
 def _docx_to_markdown(data: bytes) -> str:
     from docx import Document
 
+    _reject_if_zip_bomb(data)
     doc = Document(io.BytesIO(data))
     blocks: list[str] = []
     prev_is_list = False
@@ -183,6 +213,14 @@ def _pdf_to_markdown(data: bytes) -> str:
     if reader.is_encrypted:
         raise ResumeConversionError(
             "This PDF is password-protected -- remove the password and re-upload.")
+    # SEC-14: len(reader.pages) reads the page tree only -- cheap, and safe
+    # to check before the expensive part (extract_text() on every page).
+    page_count = len(reader.pages)
+    if page_count > _PDF_MAX_PAGES:
+        raise ResumeConversionError(
+            f"This PDF has {page_count} pages -- more than the {_PDF_MAX_PAGES}-page limit for "
+            "automatic conversion. If this is a legitimate document, paste its text into the "
+            "markdown box instead.")
     pages = [(page.extract_text() or "").strip() for page in reader.pages]
     pages = [p for p in pages if p]
     return "\n\n".join(pages)

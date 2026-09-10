@@ -469,6 +469,9 @@ def _run_migrations():
         # db.func.lower(...) compiles to the same bare lower(...) SQL
         # function this index is built on, on SQLite.
         "CREATE INDEX IF NOT EXISTS idx_jobs_company_title_lower ON jobs(lower(company), lower(title))",
+        # SEC-13: operator-configurable extra redaction patterns (see
+        # AIConfig.redact_extra_patterns's own comment in app/models.py).
+        "ALTER TABLE ai_config ADD COLUMN redact_extra_patterns TEXT DEFAULT ''",
     ]
     for stmt in migrations:
         try:

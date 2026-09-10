@@ -387,3 +387,55 @@ class TestMcpBoundary:
         finally:
             db.session.delete(db.session.get(Job, job_id))
             db.session.commit()
+
+
+# ---------------------------------------------------------------------------
+# SEC-13: operator-configurable extra redaction patterns
+# ---------------------------------------------------------------------------
+
+class TestExtraPatterns:
+    def test_parse_valid_lines(self):
+        valid, warnings = privacy.parse_extra_patterns(
+            "UK_PHONE=\\b0\\d{4}\\s?\\d{6}\\b\n# a comment\n\nNINO=[A-Z]{2}\\d{6}[A-Z]"
+        )
+        assert warnings == []
+        labels = [label for label, _ in valid]
+        assert labels == ["UK_PHONE", "NINO"]
+
+    def test_parse_rejects_bad_label(self):
+        valid, warnings = privacy.parse_extra_patterns("not-a-valid-label=\\d+")
+        assert valid == []
+        assert len(warnings) == 1
+        assert "line 1" in warnings[0]
+
+    def test_parse_rejects_invalid_regex(self):
+        valid, warnings = privacy.parse_extra_patterns("BAD=(unclosed")
+        assert valid == []
+        assert len(warnings) == 1
+        assert "BAD" in warnings[0]
+
+    def test_parse_one_bad_line_does_not_block_the_rest(self):
+        valid, warnings = privacy.parse_extra_patterns(
+            "GOOD1=\\d{4}\nBAD=(unclosed\nGOOD2=[a-z]+"
+        )
+        assert [label for label, _ in valid] == ["GOOD1", "GOOD2"]
+        assert len(warnings) == 1
+
+    def test_redact_applies_an_operator_pattern(self, seeded):
+        cfg = db.session.get(AIConfig, 1)
+        cfg.redact_extra_patterns = "UK_PHONE=\\b0\\d{4}\\s?\\d{6}\\b"
+        db.session.commit()
+
+        result = privacy.redact("Call me on 07911 123456 about the role.")
+        assert "07911 123456" not in result.text
+        assert "{{PII:UK_PHONE_" in result.text
+
+    def test_redact_ignores_a_malformed_extra_pattern_without_crashing(self, seeded):
+        cfg = db.session.get(AIConfig, 1)
+        cfg.redact_extra_patterns = "BAD=(unclosed"
+        db.session.commit()
+
+        # Must not raise -- a bad operator pattern degrades to "no extra
+        # coverage", never to "redaction stops working".
+        result = privacy.redact("jordan@fastmail.example is my email.")
+        assert "jordan@fastmail.example" not in result.text

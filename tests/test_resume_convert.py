@@ -98,6 +98,27 @@ class TestDocxConversion:
         with pytest.raises(ResumeConversionError):
             convert_to_markdown(b"not a real docx file", "docx")
 
+    def test_docx_zip_bomb_rejected_before_extraction(self):
+        """SEC-14 (2026-09-08 audit): a .docx is a zip archive -- a small
+        upload that expands to a huge amount of data once decompressed
+        must be rejected before python-docx ever unzips it. A single
+        highly-compressible entry (all zero bytes) well past the
+        100MB cap, compressed down to a tiny archive, exercises exactly
+        that shape of attack."""
+        import zipfile
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("bomb.bin", b"\x00" * (150 * 1024 * 1024))
+        with pytest.raises(ResumeConversionError, match="expand to over"):
+            convert_to_markdown(buf.getvalue(), "docx")
+
+    def test_docx_under_the_size_cap_still_converts(self):
+        def build(doc):
+            doc.add_heading("Jordan Lee", level=1)
+
+        markdown = convert_to_markdown(_docx_bytes(build), "docx")
+        assert "# Jordan Lee" in markdown
+
 
 class TestPdfConversion:
     def test_pdf_extracts_text_from_each_page(self, monkeypatch):
@@ -141,3 +162,34 @@ class TestPdfConversion:
         monkeypatch.setattr("pypdf.PdfReader", FakeReader)
         with pytest.raises(ResumeConversionError):
             convert_to_markdown(b"%PDF-fake", "pdf")
+
+    def test_pdf_over_the_page_limit_is_rejected_without_extracting_text(self, monkeypatch):
+        """SEC-14 (2026-09-08 audit): a pathological page count must be
+        rejected before extract_text() ever runs on any page -- the fake
+        page below raises if it's ever called, proving the cap is checked
+        first (len(reader.pages) is cheap; extract_text() per page is not)."""
+        class FakePage:
+            def extract_text(self):
+                raise AssertionError("extract_text() must not run past the page-count cap")
+
+        class FakeReader:
+            def __init__(self, _stream):
+                self.is_encrypted = False
+                self.pages = [FakePage() for _ in range(501)]
+
+        monkeypatch.setattr("pypdf.PdfReader", FakeReader)
+        with pytest.raises(ResumeConversionError, match="501 pages"):
+            convert_to_markdown(b"%PDF-fake", "pdf")
+
+    def test_pdf_at_the_page_limit_still_converts(self, monkeypatch):
+        class FakePage:
+            def extract_text(self):
+                return "x"
+
+        class FakeReader:
+            def __init__(self, _stream):
+                self.is_encrypted = False
+                self.pages = [FakePage() for _ in range(500)]
+
+        monkeypatch.setattr("pypdf.PdfReader", FakeReader)
+        assert convert_to_markdown(b"%PDF-fake", "pdf")

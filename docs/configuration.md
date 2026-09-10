@@ -215,6 +215,32 @@ scheduled task feature or run immediately via the "Open in Claude" button.
 | `rejection_alert_threshold` | `5` | Trigger an automatic rejection pattern analysis when this many jobs move to Rejected or Ghosted within 14 days. Runs at most once per 7 days. |
 | `fallback_to_anthropic` | on | After all ranked providers fail, attempt the Anthropic API as a last resort (requires an Anthropic API key). |
 
+### Redaction scope (AI tab → Privacy)
+
+Before any candidate data reaches an AI provider (API mode, MCP, or the manual export/import
+flow), Job Squire tokenizes identifiers into placeholders like `{{PII:EMAIL_3f2a1c8b}}` and swaps
+them back in the results — see `app/privacy.py`'s module docstring for the full design. This is
+confirmed applied at every outbound call (`call_with_fallback()` is the one choke point nearly
+all of them route through).
+
+**The built-in pattern set is scoped to US/English shapes, deliberately.** It recognizes:
+
+- US phone numbers (`(555) 123-4567`, `555-123-4567`, `+1 555 123 4567`)
+- US Social Security numbers (`123-45-6789`)
+- US street-suffix addresses (`123 Main St`, `456 Oak Avenue Apt 2`)
+- English given/family names, via a stopword list that exempts common English words that are
+  also surnames (Grant, Hunter, Reed, Price, Baker, Carter, …) from single-token redaction, so
+  ordinary sentences don't get mangled
+
+This is **not** a bypass or an oversight to be silently patched around — building a pattern set
+that reliably covers every country's phone/ID/address formats and every language's name
+conventions without an NER/ML model (which this single-container app deliberately doesn't ship —
+see `app/privacy.py`'s docstring) is out of scope for the built-in patterns. If you're outside
+the US, or your data includes identifier shapes the built-ins don't catch, use **Extra redaction
+patterns** (AI tab → Privacy) to add your own: one `LABEL=regex` per line, merged into the same
+pattern pass. A line that doesn't parse (bad label, invalid regex) is skipped with a warning
+rather than silently doing nothing or blocking the rest.
+
 ### AI providers — `AIProviderConfig` (AI tab → AI Providers)
 
 Zero or more rows; tried in `rank` order. When a provider returns a rate-limit (429), server

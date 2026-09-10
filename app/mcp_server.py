@@ -29,6 +29,7 @@ Run:  python -m app.mcp_server      (listens on 0.0.0.0:9000)
 import base64
 import functools
 import hashlib
+import hmac
 import html
 import json
 import os
@@ -40,11 +41,20 @@ import logging
 import uvicorn
 from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
-from werkzeug.security import check_password_hash
+from werkzeug.security import check_password_hash, generate_password_hash
 
 _login_failures: dict = {}   # ip -> list of failure timestamps
 _LOGIN_MAX_FAILURES = 5
 _LOGIN_FAILURE_WINDOW = 600  # seconds
+
+# SEC-12 (2026-09-08 audit): the OAuth /authorize login check used to look up
+# the user first and only call check_password_hash() when one was found --
+# an unknown username short-circuited before ever hashing, making its
+# response measurably faster than a known-username/wrong-password attempt
+# and turning response time into a username-enumeration oracle. Hashing
+# against this fixed dummy on every unknown-username attempt makes both
+# paths do the same expensive work regardless of whether the account exists.
+_DUMMY_PASSWORD_HASH = generate_password_hash("_sec12-dummy-hash-never-matches-a-real-password_")
 
 
 def _login_rate_ok(ip: str) -> bool:
@@ -213,6 +223,21 @@ def _refresh_tokens_cache() -> None:
     _tokens.clear()
     _tokens.update(_load_tokens())
     _tokens_cache_time = now
+
+
+def _match_bearer_token(bearer: str) -> str | None:
+    """Find bearer in _tokens via hmac.compare_digest against every stored
+    token, instead of a plain `in` dict-membership check (SEC-12, 2026-09-08
+    audit) -- returns the matching stored token, or None. `_tokens` holds
+    live OAuth-issued tokens (typically few, short-lived), so the linear
+    scan this requires is cheap; the static single-secret MCP API key path
+    (app/mcp_auth.py:verify_static_token) already used compare_digest."""
+    if not bearer:
+        return None
+    for candidate in _tokens:
+        if hmac.compare_digest(bearer, candidate):
+            return candidate
+    return None
 
 
 # PERF-04 (2026-09-08 audit): the static-key path used to write
@@ -1215,7 +1240,9 @@ async def _handle_authorize_post(scope, receive, send):
     with flask_app.app_context():
         from .models import User
         user = User.query.filter_by(username=username).first()
-        if user and check_password_hash(user.password_hash, password):
+        password_hash = user.password_hash if user else _DUMMY_PASSWORD_HASH
+        password_ok = check_password_hash(password_hash, password)
+        if user and password_ok:
             authed = True
 
     if not authed:
@@ -1430,7 +1457,8 @@ async def asgi_app(scope, receive, send):
     # process (which edits oauth_tokens.json directly) take effect without
     # requiring an MCP server restart.
     _refresh_tokens_cache()
-    if bearer and bearer in _tokens and _tokens[bearer]["exp"] > time.time():
+    matched_token = _match_bearer_token(bearer)
+    if matched_token and _tokens[matched_token]["exp"] > time.time():
         await _inner(_scope_for_inner(scope, "/mcp"), receive, send)
         return
 

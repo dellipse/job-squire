@@ -30,6 +30,7 @@ unit-testable on their own.
 """
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 from typing import NoReturn
@@ -106,6 +107,40 @@ def _reject_control_chars(value: str, flag: str) -> str:
     return value
 
 
+# SEC-11 (2026-09-08 audit): --admin-password/--passphrase/--token accept
+# the secret directly as a CLI flag value -- visible for the life of the
+# process to anyone who can run `ps`, and left behind forever in shell
+# history once typed. The interactive hidden-input prompt stays the
+# default; a *-file flag or an env var are the scripted-use escape hatches
+# that keep the secret off argv entirely.
+def _resolve_secret(
+    value: str | None, value_file: Path | None, env_var: str, *,
+    prompt_label: str | None, confirm: bool = False,
+) -> str | None:
+    """Resolve a secret in priority order: explicit --flag value, --flag-file
+    (first line, trailing newline stripped), the named environment
+    variable, then an interactive hidden-input prompt (Click's default).
+
+    prompt_label=None skips the prompt entirely and returns None when
+    nothing else resolved -- for a caller like `create` where an omitted
+    --admin-password means "auto-generate one", not "ask interactively".
+    """
+    if value is not None:
+        return value
+    if value_file is not None:
+        try:
+            raw = value_file.read_text(encoding="utf-8")
+        except OSError as exc:
+            _fail(f"Could not read {value_file}: {exc}")
+        return raw.splitlines()[0] if raw.splitlines() else ""
+    env_val = os.environ.get(env_var)
+    if env_val:
+        return env_val
+    if prompt_label is None:
+        return None
+    return click.prompt(prompt_label, hide_input=True, confirmation_prompt=confirm)
+
+
 _HOSTNAME_LABEL_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
 
 
@@ -166,7 +201,11 @@ def _reject_yaml_unsafe(value: str, flag: str) -> str:
 @click.option("--copy-keys", is_flag=True, default=False,
               help="Also copy provider/SMTP/AI API keys from --import-from (decrypted and re-encrypted).")
 @click.option("--admin-username", default="admin", show_default=True)
-@click.option("--admin-password", default=None, help="Defaults to a freshly generated random password.")
+@click.option("--admin-password", default=None,
+              help="Defaults to a freshly generated random password. Or use --admin-password-file / "
+                   "JOB_SQUIRE_ADMIN_PASSWORD to set one without putting it on argv.")
+@click.option("--admin-password-file", type=click.Path(exists=True, dir_okay=False, path_type=Path),
+              default=None, help="Read the admin password from this file's first line.")
 @click.option("--user-password", default="", help="Leave blank to create only the admin account.")
 @click.option("--image", default=DEFAULT_IMAGE, show_default=True)
 @click.option("--orbstack", "prefer_orbstack", is_flag=True, default=False,
@@ -181,8 +220,12 @@ def _reject_yaml_unsafe(value: str, flag: str) -> str:
 @click.option("--skip-proxy-setup", "skip_proxy_setup", is_flag=True, default=False,
               help="Don't offer to configure a reverse proxy after creating a network-mode instance.")
 def create(name, mode, hostname, mcp_hostname, import_from, copy_keys, admin_username, admin_password,
-           user_password, image, prefer_orbstack, prefer_docker_desktop, assume_yes, skip_ollama_check,
-           skip_proxy_setup):
+           admin_password_file, user_password, image, prefer_orbstack, prefer_docker_desktop, assume_yes,
+           skip_ollama_check, skip_proxy_setup):
+    admin_password = _resolve_secret(
+        admin_password, admin_password_file, "JOB_SQUIRE_ADMIN_PASSWORD", prompt_label=None,
+    )
+
     # Validated before any prompting or disk I/O -- see the SEC-08 helpers
     # above. These are the free-text values that end up f-string-
     # interpolated into data/.env (ops/compose.py's render_data_env) with
@@ -1153,7 +1196,10 @@ def _print_mcp_config(instance: Instance) -> None:
                    "never enabled implicitly.")
 @click.option("--token", "manual_token", default=None,
               help="Manually set the query group's stored bearer token, e.g. an OAuth access "
-                   "token obtained elsewhere. Alternative to --mcp-token.")
+                   "token obtained elsewhere. Alternative to --mcp-token. Or use --token-file / "
+                   "JOB_SQUIRE_MANUAL_TOKEN to set one without putting it on argv.")
+@click.option("--token-file", type=click.Path(exists=True, dir_okay=False, path_type=Path),
+              default=None, help="Read the manual bearer token from this file's first line.")
 @click.option("--endpoint", "manual_endpoint", default=None,
               help="Override the stored MCP endpoint (default: derived from the instance's "
                    "registry entry).")
@@ -1161,11 +1207,15 @@ def _print_mcp_config(instance: Instance) -> None:
               help="Make this instance the query group's default (or clear it as default).")
 @click.option("--show", "show_only", is_flag=True, default=False,
               help="Print the instance's current MCP auth configuration and exit.")
-def configure(name, mcp_token_action, ttl_hours, allow_network, manual_token, manual_endpoint,
+def configure(name, mcp_token_action, ttl_hours, allow_network, manual_token, token_file, manual_endpoint,
               set_default, show_only):
     instance = get_instance(name)
     if instance is None:
         _fail(f"No instance named {name!r} is registered.")
+
+    manual_token = _resolve_secret(
+        manual_token, token_file, "JOB_SQUIRE_MANUAL_TOKEN", prompt_label=None,
+    )
 
     if mcp_token_action is not None and manual_token is not None:
         _fail("Choose either --mcp-token or --token, not both.")
@@ -1308,8 +1358,12 @@ def _require_instance(name: str) -> Instance:
               help="Directory to write the archive(s) into (default: your home folder).")
 @click.option("--format", "archive_format", type=click.Choice(["tgz", "zip"]), default="tgz", show_default=True)
 @click.option("--passphrase", default=None,
-              help="Backup passphrase. Omit to be prompted (recommended -- avoids leaving it in shell history).")
-def backup_cmd(name, all_instances, dest_dir, archive_format, passphrase):
+              help="Backup passphrase. Omit to be prompted (recommended -- avoids leaving it in shell "
+                   "history); or use --passphrase-file / JOB_SQUIRE_BACKUP_PASSPHRASE for scripted use "
+                   "without putting it on argv at all.")
+@click.option("--passphrase-file", type=click.Path(exists=True, dir_okay=False, path_type=Path),
+              default=None, help="Read the backup passphrase from this file's first line.")
+def backup_cmd(name, all_instances, dest_dir, archive_format, passphrase, passphrase_file):
     if all_instances and name:
         _fail("Choose either an instance NAME or --all, not both.")
     if not all_instances and not name:
@@ -1319,8 +1373,10 @@ def backup_cmd(name, all_instances, dest_dir, archive_format, passphrase):
     if not targets:
         _fail("No instances are registered -- nothing to back up.")
 
-    if passphrase is None:
-        passphrase = click.prompt("Backup passphrase", hide_input=True, confirmation_prompt=True)
+    passphrase = _resolve_secret(
+        passphrase, passphrase_file, "JOB_SQUIRE_BACKUP_PASSPHRASE",
+        prompt_label="Backup passphrase", confirm=True,
+    )
     click.echo(
         "This archive is encrypted with the passphrase above and cannot be restored without it "
         "-- there is no recovery. Write it down somewhere safe; a lost passphrase means a lost backup."
@@ -1340,16 +1396,22 @@ def backup_cmd(name, all_instances, dest_dir, archive_format, passphrase):
 @click.option("--overwrite", is_flag=True, default=False,
               help="Replace an existing instance of the same (or --rename-to) name instead of prompting.")
 @click.option("--passphrase", default=None,
-              help="Backup passphrase. Omit to be prompted (recommended -- avoids leaving it in shell history).")
+              help="Backup passphrase. Omit to be prompted (recommended -- avoids leaving it in shell "
+                   "history); or use --passphrase-file / JOB_SQUIRE_BACKUP_PASSPHRASE for scripted use "
+                   "without putting it on argv at all.")
+@click.option("--passphrase-file", type=click.Path(exists=True, dir_okay=False, path_type=Path),
+              default=None, help="Read the backup passphrase from this file's first line.")
 @click.option("--image", default=None,
               help="Bring the restored instance up on this image instead of the one recorded in the backup.")
 @click.option("--up/--no-up", "bring_up", default=True, show_default=True,
               help="Bring the restored instance up immediately after registering it.")
 @click.option("--yes", "assume_yes", is_flag=True, default=False,
               help="Don't ask before installing a container runtime.")
-def restore_cmd(archive_path, rename_to, overwrite, passphrase, image, bring_up, assume_yes):
-    if passphrase is None:
-        passphrase = click.prompt("Backup passphrase", hide_input=True)
+def restore_cmd(archive_path, rename_to, overwrite, passphrase, passphrase_file, image, bring_up, assume_yes):
+    passphrase = _resolve_secret(
+        passphrase, passphrase_file, "JOB_SQUIRE_BACKUP_PASSPHRASE",
+        prompt_label="Backup passphrase",
+    )
 
     try:
         opened = backup.open_backup(archive_path, passphrase)

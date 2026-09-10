@@ -480,3 +480,17 @@ def test_ingest_skips_duplicate_external_id(client, app, app_context, monkeypatc
     body = resp.get_json()
     assert body["created"] == 0
     assert body["skipped"] == 1
+
+
+def test_ingest_is_rate_limited(client, monkeypatch):
+    """SEC-12 (2026-09-08 audit): /api/ingest previously had no @limiter.limit
+    at all -- an attacker could brute-force INGEST_API_KEY at unlimited
+    request volume. 30/minute is the configured limit; the 31st request in
+    the same minute must be rejected."""
+    monkeypatch.setenv("INGEST_API_KEY", "correct-key")
+    for _ in range(30):
+        resp = client.post(INGEST_URL, json={"jobs": []}, headers={"X-API-Key": "wrong-key"})
+        assert resp.status_code == 401
+
+    resp = client.post(INGEST_URL, json={"jobs": []}, headers={"X-API-Key": "wrong-key"})
+    assert resp.status_code == 429

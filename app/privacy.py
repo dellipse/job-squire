@@ -109,6 +109,56 @@ _PATTERN_PASS = [
     ("WORKAUTH", _WORKAUTH_RE),
 ]
 
+# SEC-13 (2026-09-08 audit): _PATTERN_PASS above only covers US phone/SSN/
+# street-suffix shapes and English name stopwords -- a documented scope gap
+# (see docs/configuration.md's "Redaction scope" section), not a bypass:
+# redaction is confirmed applied at every outbound AI call regardless.
+# AIConfig.redact_extra_patterns lets an operator add their own patterns
+# ("LABEL=regex", one per line) without waiting on a built-in update.
+_EXTRA_PATTERN_LABEL_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,31}$")
+
+
+def parse_extra_patterns(raw: str) -> tuple[list[tuple[str, re.Pattern]], list[str]]:
+    """Parse "LABEL=regex" lines into (LABEL, compiled_regex) pairs, same
+    shape as _PATTERN_PASS. Returns (valid_patterns, warnings) -- a
+    malformed line never raises, so one operator typo can't break redaction
+    for every outbound call; app/settings.py surfaces `warnings` to the
+    admin at save time instead of leaving them to a server log only."""
+    if not raw:
+        return [], []
+    valid: list[tuple[str, re.Pattern]] = []
+    warnings: list[str] = []
+    for lineno, line in enumerate(raw.splitlines(), start=1):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        label, sep, expr = line.partition("=")
+        label = label.strip()
+        expr = expr.strip()
+        if not sep or not _EXTRA_PATTERN_LABEL_RE.match(label) or not expr:
+            warnings.append(f"line {lineno}: expected 'LABEL=regex' (LABEL: A-Z0-9_, "
+                            f"max 32 chars) -- {line!r}")
+            continue
+        try:
+            valid.append((label, re.compile(expr)))
+        except re.error as exc:
+            warnings.append(f"line {lineno}: invalid regex for {label} -- {exc}")
+    return valid, warnings
+
+
+def _operator_extra_patterns() -> list[tuple[str, re.Pattern]]:
+    """AIConfig.redact_extra_patterns, parsed -- see parse_extra_patterns().
+    Warnings are logged here (redact-time), not raised; app/settings.py's
+    save route calls parse_extra_patterns() itself to warn the admin
+    up front instead."""
+    cfg = _cfg()
+    raw = getattr(cfg, "redact_extra_patterns", "") if cfg else ""
+    valid, warnings = parse_extra_patterns(raw)
+    for w in warnings:
+        log.warning("redact_extra_patterns %s", w)
+    return valid
+
+
 # ---------------------------------------------------------------------------
 # SPI/PHI strip pass — content that should not reach employers at all.
 # Matched sentences are removed from outbound text and reported as coaching
@@ -444,8 +494,9 @@ def _redact_core(text: str, known: list, strict_vals: list | None,
     # 1. Pattern pass FIRST: whole emails/URLs/addresses must be tokenized as
     #    units before the known-values pass can replace a name fragment inside
     #    them (jordan.ellison@… must become one EMAIL placeholder, not two NAME
-    #    placeholders glued around an @).
-    for kind, pattern in _PATTERN_PASS:
+    #    placeholders glued around an @). Operator-configured extra patterns
+    #    (SEC-13) run in the same pass, after the built-ins.
+    for kind, pattern in _PATTERN_PASS + _operator_extra_patterns():
         def _repl(m, _kind=kind):
             value = m.group(0)
             ph = make_placeholder(_kind, value)
