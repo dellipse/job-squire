@@ -25,6 +25,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   release:
@@ -94,29 +95,98 @@ jobs:
       # below is retargeted at this new commit (not the triggering one),
       # since that's the commit whose pyproject.toml actually carries the
       # correct value.
-      - name: Stamp CLI version and commit
+      #
+      # CI-01 (2026-09-08 audit): this used to `git commit` and
+      # `git push origin HEAD:main` directly, with a 5-attempt
+      # fetch+rebase retry loop for when something else raced it onto main
+      # first (confirmed happening 2026-07-17/18 against ci.yml's old SBOM-
+      # commit step, since removed -- see #34). Branch protection on main
+      # requires `lint`/`test`/`pip-audit` to have passed
+      # (required_status_checks, strict: false) but has no
+      # required_pull_request_reviews and no push `restrictions` -- so it
+      # does NOT scope direct pushes to this bot's identity specifically,
+      # and since required status checks are a PR-*merge*-time gate (not a
+      # push-time one) in this repo's protection config, a direct push
+      # bypassed them entirely regardless of who made it. This step now
+      # opens a PR and lets GitHub's own native auto-merge (already enabled
+      # repo-wide) gate the merge on those same required checks instead of
+      # racing a direct push against anything else that might land on main
+      # in the same window -- the race this retry loop patched around is
+      # structurally gone, not just handled better.
+      #
+      # Pushing the branch and opening the PR with RELEASE_BOT_TOKEN (a
+      # fine-grained PAT, repo-scoped to Contents+PRs write, added as a
+      # repo secret 2026-09-09) rather than the default GITHUB_TOKEN is
+      # required, not stylistic: GitHub suppresses new workflow runs
+      # (including ci.yml's `pull_request` trigger) for anything created
+      # using the GITHUB_TOKEN, specifically to prevent workflow-triggers-
+      # workflow recursion. Without this, lint/test/pip-audit would never
+      # run on the bot's PR, auto-merge would wait on required checks that
+      # never arrive, and every release would hang until the timeout below
+      # fires. The PAT makes the push/PR look like a normal authored
+      # change, so ci.yml triggers on it exactly like it would for a human.
+      # Everything past this step (tagging, the release itself) still uses
+      # the default token. Rotate RELEASE_BOT_TOKEN before its 1-year
+      # expiration (set 2026-09-09) or this step starts failing outright.
+      - name: Stamp CLI version and open an auto-merge PR
         if: steps.check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
         run: |
+          set -e
           python3 scripts/stamp_cli_version.py
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add job_squire_cli/pyproject.toml
           if git diff --cached --quiet; then
             echo "job_squire_cli/pyproject.toml already stamped correctly -- nothing to commit."
+            echo "RELEASE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
           else
-            git commit -m "CHORE: Stamp job-squire-cli version for v${VERSION} [skip ci]"
-            # ci.yml's "Commit SBOM if changed" step runs off this same
-            # triggering push and can also land on main first, racing this
-            # push -- confirmed 2026-07-17 (both workflows fire together
-            # whenever a push touches VERSION). Retry with a fetch+rebase
-            # instead of failing the release over a same-second collision.
-            for _ in 1 2 3 4 5; do
-              git push origin HEAD:main && break
-              git fetch origin main
-              git rebase origin/main
-            done
+            branch="bot/stamp-cli-version-v${VERSION}"
+            git commit -m "CHORE: Stamp job-squire-cli version for v${VERSION}"
+            # actions/checkout persists its own (default-token) credential as
+            # an `http.extraheader` -- unset it before pointing the remote at
+            # RELEASE_BOT_TOKEN instead, so git doesn't send two conflicting
+            # Authorization headers on this push.
+            git config --unset-all "http.https://github.com/.extraheader" || true
+            git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+            git push origin "HEAD:refs/heads/${branch}" --force
+
+            existing_pr="$(gh pr list --head "$branch" --state open --json url -q '.[0].url // empty')"
+            if [ -n "$existing_pr" ]; then
+              pr_url="$existing_pr"
+            else
+              pr_url="$(gh pr create --title "CHORE: Stamp job-squire-cli version for v${VERSION}" \
+                --body "Automated version-stamp commit ahead of the v${VERSION} release. Auto-merges once lint/test/pip-audit pass." \
+                --base main --head "$branch")"
+            fi
+            gh pr merge "$pr_url" --auto --squash
+
+            echo "PR_URL=$pr_url" >> "$GITHUB_ENV"
+            echo "NEEDS_MERGE_WAIT=true" >> "$GITHUB_ENV"
           fi
-          echo "RELEASE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Wait for the version-stamp PR to merge
+        if: steps.check.outputs.exists == 'false' && env.NEEDS_MERGE_WAIT == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          for _ in $(seq 1 30); do
+            state="$(gh pr view "$PR_URL" --json state -q .state)"
+            if [ "$state" = "MERGED" ]; then
+              sha="$(gh pr view "$PR_URL" --json mergeCommit -q .mergeCommit.oid)"
+              echo "RELEASE_SHA=$sha" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            if [ "$state" = "CLOSED" ]; then
+              echo "Version-stamp PR ($PR_URL) was closed without merging -- aborting release." >&2
+              exit 1
+            fi
+            sleep 20
+          done
+          echo "Version-stamp PR ($PR_URL) did not auto-merge within 10 minutes -- aborting release. Check whether lint/test/pip-audit passed on it." >&2
+          exit 1
 
       - name: Create tag and GitHub Release
         if: steps.check.outputs.exists == 'false'
