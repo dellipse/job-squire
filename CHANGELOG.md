@@ -10,6 +10,8 @@ footer) and the `job-squire-cli` package as `<VERSION>+<build-sha>` (PEP 440). S
 
 ## [Unreleased]
 
+## [0.8.4] - 2026-10-29
+
 ### Security
 
 - Fixed catastrophic regex backtracking in the heuristic name redaction added in 0.8.2
@@ -39,6 +41,17 @@ footer) and the `job-squire-cli` package as `<VERSION>+<build-sha>` (PEP 440). S
   0.16.10 (dev). Full test suite passes with no SQLAlchemy deprecation warnings; SQLAlchemy 2.1.4
   ships cp314 musllinux wheels for both image architectures. Supersedes Dependabot PRs #79 and #80
   (#79 would have moved `pypdf` to 6.19.0, still short of the 6.21.x fixes).
+- `.trivyignore` gains CVE-2026-114613 (msgpack) and CVE-2026-97687 / CVE-2026-97689 (urllib3):
+  pip 26.2.2's own vendored copies (`pip/_vendor/msgpack` 1.1.2, `pip/_vendor/urllib3` 2.7.0),
+  which failed the Trivy gate on the first image build after the changes above. pip runs only at
+  build time; the top-level copies the app imports (msgpack 1.2.4, urllib3 2.8.0) scan clean, and
+  the venv's msgpack floor is raised to 1.2.3 so ignoring the ID can't mask a runtime regression
+  (#82).
+
+### Changed
+
+- CI: `github/codeql-action` 4.38.0 (#72, #73, #74), `docker/build-push-action` 7.4.0 (#75),
+  `docker/setup-buildx-action` 4.4.1 (#76).
 
 ## [0.8.3] - 2026-09-09
 
