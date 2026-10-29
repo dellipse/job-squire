@@ -964,9 +964,9 @@ def uninstall(keep_data, remove_runtime, remove_image, assume_yes, skip_proxy_cl
             click.echo("Open a new terminal for the PATH change to take effect.")
         elif os.name == "nt":
             click.echo(
-                "  No job-squire entry was found to remove in your Windows User PATH -- if one is "
-                "still there, remove it under Settings > System > About > Advanced system settings "
-                "> Environment Variables."
+                "  No PATH entry was found to remove in your Windows User PATH -- if a job-squire "
+                "entry is still there, remove it under Settings > System > About > Advanced system "
+                "settings > Environment Variables."
             )
         else:
             click.echo(
