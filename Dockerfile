@@ -89,14 +89,17 @@ WORKDIR /app
 # it -- not reproducible in a clean `pip install -r requirements.txt`
 # locally, so it's pinned here defensively too, in case it's a real
 # transitive resolution difference under this base's specific
-# Python/musl/pip combination rather than a stale cached layer.
+# Python/musl/pip combination rather than a stale cached layer. (That
+# 1.1.2 later turned out to be pip's own vendored copy -- see .trivyignore.)
+# Floor raised to 1.2.3 on 2026-10-29 for CVE-2026-114613, so the top-level
+# copy stays fixed while .trivyignore covers pip's vendored one.
 #
 # python3 is installed with --upgrade so a rebuild always takes the newest
 # Alpine 3.24 build (CVE-2026-115557, reported fixed in 3.14.10-r0) even if
 # a future base tag starts shipping an older python3 of its own.
 RUN apk add --no-cache --upgrade python3 py3-pip && \
     python3 -m venv /opt/venv && \
-    /opt/venv/bin/pip install --no-cache-dir --upgrade pip setuptools 'msgpack>=1.2.1'
+    /opt/venv/bin/pip install --no-cache-dir --upgrade pip setuptools 'msgpack>=1.2.3'
 
 # Install dependencies first for better layer caching. requirements.txt pins
 # pydantic/pydantic-core explicitly (transitive via mcp) so this resolution
