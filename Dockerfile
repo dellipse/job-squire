@@ -45,8 +45,11 @@ ENV LSIO_FIRST_PARTY=false
 #    the bundle itself. scripts/check_distrusted_roots.py (run after the pip
 #    install below) enforces that, stripping them if Alpine's package still
 #    carries them.
+#  - musl / musl-utils 1.2.6-r2: CVE-2026-107891 (Trivy severity UNKNOWN,
+#    code-scanning alert #302, 2026-10-29); 1.2.6-r3 fixes it. Upgraded as a
+#    pair since both come from the same musl source package.
 RUN apk add --no-cache --upgrade c-ares jq libssl3 libcrypto3 curl libcurl \
-        brotli-libs ca-certificates ca-certificates-bundle
+        brotli-libs ca-certificates ca-certificates-bundle musl musl-utils
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \

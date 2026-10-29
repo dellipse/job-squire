@@ -47,3 +47,18 @@ CVE-2026-59890
 CVE-2026-114613
 CVE-2026-97687
 CVE-2026-97689
+
+# 2026-10-29: two lower-severity CVEs against the SAME pip 26.2.2 vendored
+# copies as the entries above. They never trip the CRITICAL/HIGH gate, but
+# the SARIF upload includes every severity (trivy-action ignores `severity:`
+# for SARIF unless limit-severities-for-sarif is set), so they showed up as
+# code-scanning alerts #307 and #304:
+# - CVE-2026-97688 (MEDIUM): pip/_vendor/urllib3 2.7.0, chunked Deflate
+#   decoding DoS, fixed 2.8.0. Top-level urllib3 is 2.8.0 and scans clean.
+# - GHSA-xmj3-9gf7-h52w (LOW): pip/_vendor/setuptools 70.3.0, Windows path
+#   escape via namespace_packages.txt during legacy wheel install, fixed
+#   84.1.0. Windows-only, and the image is Linux.
+# Same "pip is build-time only" rationale. Drop with the other pip-vendored
+# entries once a pip release vendors fixed versions.
+CVE-2026-97688
+GHSA-xmj3-9gf7-h52w

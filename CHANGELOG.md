@@ -26,6 +26,10 @@ footer) and the `job-squire-cli` package as `<VERSION>+<build-sha>` (PEP 440). S
     (from 42.0), `mcp>=2.2.0` (from 2.0.0), `anyio>=4.14.2` (from 4.0), `httpx2>=2.12.0` (from
     2.5.0). All support the CLI's Python 3.11 floor; the CLI test suite passes at exactly these
     minimums.
+- Code-scanning alerts from Trivy: `musl`/`musl-utils` are now upgraded at build time
+  (CVE-2026-107891, fixed in 1.2.6-r3), and `.trivyignore` covers two more lower-severity CVEs in
+  pip 26.2.2's vendored copies (CVE-2026-97688 urllib3, GHSA-xmj3-9gf7-h52w setuptools, the latter
+  Windows-only).
 
 ## [0.8.4] - 2026-10-29
 
