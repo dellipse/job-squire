@@ -10,8 +10,6 @@ footer) and the `job-squire-cli` package as `<VERSION>+<build-sha>` (PEP 440). S
 
 ## [Unreleased]
 
-## [0.8.4] - 2026-10-29
-
 ### Security
 
 - Fixed catastrophic regex backtracking in the heuristic name redaction added in 0.8.2
