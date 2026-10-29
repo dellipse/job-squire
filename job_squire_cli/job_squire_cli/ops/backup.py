@@ -71,7 +71,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .. import __version__ as _cli_version
-from . import backup_crypto, compose, dotenv, paths, ports
+from . import backup_crypto, compose, dotenv, fileperms, paths, ports
 from . import lifecycle as lc
 from .paths import instance_root
 from .registry import (
@@ -337,10 +337,7 @@ def create_backup(
     dest_dir.mkdir(parents=True, exist_ok=True)
     archive_path = dest_dir / backup_filename(instance.name, ext=ext)
     archive_path.write_bytes(sealed)
-    try:
-        archive_path.chmod(0o600)  # contains the instance's SECRET_KEY, even though it's encrypted
-    except OSError:
-        pass
+    fileperms.restrict_to_owner(archive_path)  # contains the instance's SECRET_KEY, even though it's encrypted
 
     return BackupResult(instance_name=instance.name, archive_path=archive_path, manifest=manifest)
 
@@ -583,10 +580,7 @@ def restore_instance(
         _extract_instance_payload(
             opened.payload, opened.container_format, host_root=root, volume_staging=staging_dir,
         )
-        try:
-            paths.data_env_path(root).chmod(0o600)  # holds SECRET_KEY/ADMIN_PASSWORD; matches create's own chmod
-        except OSError:
-            pass
+        fileperms.restrict_to_owner(paths.data_env_path(root))  # holds SECRET_KEY/ADMIN_PASSWORD; matches create
 
         mode = manifest_instance.get("mode", "local")
         registered = [i for i in list_instances() if i.name != slug]

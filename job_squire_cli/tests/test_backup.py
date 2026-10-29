@@ -34,6 +34,8 @@ from job_squire_cli.ops import lifecycle as lc
 from job_squire_cli.ops import paths
 from job_squire_cli.ops import registry as reg
 
+from ._perms import assert_owner_only
+
 from tests.test_lifecycle import (  # noqa: F401 -- autouse fixtures re-exposed by import
     FakeRuntime, create_kwargs, force_linux_config_dir, tmp_registry,
 )
@@ -75,10 +77,7 @@ def test_create_backup_writes_encrypted_archive_with_restrictive_permissions(fak
     assert not raw.startswith(b"\x1f\x8b")  # never a plaintext gzip -- always sealed first
     assert raw[:4] == b"JSQB"
 
-    import stat
-
-    mode = stat.S_IMODE(result.archive_path.stat().st_mode)
-    assert mode == 0o600
+    assert_owner_only(result.archive_path)
 
     assert result.manifest["instance"]["name"] == "castelo"
     assert result.manifest["backup_format_version"] == bk.BACKUP_FORMAT_VERSION

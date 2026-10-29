@@ -46,7 +46,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from . import dotenv, paths
+from . import dotenv, fileperms, paths
 
 DEFAULT_IMAGE = "ghcr.io/dellipse/job-squire:latest"
 
@@ -348,10 +348,9 @@ def _write_secret_file(path: Path, content: str) -> None:
         raise
     with f:
         f.write(content)
-    try:
-        os.chmod(path, 0o600)
-    except OSError:
-        pass
+    # On Windows the O_CREAT mode above is a no-op beyond the read-only bit;
+    # fileperms swaps in an owner-only ACL there (chmod 0600 elsewhere).
+    fileperms.restrict_to_owner(path)
 
 
 def write_compose_files(

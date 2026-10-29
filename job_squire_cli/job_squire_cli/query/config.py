@@ -48,6 +48,8 @@ import platform
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..ops import fileperms
+
 CONFIG_FILENAME = "mcp.json"
 CONFIG_VERSION = 1
 
@@ -125,10 +127,10 @@ def _write_raw_config(data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_suffix(".json.tmp")
     tmp_path.write_text(json.dumps(data, indent=2) + "\n")
-    try:
-        tmp_path.chmod(0o600)  # may hold a bearer token in plaintext
-    except OSError:
-        pass
+    # May hold a bearer token in plaintext. Restricted before the rename so
+    # the final path is never briefly readable; a same-volume rename keeps
+    # the explicit Windows ACL fileperms sets.
+    fileperms.restrict_to_owner(tmp_path)
     tmp_path.replace(path)  # atomic rename on POSIX and Windows
 
 

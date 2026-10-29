@@ -59,7 +59,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from . import compose
+from . import compose, fileperms
 from . import proxy as proxy_ops
 
 Runner = proxy_ops.Runner
@@ -173,10 +173,8 @@ def _rewrite_and_recreate(
         network=network, timezone=timezone, url=url, validation=validation,
         subdomains=subdomains, duckdns_token=duckdns_token, dnsplugin=dnsplugin,
     ))
-    try:
-        compose_path.chmod(0o600)
-    except OSError:
-        pass  # best-effort; some filesystems (e.g. certain CI/CD bind mounts) don't support chmod
+    # Best-effort; some filesystems (e.g. certain CI/CD bind mounts) can't hold permissions.
+    fileperms.restrict_to_owner(compose_path)
 
     # No `--project-directory`: see ops/compose.py's `_compose_argv` docstring --
     # podman-compose 1.5.0 doesn't recognize the flag and dies on every
@@ -207,10 +205,7 @@ def _write_cloudflare_credentials(config_dir: Path, api_token: str) -> Path:
         "# credentials. Re-written in place on every run; safe to delete if DNS/TLS is reconfigured.\n"
         f"dns_cloudflare_api_token = {api_token}\n"
     )
-    try:
-        ini_path.chmod(0o600)
-    except OSError:
-        pass
+    fileperms.restrict_to_owner(ini_path)
     return ini_path
 
 

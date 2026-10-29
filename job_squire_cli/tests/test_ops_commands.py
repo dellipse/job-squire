@@ -949,6 +949,47 @@ def test_uninstall_reports_when_no_path_entry_was_found_despite_cli_removal(runn
     assert "Open a new terminal" not in result.output
 
 
+@pytest.mark.parametrize("os_name, where", [("nt", "Windows User PATH"), ("posix", "~/.zshrc")])
+def test_uninstall_no_path_entry_wording_names_the_right_place(runner, monkeypatch, tmp_path, os_name, where):
+    """Only the os.name the command reads is swapped (via a stand-in `os`),
+    so pathlib keeps the host's real flavor and this runs on every OS."""
+    import os
+    import types
+
+    from job_squire_cli.ops import uninstall as un
+    from job_squire_cli.ops import commands as cmds
+    monkeypatch.setattr(cmds, "os", types.SimpleNamespace(**{**vars(os), "name": os_name}))
+    monkeypatch.setattr(
+        cmds.uninstall_ops, "uninstall_everything",
+        lambda **kwargs: un.UninstallResult(
+            instances_removed=[], data_kept={}, runtime_removed=None,
+            cli_removed=tmp_path / "job-squire", rc_files_updated=[],
+        ),
+    )
+
+    result = runner.invoke(main, ["uninstall", "--yes"])
+    assert result.exit_code == 0
+    assert "No PATH entry was found to remove" in result.output
+    assert where in result.output
+
+
+def test_uninstall_reports_a_removed_windows_user_path_entry(runner, monkeypatch, tmp_path):
+    from job_squire_cli.ops import uninstall as un
+    from job_squire_cli.ops import commands as cmds
+    monkeypatch.setattr(
+        cmds.uninstall_ops, "uninstall_everything",
+        lambda **kwargs: un.UninstallResult(
+            instances_removed=[], data_kept={}, runtime_removed=None,
+            cli_removed=tmp_path / "job-squire", rc_files_updated=[], windows_path_updated=True,
+        ),
+    )
+
+    result = runner.invoke(main, ["uninstall", "--yes"])
+    assert result.exit_code == 0
+    assert "PATH entry removed from: your Windows User PATH" in result.output
+    assert "Open a new terminal" in result.output
+
+
 # ── uninstall: proxy/DNS cleanup offer for network-mode instances ───────
 # Mirrors `remove`'s own offer (see "remove: proxy/DNS cleanup offer"
 # above), but for the whole batch at once: one combined conf-removal

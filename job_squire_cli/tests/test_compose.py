@@ -15,12 +15,13 @@ Every subprocess call is injected, same pattern as
 test_runtime.py, so this never touches a real container runtime.
 """
 import json
-import stat
 from types import SimpleNamespace
 
 import pytest
 
 from job_squire_cli.ops import compose, paths
+
+from ._perms import assert_owner_only
 
 
 def fake_run(returncode=0, stdout="", stderr=""):
@@ -224,8 +225,7 @@ def test_write_instance_files_restricts_data_env_permissions(tmp_path):
         root, container_name="job-squire-castelo", image=compose.DEFAULT_IMAGE,
         loopback_only=True, app_port=8080, mcp_port=9000, env=_sample_env(),
     )
-    mode = stat.S_IMODE(paths.data_env_path(root).stat().st_mode)
-    assert mode == 0o600
+    assert_owner_only(paths.data_env_path(root))
 
 
 # ── driving the runtime ───────────────────────────────────────────────────

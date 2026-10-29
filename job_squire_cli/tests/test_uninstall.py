@@ -17,6 +17,7 @@ Mirrors test_runtime.py's and test_lifecycle.py's own conventions: no real
 subprocess, no real filesystem PATH, and XDG_CONFIG_HOME/JOB_SQUIRE_HOME
 both redirected to a tmp_path so nothing here can touch a real machine.
 """
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -191,6 +192,11 @@ def test_strip_path_line_missing_file_is_a_no_op(tmp_path):
     assert un.strip_path_line(tmp_path / "does-not-exist", tmp_path / "bin") is False
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="rc-file PATH lines are a macOS/Linux mechanism (Windows uses the User PATH, "
+    "see strip_windows_user_path), and a drive-letter colon can't appear in them",
+)
 def test_strip_path_line_matches_through_a_symlink_when_the_literal_path_differs(tmp_path):
     """`bin_dir` is always derived from `sys.executable`, which can come
     back through a symlink's real target on some platforms/Python builds
@@ -351,6 +357,104 @@ def test_uninstall_everything_removes_its_own_venv_and_path_lines(tmp_config_dir
     assert removed == [venv_dir.parent, tmp_config_dir]
     assert result.rc_files_updated == [rc_file]
     assert "job-squire bootstrap" not in rc_file.read_text()
+
+
+# ── Windows User PATH (bootstrap.ps1's install side) ──────────────────────
+
+
+def test_strip_windows_user_path_passes_the_dir_by_env_not_in_the_script(tmp_path):
+    bin_dir = tmp_path / "job-squire" / "cli" / "Scripts"
+    seen = {}
+
+    def run(argv, **kwargs):
+        seen["argv"], seen["env"] = argv, kwargs.get("env")
+        return SimpleNamespace(returncode=0, stdout="removed\r\n", stderr="")
+
+    assert un.strip_windows_user_path(bin_dir, run=run) is True
+    assert seen["argv"][:4] == ["powershell", "-NoProfile", "-NonInteractive", "-Command"]
+    assert "'Path', 'User'" in seen["argv"][4]
+    assert str(bin_dir) not in seen["argv"][4]
+    assert seen["env"]["JOBSQUIRE_UNINSTALL_BIN_DIR"] == str(bin_dir)
+
+
+@pytest.mark.parametrize("reply", [
+    SimpleNamespace(returncode=0, stdout="", stderr=""),       # nothing to remove
+    SimpleNamespace(returncode=1, stdout="", stderr="boom"),   # PowerShell failed
+])
+def test_strip_windows_user_path_reports_false_when_nothing_was_removed(tmp_path, reply):
+    assert un.strip_windows_user_path(tmp_path, run=lambda *a, **k: reply) is False
+
+
+def test_strip_windows_user_path_survives_a_missing_powershell(tmp_path):
+    def run(*a, **k):
+        raise OSError("powershell not found")
+
+    assert un.strip_windows_user_path(tmp_path, run=run) is False
+
+
+def test_uninstall_everything_strips_the_windows_user_path_on_windows(tmp_config_dir, tmp_path, monkeypatch):
+    venv_dir = tmp_path / "AppData" / "job-squire" / "cli"
+    scripts = venv_dir / "Scripts"
+    scripts.mkdir(parents=True)
+    (venv_dir / "pyvenv.cfg").write_text("home = C:\\Python312\n")
+    monkeypatch.setattr(un.sys, "executable", str(scripts / "python.exe"))
+    monkeypatch.setattr(un.Path, "home", classmethod(lambda cls: tmp_path / "home"))
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(argv[0])
+        stdout = "removed\r\n" if argv[0] == "powershell" else ""
+        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+    result = un.uninstall_everything(
+        keep_data=True, run=run, venv_dir=venv_dir, system="Windows", rmtree=lambda p: None,
+    )
+
+    assert result.windows_path_updated is True
+    assert result.rc_files_updated == []
+    assert calls == ["powershell", "cmd"]  # PATH cleanup, then the deferred self-delete
+
+
+def test_uninstall_everything_never_touches_the_windows_path_elsewhere(tmp_config_dir, tmp_path, monkeypatch):
+    venv_dir = tmp_path / "home" / ".job-squire" / "cli"
+    (venv_dir / "bin").mkdir(parents=True)
+    (venv_dir / "pyvenv.cfg").write_text("home = /usr/bin\n")
+    monkeypatch.setattr(un.sys, "executable", str(venv_dir / "bin" / "python3"))
+    monkeypatch.setattr(un.Path, "home", classmethod(lambda cls: tmp_path / "home"))
+
+    result = un.uninstall_everything(
+        keep_data=True, run=fake_run(), venv_dir=venv_dir, system="Linux", rmtree=lambda p: None,
+    )
+
+    assert result.windows_path_updated is False
+
+
+@pytest.mark.skipif(os.name != "nt", reason="runs the real PowerShell; Windows only")
+@pytest.mark.parametrize("entry", ["{bin}", "{bin}\\", "{BIN}"])
+def test_windows_path_strip_script_really_removes_only_our_entry(tmp_path, entry):
+    """Runs the exact production script, but against the child process's own
+    PATH ('Process' scope) instead of the real User PATH, so nothing on the
+    machine changes. Covers the case-insensitive / trailing-backslash match."""
+    import shutil
+    import subprocess
+
+    bin_dir = str(tmp_path / "job-squire" / "cli" / "Scripts")
+    ours = entry.format(bin=bin_dir, BIN=bin_dir.upper())
+    path = f"C:\\keep\\one;{ours};C:\\keep\\two"
+    script = (un._windows_path_strip_ps("Process")
+              + "; Write-Output ([Environment]::GetEnvironmentVariable('Path', 'Process'))")
+    # Windows env names are case-insensitive: drop the inherited PATH under
+    # whatever casing it has before setting ours, so the child sees one PATH.
+    env = {k: v for k, v in os.environ.items() if k.upper() != "PATH"}
+    env.update(PATH=path, JOBSQUIRE_UNINSTALL_BIN_DIR=bin_dir)
+    powershell = shutil.which("powershell")  # resolved before PATH is replaced
+    assert powershell
+
+    out = subprocess.run([powershell, "-NoProfile", "-NonInteractive", "-Command", script],
+                         capture_output=True, text=True, env=env, check=True).stdout.splitlines()
+
+    assert out[0].strip() == "removed"
+    assert out[-1].strip() == "C:\\keep\\one;C:\\keep\\two"
 
 
 def test_uninstall_everything_result_reports_data_kept_per_instance(tmp_config_dir, tmp_path):

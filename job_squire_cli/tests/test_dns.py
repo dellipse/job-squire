@@ -27,6 +27,8 @@ import pytest
 
 from job_squire_cli.ops import dns, proxy
 
+from ._perms import assert_owner_only
+
 
 class SequencedFakeRun:
     """Matches subprocess calls by argv prefix (longest match wins). Each
@@ -289,4 +291,4 @@ def test_configure_cloudflare_credentials_file_is_permissioned_600(tmp_path):
         data_root=tmp_path, wait_for_cert=False, run=run,
     )
     ini_path = proxy.swag_root(tmp_path) / "config" / "dns-conf" / "cloudflare.ini"
-    assert (ini_path.stat().st_mode & 0o777) == 0o600
+    assert_owner_only(ini_path)

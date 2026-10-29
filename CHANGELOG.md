@@ -10,6 +10,23 @@ footer) and the `job-squire-cli` package as `<VERSION>+<build-sha>` (PEP 440). S
 
 ## [Unreleased]
 
+### Fixed
+
+- `job-squire-cli` on Windows: files holding secrets (instance data `.env`, backup archives, the
+  SWAG compose file, certbot's `cloudflare.ini`, and the MCP query config with its bearer token)
+  are now actually restricted to the current user. `chmod 0600` only toggles the read-only bit on
+  Windows, so they previously kept their folder's ACL -- readable by every local user if the data
+  root sat outside the user profile. New `ops/fileperms.py` replaces the ACL via `icacls`
+  (inheritance off; full control for the current user's SID and SYSTEM only) and keeps
+  `chmod 0600` elsewhere.
+- `job-squire uninstall` on Windows now removes the CLI's `Scripts` directory from the User PATH
+  that `bootstrap.ps1` added it to; previously only macOS/Linux rc-file PATH lines were cleaned up,
+  leaving a stale Windows PATH entry behind.
+- CLI tests now pass on Windows: permission checks assert the real ACL there, a macOS path
+  assertion compares path parts instead of a `/`-joined string, and the rc-file symlink test is
+  skipped on Windows (a macOS/Linux-only mechanism). `test-cross-platform` no longer runs with
+  `continue-on-error`.
+
 ### Changed
 
 - Re-audited every pinned or excluded dependency (2026-10-29):
