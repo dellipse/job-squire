@@ -10,6 +10,8 @@ footer) and the `job-squire-cli` package as `<VERSION>+<build-sha>` (PEP 440). S
 
 ## [Unreleased]
 
+## [0.8.5] - 2026-10-29
+
 ### Fixed
 
 - `job-squire-cli` on Windows: files holding secrets (instance data `.env`, backup archives, the
