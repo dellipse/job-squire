@@ -8,9 +8,9 @@
 # 2026-09-08: GHSA-6v7p-g79w-8964 (msgpack) and CVE-2025-47273 (setuptools)
 # are pip 26.2.1's OWN internal vendored copies -- pip/_vendor/msgpack==1.1.2
 # and pip/_vendor/setuptools==70.3.0 (confirmed against pip's vendor.txt at
-# that exact tag), not the top-level `msgpack`/`setuptools` packages this
-# image also installs, which are current (see the venv RUN line in the
-# Dockerfile, right after the c-ares/jq/openssl comment). Not reachable at
+# that exact tag). (The image no longer installs top-level msgpack or
+# setuptools at all as of 2026-10-29; see the venv RUN line in the
+# Dockerfile.) Not reachable at
 # runtime: pip is only used during the image build, never invoked by the
 # running app (same Dockerfile comment already establishes this for pip
 # itself). No pip release has bumped these vendor pins yet as of this date.
@@ -22,12 +22,13 @@ CVE-2025-47273
 # 2026-09-09: CVE-2026-59890 (setuptools, MANIFEST.in exclusion bypass via
 # NFC/NFD normalization collision) is the SAME pip/_vendor/setuptools==70.3.0
 # as CVE-2025-47273 above, just a second CVE against that one vendored copy --
-# not the top-level `setuptools` this image also installs (upgraded to
-# current in the venv RUN line, per the same Dockerfile comment). Still
+# not a top-level `setuptools` (the image installs none). Still
 # pip 26.2.1 as of this date; reconfirmed against that tag's vendor.txt,
 # which still pins setuptools==70.3.0. Same "not reachable at runtime"
 # reasoning applies. Drop this line once a pip release bumps the vendored
 # setuptools past 83.0.0.
+# Re-checked 2026-10-29: pip 26.2.2 (latest) still vendors msgpack 1.1.2 and
+# setuptools 70.3.0, so all three entries above remain valid.
 CVE-2026-59890
 
 # 2026-10-29: CVE-2026-114613 (msgpack, map-deserialization memory-leak DoS,
@@ -37,7 +38,7 @@ CVE-2026-59890
 # per that tag's vendor.txt. Trivy reports them under a bare "Python" target,
 # not a site-packages dist-info. The top-level copies the app actually imports
 # are current and scanned clean in the same run (msgpack 1.2.4, urllib3 2.8.0);
-# the Dockerfile's venv line now requires msgpack>=1.2.3 and urllib3 comes in
+# no top-level msgpack is installed at all (nothing depends on it) and urllib3 comes in
 # via requests, which pip-audit gates in CI, so ignoring these IDs here can't
 # hide a regression in the runtime copies. Same "pip is build-time only, never
 # invoked by the running app" reasoning as the entries above. 26.2.2 is the
