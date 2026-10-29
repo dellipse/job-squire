@@ -10,6 +10,27 @@ footer) and the `job-squire-cli` package as `<VERSION>+<build-sha>` (PEP 440). S
 
 ## [Unreleased]
 
+### Changed
+
+- Re-audited every pinned or excluded dependency (2026-10-29):
+  - `pydantic` 2.13.4 -> 2.14.1 with its matched `pydantic-core` 2.46.4 -> 2.50.1. The pair is
+    still in Dependabot's ignore list (each pydantic release hard-pins one core version), so it
+    keeps moving by hand, both halves in one commit.
+  - Docker image: the venv setup line no longer installs `setuptools` or `msgpack`. Both were
+    added after Trivy flagged them, but the flagged copies were pip's own vendored ones; nothing
+    in `requirements.txt` depends on either, and Python 3.12+ `ensurepip` no longer installs
+    setuptools. Removing them drops two unused packages from the image. The `.trivyignore`
+    entries for pip's vendored copies stay (pip 26.2.2 still vendors msgpack 1.1.2, setuptools
+    70.3.0, urllib3 2.7.0).
+  - `job-squire-cli` minimum versions raised past known advisories: `cryptography>=49.0`
+    (from 42.0), `mcp>=2.2.0` (from 2.0.0), `anyio>=4.14.2` (from 4.0), `httpx2>=2.12.0` (from
+    2.5.0). All support the CLI's Python 3.11 floor; the CLI test suite passes at exactly these
+    minimums.
+- Code-scanning alerts from Trivy: `musl`/`musl-utils` are now upgraded at build time
+  (CVE-2026-107891, fixed in 1.2.6-r3), and `.trivyignore` covers two more lower-severity CVEs in
+  pip 26.2.2's vendored copies (CVE-2026-97688 urllib3, GHSA-xmj3-9gf7-h52w setuptools, the latter
+  Windows-only).
+
 ## [0.8.4] - 2026-10-29
 
 ### Security

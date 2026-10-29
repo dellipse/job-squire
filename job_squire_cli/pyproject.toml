@@ -28,7 +28,7 @@ dependencies = [
     # depending on the app package itself. Also the primitive backup/restore
     # encryption uses, so this isn't new weight added just for one feature --
     # it's shared by both.
-    "cryptography>=42.0",
+    "cryptography>=49.0",
 ]
 
 # The query group (health/list/pipeline/contacts/job/contact/followups) talks
@@ -43,9 +43,9 @@ query = [
     # MCPServer, httpx -> httpx2, CallToolResult's isError/structuredContent
     # -> is_error/structured_content). Lift this bound only after auditing the
     # next migration guide the same way.
-    "mcp>=2.0.0,<3",
-    "anyio>=4.0",
-    "httpx2>=2.5.0",
+    "mcp>=2.2.0,<3",
+    "anyio>=4.14.2",
+    "httpx2>=2.12.0",
 ]
 
 # job-squire is the canonical command; jobsquire is kept as an alias to the

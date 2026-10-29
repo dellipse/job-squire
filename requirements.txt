@@ -48,18 +48,16 @@ Markdown==3.11
 # .github/dependabot.yml.
 mcp==2.3.0
 # Pinned (transitive via mcp) so musl wheel resolution stays deterministic.
-# pydantic-core held at 2.46.4: pydantic 2.13.4 (current latest) hard-pins
-# pydantic-core==2.46.4, so 2.47.0 breaks `pip install` outright. Bump this
-# together with the next compatible pydantic release, not alone. Dependabot
-# proposed bumping pydantic-core alone to 2.47.0 again on 2026-07-18 (PR #8);
-# held back here for the same reason as PR #6 on 2026-07-12.
-# Both pydantic and pydantic-core are now in the `ignore` list in
-# .github/dependabot.yml, so neither half gets proposed on its own any more.
-# Upgrading the pair is a manual step: move both pins in one commit
-# (e.g. pydantic 2.13.5 requires pydantic-core 2.46.5 -- not 2.48.0, which
-# is what Dependabot proposed in PR #19).
-pydantic==2.13.4
-pydantic-core==2.46.4
+# pydantic and pydantic-core are a matched pair: every pydantic release
+# hard-pins one exact pydantic-core version, so bumping either half alone
+# breaks `pip install` outright (Dependabot PRs #6, #8, #19, #21 all did).
+# Both are in the `ignore` list in .github/dependabot.yml for that reason.
+# Upgrading the pair is a manual step: move both pins in one commit, to the
+# pydantic-core version the new pydantic's requires_dist names.
+# 2026-10-29: pydantic 2.14.1 -> pydantic-core==2.50.1 (cp314 musllinux
+# wheels for x86_64 and aarch64; mcp 2.3.0 needs pydantic>=2.12).
+pydantic==2.14.1
+pydantic-core==2.50.1
 uvicorn==0.54.0
 python-docx==1.2.0
 beautifulsoup4==4.15.0
