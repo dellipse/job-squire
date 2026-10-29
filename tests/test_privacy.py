@@ -16,6 +16,7 @@ The contract under test:
 - MCP tools redact results and rehydrate placeholder-bearing arguments.
 """
 import re
+import time
 
 import pytest
 
@@ -173,6 +174,18 @@ class TestHeuristicNames:
     def test_referred_by_phrase_caught(self, seeded):
         out = privacy.redact("Referred by Marcus Feldman at the conference.").text
         assert "Marcus Feldman" not in out
+
+    def test_trigger_with_is_and_colon_caught(self, seeded):
+        out = privacy.redact("Hiring manager was : Devon Castillo").text
+        assert "Devon Castillo" not in out
+
+    def test_long_whitespace_after_trigger_is_linear(self, seeded):
+        # Regression: three adjacent [ \t]* runs after the trigger phrase
+        # backtracked cubically when no name followed (~35s at 2,000 spaces).
+        text = ("Recruiter" + " \t" * 10000 + "x\n") * 3
+        start = time.monotonic()
+        privacy._sub_context_names(text, {})
+        assert time.monotonic() - start < 1.0
 
     def test_common_first_name_pair_caught(self, seeded):
         out = privacy.redact("Talked to Michael Bloomfield about the role.").text
