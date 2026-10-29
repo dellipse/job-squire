@@ -78,28 +78,12 @@ WORKDIR /app
 # Installed into a venv so pip doesn't fight Alpine's PEP 668
 # externally-managed system Python.
 #
-# The venv's own bootstrapped pip lags behind Alpine's apk package and has
-# had several CVEs (path traversal / arbitrary file overwrite via malicious
-# wheel installs, e.g. CVE-2026-8643, CVE-2026-6357, CVE-2025-8869). pip
-# itself isn't invoked at runtime by the running app, but it stays present
-# in the shipped image, so upgrade it explicitly rather than leaving
-# whatever `ensurepip` bundled.
-#
-# Only pip is upgraded here. This line used to also install `setuptools` and
-# `msgpack` (2026-09-08), after the Trivy gate flagged setuptools 70.3.0 and
-# msgpack 1.1.2. Both turned out to be pip's OWN vendored copies
-# (pip/_vendor, see .trivyignore), not venv packages: on Python 3.12+
-# `ensurepip` no longer installs setuptools at all, and nothing in
-# requirements.txt depends on either (confirmed 2026-10-29 by resolving it
-# alone: 60 packages, neither among them; the test suite passes without
-# setuptools). Installing them only added two unused packages to the image.
-#
 # python3 is installed with --upgrade so a rebuild always takes the newest
 # Alpine 3.24 build (CVE-2026-115557, reported fixed in 3.14.10-r0) even if
-# a future base tag starts shipping an older python3 of its own.
-RUN apk add --no-cache --upgrade python3 py3-pip && \
-    python3 -m venv /opt/venv && \
-    /opt/venv/bin/pip install --no-cache-dir --upgrade pip
+# a future base tag starts shipping an older python3 of its own. py3-pip is
+# not installed here: it is only needed to create the venv below, so it is
+# added and removed within that one step.
+RUN apk add --no-cache --upgrade python3
 
 # Install dependencies first for better layer caching. requirements.txt pins
 # pydantic/pydantic-core explicitly (transitive via mcp) so this resolution
@@ -112,8 +96,25 @@ RUN apk add --no-cache --upgrade python3 py3-pip && \
 # before this bump: every one of them ships only a `py3-none-any` wheel, so
 # none of them is a compiled-extension / musl-wheel risk at all -- no
 # build-toolchain stage needed here for this migration.
+#
+# pip is build-time only: nothing in the running app, its s6 services or its
+# healthcheck invokes it, and images are replaced on update rather than
+# patched in place. So it is upgraded (the bootstrapped one has had
+# wheel-install CVEs), used once, then uninstalled in this SAME layer, along
+# with Alpine's py3-pip -- no image layer ever ships a pip. That retires the
+# whole class of Trivy findings against pip's vendored copies (msgpack,
+# setuptools, urllib3 under pip/_vendor) that .trivyignore used to carry
+# eight entries for. The final check fails the build if either pip is
+# still importable.
 COPY requirements.txt .
-RUN /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
+RUN apk add --no-cache py3-pip && \
+    python3 -m venv /opt/venv && \
+    /opt/venv/bin/pip install --no-cache-dir --upgrade pip && \
+    /opt/venv/bin/pip install --no-cache-dir -r requirements.txt && \
+    /opt/venv/bin/pip uninstall --yes pip && \
+    apk del py3-pip && \
+    ! /opt/venv/bin/python -c "import pip" 2>/dev/null && \
+    ! python3 -c "import pip" 2>/dev/null
 
 # Fail the build if certifi (requests' CA bundle, pinned in requirements.txt)
 # still trusts a distrusted root, and strip any from the system bundle used
