@@ -19,7 +19,6 @@ otherwise the XDG_CONFIG_HOME-only tests would silently no-op on macOS,
 where config_dir() never consults it.
 """
 import json
-import os
 
 import pytest
 
@@ -33,6 +32,8 @@ from job_squire_cli.query.config import (
     remove_instance_config,
     set_instance,
 )
+
+from ._perms import assert_owner_only
 
 
 @pytest.fixture(autouse=True)
@@ -164,9 +165,7 @@ def test_remove_instance_config_reassigns_default():
 
 def test_config_file_is_written_with_restrictive_permissions():
     set_instance("castelo", endpoint="http://localhost:9000", token="jsq_mcp_xyz")
-    if os.name != "nt":
-        mode = config_path().stat().st_mode & 0o777
-        assert mode == 0o600
+    assert_owner_only(config_path())
 
 
 def test_linux_config_dir_honors_xdg_and_never_mentions_hermes():
@@ -178,7 +177,9 @@ def test_linux_config_dir_honors_xdg_and_never_mentions_hermes():
 def test_macos_config_dir(monkeypatch):
     monkeypatch.setattr(config_module.platform, "system", lambda: "Darwin")
     path = config_module.config_dir()
-    assert str(path).endswith("Library/Application Support/job-squire")
+    # Compare by parts, not a "/"-joined string: this also runs on the
+    # Windows CI leg, where the host Path flavor joins with backslashes.
+    assert path.parts[-3:] == ("Library", "Application Support", "job-squire")
 
 
 def test_windows_config_dir(monkeypatch, tmp_path):

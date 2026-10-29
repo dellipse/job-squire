@@ -87,23 +87,23 @@ jobs:
   # latest)" etc., which would silently stop satisfying that requirement
   # for every future PR. `test` above stays exactly as it is (the one
   # required, Linux-only check); this job covers the other two platforms
-  # without being wired into anything that blocks a merge.
+  # and is not a required status check unless added (see below).
   #
-  # continue-on-error is deliberate, not a placeholder: a repo-wide grep
-  # turned up real POSIX-only constructs in this suite (os.chmod-based
-  # permission assertions in test_ports.py/test_backup.py/test_compose.py)
-  # that are known to behave differently on Windows. Promoting this to a
-  # required check needs those failures triaged first -- likely some
-  # combination of real Windows-specific bugs and tests that need a
-  # platform-conditional skip -- not something to force through CI
-  # without a way to iterate against an actual Windows/macOS runner.
+  # This used to run with continue-on-error while its POSIX-only failures
+  # were triaged. That triage is done (2026-10-29): the os.chmod-based
+  # permission checks were a real Windows gap (chmod can't restrict access
+  # there) and are now enforced via ops/fileperms.py's owner-only ACL and
+  # asserted per-OS in tests/_perms.py; the remaining failures were
+  # test-only (a "/"-joined macOS path assertion, and an rc-file symlink
+  # test for a mechanism Windows doesn't use). With those fixed it fails
+  # the workflow like any other job. To make it block merges, also add
+  # both matrix legs as required status checks in branch protection.
   test-cross-platform:
     strategy:
       fail-fast: false
       matrix:
         os: [macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    continue-on-error: true
     permissions:
       contents: read
     steps:

@@ -54,6 +54,7 @@ its own opt-out so nothing is destroyed silently:
 """
 from __future__ import annotations
 
+import os
 import platform
 import re
 import shutil
@@ -241,6 +242,46 @@ def strip_path_line(rc_file: Path, bin_dir: Path) -> bool:
     return True
 
 
+# bootstrap.ps1 puts the CLI on PATH by appending `<venv>\Scripts` to the
+# *User* PATH (HKCU\Environment) via [Environment]::SetEnvironmentVariable,
+# not via any rc file -- so strip_path_line can't see it. This is the exact
+# reverse, done through the same .NET API so the change is broadcast to
+# new processes the same way the install was. The directory is passed in
+# an environment variable, never interpolated into the script, so no path
+# can break the PowerShell quoting.
+def _windows_path_strip_ps(scope: str = "User") -> str:
+    """The PowerShell that drops $env:JOBSQUIRE_UNINSTALL_BIN_DIR from the
+    PATH at `scope`. Production always uses "User"; tests run the identical
+    logic against "Process" so they never touch a real User PATH."""
+    return (
+        "$bin = $env:JOBSQUIRE_UNINSTALL_BIN_DIR.TrimEnd('\\'); "
+        f"$p = [Environment]::GetEnvironmentVariable('Path', '{scope}'); "
+        "if ([string]::IsNullOrEmpty($p)) { exit 0 }; "
+        "$parts = @($p -split ';' | Where-Object { $_ -ne '' }); "
+        "$kept = @($parts | Where-Object { $_.TrimEnd('\\') -ine $bin }); "
+        "if ($kept.Count -ne $parts.Count) { "
+        f"[Environment]::SetEnvironmentVariable('Path', ($kept -join ';'), '{scope}'); "
+        "Write-Output 'removed' }"
+    )
+
+
+def strip_windows_user_path(bin_dir: Path, *, run: Runner = subprocess.run) -> bool:
+    """Remove `bin_dir` from the Windows User PATH, leaving every other
+    entry untouched. Comparison is case-insensitive and ignores a trailing
+    backslash, matching how Windows itself treats PATH entries. Returns True
+    if an entry was removed; False if none was there or PowerShell failed
+    (best-effort, like the rc-file cleanup: the caller reports it)."""
+    env = dict(os.environ, JOBSQUIRE_UNINSTALL_BIN_DIR=str(bin_dir))
+    try:
+        result = run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", _windows_path_strip_ps()],
+            capture_output=True, text=True, timeout=30, env=env,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0 and "removed" in (result.stdout or "")
+
+
 def _spawn_windows_deferred_delete(install_dir: Path, run: Runner) -> None:
     """Windows won't let a running process delete its own directory
     synchronously (no FILE_SHARE_DELETE on the running interpreter), so a
@@ -276,6 +317,7 @@ class UninstallResult:
     runtime_removed: str | None
     cli_removed: Path | None
     rc_files_updated: list[Path]
+    windows_path_updated: bool = False
     image_removed: dict[str, bool] = field(default_factory=dict)
     image_kept_reason: dict[str, str | None] = field(default_factory=dict)
     volumes_removed: dict[str, list[str]] = field(default_factory=dict)
@@ -351,12 +393,15 @@ def uninstall_everything(
 
     cli_removed: Path | None = None
     rc_files_updated: list[Path] = []
+    windows_path_updated = False
     venv_dir = venv_dir if venv_dir is not None else Path(sys.prefix)
     if looks_like_bootstrap_venv(venv_dir):
         bin_dir = Path(sys.executable).parent
         for rc_file in _candidate_rc_files():
             if strip_path_line(rc_file, bin_dir):
                 rc_files_updated.append(rc_file)
+        if system == "Windows":
+            windows_path_updated = strip_windows_user_path(bin_dir, run=run)
         cli_removed = _remove_own_install(venv_dir, system=system, rmtree=rmtree, run=run)
 
     # The CLI's own config directory (instance registry, MCP query config,
@@ -377,6 +422,7 @@ def uninstall_everything(
         runtime_removed=runtime_removed,
         cli_removed=cli_removed,
         rc_files_updated=rc_files_updated,
+        windows_path_updated=windows_path_updated,
         image_removed=image_removed,
         image_kept_reason=image_kept_reason,
         volumes_removed=volumes_removed,
@@ -389,6 +435,7 @@ __all__ = [
     "runtime_uninstall_plan",
     "looks_like_bootstrap_venv",
     "strip_path_line",
+    "strip_windows_user_path",
     "uninstall_everything",
     "RUNTIME_STATE_FILENAME",
 ]

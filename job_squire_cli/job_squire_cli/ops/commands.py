@@ -956,9 +956,18 @@ def uninstall(keep_data, remove_runtime, remove_image, assume_yes, skip_proxy_cl
 
     if result.cli_removed:
         click.echo(f"job-squire CLI removed from {result.cli_removed}")
-        if result.rc_files_updated:
-            click.echo("  PATH entry removed from: " + ", ".join(str(p) for p in result.rc_files_updated))
+        updated = [str(p) for p in result.rc_files_updated]
+        if result.windows_path_updated:
+            updated.append("your Windows User PATH")
+        if updated:
+            click.echo("  PATH entry removed from: " + ", ".join(updated))
             click.echo("Open a new terminal for the PATH change to take effect.")
+        elif os.name == "nt":
+            click.echo(
+                "  No job-squire entry was found to remove in your Windows User PATH -- if one is "
+                "still there, remove it under Settings > System > About > Advanced system settings "
+                "> Environment Variables."
+            )
         else:
             click.echo(
                 "  No PATH entry was found to remove in ~/.zshrc, ~/.bashrc, or ~/.profile -- "
