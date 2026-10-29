@@ -10,6 +10,15 @@ footer) and the `job-squire-cli` package as `<VERSION>+<build-sha>` (PEP 440). S
 
 ## [Unreleased]
 
+### Security
+
+- The Docker image no longer ships pip. The venv's pip and Alpine's `py3-pip` are installed,
+  used to build the venv, and uninstalled within the same image layer, and the build fails if
+  either is still importable. Nothing at runtime used pip, but it carried its own vendored
+  msgpack, setuptools and urllib3, which accounted for every remaining `.trivyignore` entry (eight
+  CVEs); those entries are removed, so a future finding in those packages would surface instead
+  of being silently ignored.
+
 ## [0.8.5] - 2026-10-29
 
 ### Fixed
