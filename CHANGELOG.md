@@ -10,6 +10,31 @@ footer) and the `job-squire-cli` package as `<VERSION>+<build-sha>` (PEP 440). S
 
 ## [Unreleased]
 
+### Security
+
+- Fixed catastrophic regex backtracking in the heuristic name redaction added in 0.8.2
+  (`_CONTEXT_NAME_RE` in `app/privacy.py`). Three adjacent optional whitespace runs after a
+  trigger phrase ("recruiter", "interviewer", ...) backtracked cubically when no name followed:
+  ~2,000 spaces took 35s, and job descriptions ingested via MCP `add_jobs` or `/api/ingest` are
+  not whitespace-collapsed, so one posting could stall triage or an MCP response. Each whitespace
+  run is now bound to the token before it (linear time; same matches). Regression test added.
+- Dependency bumps: `pypdf` 6.17.0 -> 6.21.4 (18 advisories: crafted-PDF hangs and memory
+  exhaustion, reachable through resume upload), `Werkzeug` 3.1.8 -> 3.1.9 (PYSEC-2026-4312,
+  `safe_join` Windows device names; Windows-only, not exploitable in the Linux image),
+  `cryptography` 50.0.1 -> 50.0.2, `mcp` 2.2.0 -> 2.3.0. `pip-audit` is clean on the new set.
+- eMudhra intermediate-CA key compromise (October 2026): `certifi`, previously an unpinned
+  transitive dependency of `requests`, is now pinned at 2026.10.23, the first release without
+  the emSign ECC Root CA - G3 / Root CA - C1 / ECC Root CA - C3 roots. Python and OpenSSL never
+  consult browser revocation lists, so images built before this trusted those roots for every
+  outbound AI-provider, job-board and web-search call. New `scripts/check_distrusted_roots.py`
+  runs during the image build: it fails the build if certifi still trusts one of those roots and
+  strips any from the system bundle (used by SMTP). emSign Root CA - G1 is kept, matching
+  Mozilla's current decision.
+- Docker image: `brotli-libs` (CVE-2026-111497, the Brotli decoder bug behind "Node2Shell"),
+  `ca-certificates`/`ca-certificates-bundle`, and `python3` (CVE-2026-115557) are now upgraded
+  explicitly at build time. This release also rebuilds the published image, which had not been
+  rebuilt since 0.8.3 and so predated every October fix.
+
 ## [0.8.3] - 2026-09-09
 
 ### Fixed

@@ -588,9 +588,17 @@ _CONTEXT_NAME_RE = re.compile(
     # this, a heading like "QUESTIONS FOR THE INTERVIEWER" followed by an
     # unrelated Title Case paragraph on the next line was misread as trigger
     # word + name (caught by the KIT_PROMPT regression test).
+    #
+    # Each optional whitespace run is bound to the token before it, so a
+    # given run of spaces/tabs can only be consumed one way. The earlier
+    # form, `[ \t]*(?:is|was)?[ \t]*:?[ \t]*`, let three adjacent stars
+    # split the same run, which backtracked cubically when no name followed
+    # (a trigger word plus ~2,000 spaces took 35s) -- reachable through job
+    # descriptions ingested via MCP add_jobs or /api/ingest, which aren't
+    # whitespace-collapsed the way providers._clean() does for job boards.
     r"(?i:interviewer|hiring[ \t]+manager|recruiter|referred[ \t]+by|spoke[ \t]+with|"
     r"reached[ \t]+out[ \t]+by|contacted[ \t]+by|interview(?:ed)?[ \t]+with|met[ \t]+with)"
-    r"[ \t]*(?:is|was)?[ \t]*:?[ \t]*"
+    r"[ \t]*(?:(?:is|was)[ \t]*)?(?::[ \t]*)?"
     r"(\b[A-Z][a-z]+(?:[ \t]+[A-Z][a-z]+){0,2}\b)"
 )
 

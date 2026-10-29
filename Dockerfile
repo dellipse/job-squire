@@ -32,7 +32,21 @@ ENV LSIO_FIRST_PARTY=false
 # All found by the CI Trivy gate (job-squire-audit-2026-09-08.md follow-up
 # plus the 2026-09-09 code-scanning re-scan); fixed versions confirmed
 # already in Alpine 3.24's repo index at the time of this change.
-RUN apk add --no-cache --upgrade c-ares jq libssl3 libcrypto3 curl libcurl
+# Added 2026-10-29 (not yet confirmed against the repo index, which was
+# unreachable from the session that made this change; --upgrade takes
+# whatever the index has, and the Trivy gate will flag anything still open):
+#  - brotli-libs (pulled in by curl): CVE-2026-111497 ("Node2Shell"/
+#    "Brotli2Shell", out-of-bounds write in Google Brotli's decoder, on CISA
+#    KEV 2026-10-27); fixed upstream in 1.2.1 / 1.1.1 / 1.0.10.
+#  - ca-certificates / ca-certificates-bundle: the October 2026 eMudhra
+#    intermediate-key compromise. Python's ssl.create_default_context() (SMTP
+#    in app/notify.py) uses this system bundle, and OpenSSL never consults
+#    browser revocation lists, so the distrusted roots have to be gone from
+#    the bundle itself. scripts/check_distrusted_roots.py (run after the pip
+#    install below) enforces that, stripping them if Alpine's package still
+#    carries them.
+RUN apk add --no-cache --upgrade c-ares jq libssl3 libcrypto3 curl libcurl \
+        brotli-libs ca-certificates ca-certificates-bundle
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -76,7 +90,11 @@ WORKDIR /app
 # locally, so it's pinned here defensively too, in case it's a real
 # transitive resolution difference under this base's specific
 # Python/musl/pip combination rather than a stale cached layer.
-RUN apk add --no-cache python3 py3-pip && \
+#
+# python3 is installed with --upgrade so a rebuild always takes the newest
+# Alpine 3.24 build (CVE-2026-115557, reported fixed in 3.14.10-r0) even if
+# a future base tag starts shipping an older python3 of its own.
+RUN apk add --no-cache --upgrade python3 py3-pip && \
     python3 -m venv /opt/venv && \
     /opt/venv/bin/pip install --no-cache-dir --upgrade pip setuptools 'msgpack>=1.2.1'
 
@@ -93,6 +111,13 @@ RUN apk add --no-cache python3 py3-pip && \
 # build-toolchain stage needed here for this migration.
 COPY requirements.txt .
 RUN /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
+
+# Fail the build if certifi (requests' CA bundle, pinned in requirements.txt)
+# still trusts a distrusted root, and strip any from the system bundle used
+# by SMTP. Bind-mounted rather than COPY'd so the script never lands in the
+# image. See the script's docstring for the eMudhra background.
+RUN --mount=type=bind,source=scripts/check_distrusted_roots.py,target=/tmp/check_distrusted_roots.py \
+    /opt/venv/bin/python /tmp/check_distrusted_roots.py --strip-system
 
 # App code.
 COPY wsgi.py .
