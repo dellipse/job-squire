@@ -29,3 +29,20 @@ CVE-2025-47273
 # reasoning applies. Drop this line once a pip release bumps the vendored
 # setuptools past 83.0.0.
 CVE-2026-59890
+
+# 2026-10-29: CVE-2026-114613 (msgpack, map-deserialization memory-leak DoS,
+# fixed 1.2.3) and CVE-2026-97687 / CVE-2026-97689 (urllib3, HTTPS-proxy TLS
+# override and chunk-parser memory DoS, fixed 2.8.0) are pip 26.2.2's OWN
+# vendored copies -- pip/_vendor/msgpack==1.1.2 and pip/_vendor/urllib3==2.7.0
+# per that tag's vendor.txt. Trivy reports them under a bare "Python" target,
+# not a site-packages dist-info. The top-level copies the app actually imports
+# are current and scanned clean in the same run (msgpack 1.2.4, urllib3 2.8.0);
+# the Dockerfile's venv line now requires msgpack>=1.2.3 and urllib3 comes in
+# via requests, which pip-audit gates in CI, so ignoring these IDs here can't
+# hide a regression in the runtime copies. Same "pip is build-time only, never
+# invoked by the running app" reasoning as the entries above. 26.2.2 is the
+# newest pip as of this date. Drop these three lines once a pip release
+# vendors msgpack >= 1.2.3 and urllib3 >= 2.8.0.
+CVE-2026-114613
+CVE-2026-97687
+CVE-2026-97689
