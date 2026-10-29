@@ -36,6 +36,11 @@ footer) and the `job-squire-cli` package as `<VERSION>+<build-sha>` (PEP 440). S
   `ca-certificates`/`ca-certificates-bundle`, and `python3` (CVE-2026-115557) are now upgraded
   explicitly at build time. This release also rebuilds the published image, which had not been
   rebuilt since 0.8.3 and so predated every October fix.
+- Also folds in the rest of Dependabot's python-dependencies group (PR #79): `SQLAlchemy`
+  2.0.52 -> 2.1.4, `Markdown` 3.10.3 -> 3.11, `uvicorn` 0.52.4 -> 0.54.0, and `ruff` 0.16.6 ->
+  0.16.10 (dev). Full test suite passes with no SQLAlchemy deprecation warnings; SQLAlchemy 2.1.4
+  ships cp314 musllinux wheels for both image architectures. Supersedes Dependabot PRs #79 and #80
+  (#79 would have moved `pypdf` to 6.19.0, still short of the 6.21.x fixes).
 
 ## [0.8.3] - 2026-09-09
 
